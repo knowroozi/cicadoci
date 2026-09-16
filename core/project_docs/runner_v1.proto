@@ -1,0 +1,316 @@
+// CICaDo runner protocol v1 — FROZEN 2026-09-16 (additive changes only from here;
+// see design doc §10 for the evolution policy).
+// Design rationale lives in ../04-runner-protocol.md; read it first.
+// In the real repo this file lives at /proto/cicado/runner/v1/runner.proto.
+//
+// Invariants this file encodes:
+//   * Runner dials outbound; server never connects to a runner.
+//   * Control (Session) and bulk (LogStream) are separate streams on one connection.
+//   * All uploads are idempotent: status keyed (job_id, seq), logs keyed (job_id, step, seq).
+//   * Leases are the only execution authority; every job message carries lease_id.
+//   * Secret VALUES appear only in GetJobSecretsResponse — never in assignments,
+//     journals, or anything redeliverable.
+//   * v1 evolves additively only; behavior changes ride capability flags, not versions.
+
+syntax = "proto3";
+
+package cicado.runner.v1;
+
+option go_package = "cicadoci.com/cicado/proto/runner/v1;runnerv1";
+
+import "google/protobuf/timestamp.proto";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Service
+// ─────────────────────────────────────────────────────────────────────────────
+
+service RunnerService {
+  // One-time enrollment using an operator-minted registration token.
+  // Labels come from the TOKEN, not the request — a stolen token cannot
+  // self-assign privileged labels beyond what it was minted with.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Long-lived control channel. FIRST client message MUST be Hello;
+  // violation => stream closed FAILED_PRECONDITION.
+  rpc Session(stream RunnerMessage) returns (stream ServerMessage);
+
+  // Bulk lane: log chunks + structured events up, watermark acks down.
+  // Separate from Session so log bursts can never head-of-line-block
+  // cancellation or heartbeats (see design doc §2).
+  rpc LogStream(stream LogUp) returns (stream LogDown);
+
+  // Secret material for a job, authorized against the LIVE lease.
+  // Response is never journaled; values live only in runner memory.
+  rpc GetJobSecrets(GetJobSecretsRequest) returns (GetJobSecretsResponse);
+
+  // Rotate the runner credential. Old credential valid until first use of new.
+  rpc RotateCredential(RotateCredentialRequest) returns (RotateCredentialResponse);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enrollment
+// ─────────────────────────────────────────────────────────────────────────────
+
+message RegisterRequest {
+  string registration_token = 1;
+  string name               = 2;  // operator-facing display name
+  Capabilities capabilities = 3;
+}
+
+message Capabilities {
+  repeated string executors = 1;  // "docker", "shell"
+  string os                 = 2;  // "linux"
+  string arch               = 3;  // "amd64", "arm64"
+  string runner_version     = 4;  // semver of the runner binary
+  // Feature flags for additive behavior negotiation. Servers ignore unknown
+  // flags; runners never assume a flag was honored unless echoed in ServerHello.
+  repeated string features  = 5;
+}
+
+message RegisterResponse {
+  string runner_id         = 1;
+  string runner_credential = 2;  // opaque bearer; runner persists 0600; server stores hash
+  repeated string labels    = 3; // authoritative labels, copied from the token
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Session stream (control)
+// ─────────────────────────────────────────────────────────────────────────────
+
+message RunnerMessage {
+  oneof msg {
+    Hello        hello         = 1;  // exactly once, first
+    JobAck       job_ack       = 2;
+    StatusUpdate status_update = 3;
+    Heartbeat    heartbeat     = 4;
+  }
+}
+
+message ServerMessage {
+  oneof msg {
+    ServerHello   server_hello   = 1;  // exactly once, first reply
+    JobAssignment job_assignment = 2;
+    StatusAck     status_ack     = 3;
+    CancelJob     cancel_job     = 4;
+    Throttle      throttle       = 5;
+    UpdateNotice  update_notice  = 6;
+  }
+}
+
+message Hello {
+  uint32 protocol_version   = 1;  // 1
+  Capabilities capabilities = 2;
+  // Jobs this runner believes it is still executing. Server answers each
+  // in ServerHello.resume_verdicts. Empty on a fresh start.
+  repeated ResumeState resume = 3;
+}
+
+message ResumeState {
+  string job_id          = 1;
+  string lease_id        = 2;
+  uint64 last_status_seq = 3;  // highest status seq the runner SENT (acked or not)
+  uint64 last_log_seq    = 4;  // highest log/event seq SENT for this job
+}
+
+message ServerHello {
+  string session_id                 = 1;
+  uint32 heartbeat_interval_seconds = 2;  // authoritative; lease TTL = 3x, floor 60s
+  Limits limits                     = 3;
+  repeated ResumeVerdict resume_verdicts = 4;
+  repeated string features          = 5;  // capability flags the server honors
+  string min_supported_runner       = 6;  // semver floor (informational here;
+  string latest_runner              = 7;  // hard floor enforced at Register/auth)
+}
+
+message Limits {
+  uint32 max_log_chunk_bytes   = 1;  // default 65536
+  uint32 max_inflight_chunks   = 2;  // unacked chunks before runner must pause reads
+  uint64 journal_disk_bytes    = 3;  // local spill budget
+}
+
+message ResumeVerdict {
+  string job_id = 1;
+  enum Verdict {
+    VERDICT_UNSPECIFIED = 0;
+    RESUME  = 1;  // lease still valid: continue, replay from watermarks
+    ABANDON = 2;  // lease expired/reassigned/cancelled: kill local execution,
+                  // discard this job's journal, report nothing further
+  }
+  Verdict verdict         = 2;
+  uint64 log_watermark    = 3;  // on RESUME: replay logs from watermark+1
+  uint64 status_watermark = 4;  // on RESUME: replay status from watermark+1
+}
+
+// ── Assignment & leases ──────────────────────────────────────────────────────
+
+message JobAssignment {
+  string job_id   = 1;
+  string lease_id = 2;  // NEW lease_id after requeue = legitimate re-run;
+                        // dedup key is the PAIR (job_id, lease_id)
+  google.protobuf.Timestamp lease_expires_at = 3;  // advisory; heartbeats renew
+  JobSpec spec    = 4;
+}
+
+message JobSpec {
+  string run_id             = 1;
+  string workflow_name      = 2;
+  repeated StepSpec steps   = 3;
+  map<string,string> env    = 4;  // plaintext, non-secret env only
+  repeated string secret_refs = 5; // NAMES only; values via GetJobSecrets
+  uint32 timeout_seconds    = 6;
+  string executor           = 7;  // "docker" | "shell"
+  GitContext git            = 8;
+}
+
+message StepSpec {
+  uint32 index            = 1;
+  string name             = 2;
+  string image            = 3;  // digest-pinned when available ("img@sha256:...")
+  repeated string command = 4;
+  map<string,string> env  = 5;
+  uint32 timeout_seconds  = 6;
+  bool network_enabled    = 7;  // default-off posture is set by the server
+}
+
+message GitContext {
+  string clone_url   = 1;  // token embedded via per-job forge installation token
+  string ref         = 2;
+  string sha         = 3;
+}
+
+message JobAck {
+  string job_id   = 1;
+  string lease_id = 2;
+  enum Result {
+    RESULT_UNSPECIFIED = 0;
+    ACCEPTED = 1;
+    REJECTED = 2;  // server requeues; reason recorded for scheduling/telemetry
+  }
+  Result result = 3;
+  string reject_reason = 4;  // "capacity", "executor_unavailable", ...
+}
+
+// ── Status ───────────────────────────────────────────────────────────────────
+
+message StatusUpdate {
+  string job_id   = 1;
+  string lease_id = 2;  // stale lease => server rejects silently (zombie guard)
+  uint64 seq      = 3;  // monotonic per job, runner-assigned; upsert key (job_id, seq)
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    PREPARING    = 1;
+    RUNNING_STEP = 2;  // step_index set
+    UPLOADING    = 3;
+    SUCCEEDED    = 4;  // terminal; exit_code set
+    FAILED       = 5;  // terminal; exit_code + error_class set
+    CANCELLED    = 6;  // terminal
+  }
+  State state        = 4;
+  uint32 step_index  = 5;
+  int32 exit_code    = 6;
+  string error_class = 7;  // "infra","deps","test","timeout","oom","auth","user_script"
+  string detail      = 8;
+  google.protobuf.Timestamp runner_ts = 9;  // advisory; server clock is authoritative
+}
+
+message StatusAck {
+  string job_id    = 1;
+  uint64 acked_seq = 2;  // runner may trim journal <= acked_seq
+}
+
+// ── Control ──────────────────────────────────────────────────────────────────
+
+message Heartbeat {
+  repeated string active_job_ids = 1;  // renews these leases
+  HostStats stats = 2;                 // optional (open question #4)
+}
+
+message HostStats {
+  double cpu_load1     = 1;
+  uint64 mem_used_bytes  = 2;
+  uint64 mem_total_bytes = 3;
+  uint64 disk_free_bytes = 4;
+}
+
+message CancelJob {
+  string job_id        = 1;
+  string lease_id      = 2;
+  string reason        = 3;
+  uint32 grace_seconds = 4;  // signal → wait grace → kill
+}
+
+message Throttle {
+  string job_id        = 1;  // empty = whole runner
+  uint64 bytes_per_sec = 2;  // log upload budget; 0 = pause
+}
+
+message UpdateNotice {
+  string min_supported = 1;  // below this, auth will start failing at a stated date
+  string latest        = 2;
+  string message       = 3;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LogStream (bulk lane)
+// ─────────────────────────────────────────────────────────────────────────────
+
+message LogUp {
+  oneof msg {
+    LogChunk chunk        = 1;
+    StructuredEvent event = 2;
+  }
+}
+
+message LogDown {
+  oneof msg {
+    LogAck ack = 1;
+  }
+}
+
+// Chunks and events SHARE one seq space per job so a single watermark
+// covers both and replay ordering is total.
+message LogChunk {
+  string job_id      = 1;
+  string lease_id    = 2;
+  uint32 step_index  = 3;
+  enum Io { IO_UNSPECIFIED = 0; STDOUT = 1; STDERR = 2; }
+  Io io              = 4;
+  uint64 seq         = 5;
+  bytes data         = 6;  // <= Limits.max_log_chunk_bytes; may end mid-line
+  google.protobuf.Timestamp runner_ts = 7;
+}
+
+message StructuredEvent {
+  string job_id     = 1;
+  string lease_id   = 2;
+  uint32 step_index = 3;
+  uint64 seq        = 4;   // same space as LogChunk.seq for this job
+  string kind       = 5;   // "step_started","step_finished","error_classified",
+                           // "artifact_uploaded","log_gap",...
+  string json       = 6;   // schema per kind, published with the workflow JSON Schema
+}
+
+message LogAck {
+  string job_id    = 1;
+  uint64 acked_seq = 2;  // watermark: runner trims <= acked_seq, resumes from +1
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Secrets & credential rotation
+// ─────────────────────────────────────────────────────────────────────────────
+
+message GetJobSecretsRequest {
+  string job_id   = 1;
+  string lease_id = 2;  // authorization is against the LIVE lease
+}
+
+message GetJobSecretsResponse {
+  map<string,string> secrets = 1;  // name -> value; register in local redaction
+                                   // masker immediately; never write to disk
+  // OIDC identity token for cloud federation (AssumeRoleWithWebIdentity).
+  // Short-lived; claims: sub=org/repo/branch/env, aud=configured audience.
+  string identity_token = 2;
+}
+
+message RotateCredentialRequest  {}
+message RotateCredentialResponse { string runner_credential = 1; }
