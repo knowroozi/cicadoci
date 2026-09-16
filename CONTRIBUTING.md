@@ -40,7 +40,11 @@ These come from the security invariants in [CLAUDE.md](CLAUDE.md) and the archit
 
 ## Pull requests
 
-- One logical change per PR. Reference the Linear issue (`CIC-123`) in the description.
+- **One PR per Linear issue.** Not one per milestone, and not one per batch of related work. If a change spans issues, it spans PRs.
+- **Stack them.** A PR whose work builds on another should target that PR's branch rather than `master`, so its diff shows only its own issue's changes. Rebase the rest of the stack when something earlier in it changes.
+- Take the branch name from the issue's `gitBranchName` field in Linear, so the PR links itself to the ticket.
+- Reference the Linear issue (`CIC-123`) in the title and description.
+- **End every PR body with a verified / unverified checklist.** *Verified* is what you actually ran, with the command or observation. *Unverified / needs manual testing* is what the change touches that you did not exercise, why, and what a reviewer should try. Never list something as verified on the strength of having written it carefully — a false assurance is worse than an admitted gap.
 - **Update the doc in the same PR as the change it describes.** Stale docs are treated as bugs.
 - New significant decisions get a new ADR in `project-docs/adr/`, using [`ADR-000-template.md`](project-docs/adr/ADR-000-template.md). Superseded ADRs are marked superseded, never deleted or edited away.
 - `make check` must pass. CI runs the same target.

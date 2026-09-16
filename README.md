@@ -30,7 +30,7 @@ What it deliberately is **not**: feature parity with GitHub Actions. See [non-go
 
 ## Quick start (development)
 
-Requires Go 1.24+ and Docker.
+Requires Go 1.26+ and Docker.
 
 ```sh
 make dev-deps    # install pinned tooling into ./bin
