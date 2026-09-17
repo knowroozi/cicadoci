@@ -64,6 +64,10 @@ services:
     depends_on:
       server:
         condition: service_healthy
+    # No healthcheck: the runner has no HTTP listener to poll (it only dials
+    # out). If it crashes mid-dev-session, `docker compose ps` shows it exited
+    # rather than "unhealthy" — check there, or the logs, if the demo job
+    # stops progressing.
     environment:
       CICADO_SERVER: server:8081
       # Matches DevRegistrationToken in server/cmd/cicado-server/devseed.go.

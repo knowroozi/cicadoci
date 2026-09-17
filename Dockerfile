@@ -52,4 +52,6 @@ RUN apk add --no-cache ca-certificates tzdata git bash coreutils && \
 
 COPY --from=build /out/cicado-runner /usr/local/bin/cicado-runner
 
+# No USER directive here, deliberately — this stage runs as root. See the
+# comment above the FROM line.
 ENTRYPOINT ["/usr/local/bin/cicado-runner"]
