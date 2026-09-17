@@ -1,6 +1,6 @@
 // CICaDo runner protocol v1 — FROZEN 2026-09-16 (additive changes only from here;
 // see design doc §10 for the evolution policy).
-// Design rationale lives in /project-docs/04-runner-protocol.md; read it first.
+// Design rationale lives in project-docs/04-runner-protocol.md; read it first.
 //
 // Invariants this file encodes:
 //   * Runner dials outbound; server never connects to a runner.

@@ -1,0 +1,33 @@
+# buf configuration for the CICaDo runner protocol.
+#
+# The proto under proto/ is FROZEN (ADR-004). Two lint rules in buf's STANDARD
+# category would require renaming symbols in that frozen file, so they are
+# excepted here rather than the file being edited:
+#
+#   ENUM_VALUE_PREFIX         — wants StatusUpdate.State values spelled
+#                               STATE_PREPARING rather than PREPARING. Renaming
+#                               them would churn the generated Go API of a
+#                               contract we have declared immutable, to satisfy
+#                               a style rule. Wire compatibility depends on the
+#                               field numbers, which are unaffected either way.
+#   RPC_REQUEST_STANDARD_NAME — wants Session(SessionRequest). The streaming
+#   RPC_RESPONSE_STANDARD_NAME  RPCs carry oneof envelopes (RunnerMessage /
+#                               ServerMessage, LogUp / LogDown) whose names say
+#                               what they are far better than SessionRequest
+#                               would.
+#
+# Everything else in STANDARD applies, and `buf breaking` (see the Makefile)
+# is the rule that actually protects the freeze.
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    - ENUM_VALUE_PREFIX
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+breaking:
+  use:
+    - FILE
