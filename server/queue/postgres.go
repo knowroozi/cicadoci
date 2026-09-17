@@ -135,7 +135,11 @@ func (q *Postgres) Claim(ctx context.Context, req ClaimRequest) ([]ClaimedJob, e
 
 	// Steps are fetched per job rather than joined into the claim, so the claim
 	// query stays a single-row-per-job UPDATE holding locks for as little time
-	// as possible.
+	// as possible. This is one extra round trip per claimed job (not per step —
+	// loadSteps returns a job's whole step list in one query), so a full batch
+	// is at most Limit+1 round trips. Acceptable at MVP scale (jobs table has
+	// tens of steps at most); a future batch JOIN across all claimed job IDs
+	// would trade that for one query if this ever shows up in a profile.
 	for i := range claimed {
 		steps, err := q.loadSteps(ctx, claimed[i].JobID)
 		if err != nil {

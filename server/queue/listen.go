@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -69,8 +70,12 @@ func listenOnce(ctx context.Context, dsn string, onQueued func(QueuedNotificatio
 		}
 		var payload QueuedNotification
 		if err := json.Unmarshal([]byte(notification.Payload), &payload); err != nil {
-			// A malformed payload is not worth dropping the connection over;
-			// the periodic sweep will find the job regardless.
+			// A malformed payload is not worth dropping the connection over —
+			// keep listening on the same connection rather than reconnecting —
+			// but it should never happen (the trigger always emits valid JSON),
+			// so it's worth knowing about if it ever does.
+			slog.Warn("queue: malformed job-queued notification payload",
+				"payload", notification.Payload, "error", err)
 			continue
 		}
 		onQueued(payload)
