@@ -46,6 +46,7 @@ func run() error {
 		httpAddr    = flag.String("http-addr", envOr("CICADO_HTTP_ADDR", ":8080"), "address for the HTTP API")
 		databaseURL = flag.String("database-url", os.Getenv("CICADO_DATABASE_URL"), "Postgres connection string")
 		migrate     = flag.Bool("migrate", envBool("CICADO_MIGRATE", true), "apply pending migrations at startup")
+		devSeedFlag = flag.Bool("dev-seed", envBool("CICADO_DEV_SEED", false), "seed a development org, a well-known registration token, and a demo job (NEVER in production)")
 		logLevel    = flag.String("log-level", envOr("CICADO_LOG_LEVEL", "info"), "debug, info, warn, or error")
 	)
 	flag.Parse()
@@ -80,6 +81,13 @@ func run() error {
 	}
 
 	q := queue.NewPostgres(st.Pool())
+
+	if *devSeedFlag {
+		if err := devSeed(ctx, st, q, log); err != nil {
+			return err
+		}
+	}
+
 	svcCfg := runnersvc.DefaultConfig()
 	svc := runnersvc.New(st.Pool(), q, svcCfg, log)
 	dispatcher := dispatch.New(q, svc.Sessions(), dispatch.DefaultConfig(svcCfg.LeaseTTL()), log)
