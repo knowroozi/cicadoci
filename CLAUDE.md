@@ -27,6 +27,22 @@ These are recorded in ADRs. Changing one requires a new ADR, not a code change.
 - Every state-changing action from any surface (web/chat/MCP/API) writes an audit event
 - Slack interactive payloads must authorize the *acting user* — buttons are clickable by anyone in the channel
 
+## Workflow — one PR per ticket, stacked
+
+- **One pull request per Linear ticket.** Never bundle a milestone, or several tickets, into a single PR. Work that spans tickets spans PRs.
+- **Stack the branches.** Each PR targets the branch of the ticket it builds on, not `master`, so its diff shows only that ticket's changes. Order the stack so every step builds and its tests pass on its own.
+- **Take branch names from Linear** — the issue's `gitBranchName` field (e.g. `swervogm/cic-7-postgres-schema-v1-migration-0001_initsql`). Linear then links the PR to the ticket automatically.
+- Put the ticket ID in the PR title and body.
+- **Review is manual and is meant to teach.** Keep each PR small enough to read in one sitting, and put the reasoning for non-obvious decisions in the PR body — especially anything a reviewer might reasonably have done differently.
+- When a PR earlier in the stack changes, rebase the rest of the stack onto it.
+
+Every PR body ends with a two-part checklist, and the split between the parts is the point of it:
+
+- **Verified** — what was actually executed, and how. A command that was run, a test that passed, a behavior observed. Nothing goes here on the strength of having written it carefully.
+- **Unverified / needs manual testing** — what this change touches that was *not* exercised, why not, and what the reviewer should try. Anything that could not be run in the working environment, anything only a human can judge, anything asserted from reading rather than running.
+
+Listing something as verified when it was not actually run is the one thing that makes the checklist worse than having none: it converts an unknown into a false assurance.
+
 ## Conventions
 
 - Estimates in docs are engineer-weeks (ew), not calendar time

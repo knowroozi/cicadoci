@@ -12,13 +12,14 @@ Self-hostable, OSS CI/CD platform: operationally simple, ChatOps-native, AI-agen
 | [02-architecture.md](02-architecture.md) | System architecture, components, data model, runner protocol, security baseline |
 | [03-frontend-approach.md](03-frontend-approach.md) | No-build frontend strategy: server-rendered HTML + SSE + htmx/vanilla islands |
 | [04-runner-protocol.md](04-runner-protocol.md) | Runner protocol design v1: streams, leases, reconnect/resume, versioning |
-| [proto/runner_v1.proto](proto/runner_v1.proto) | Annotated protobuf draft for the runner protocol |
+| [proto/runner_v1.proto.md](proto/runner_v1.proto.md) | Pointer to the canonical frozen proto at [`/proto/cicado/runner/v1/runner.proto`](../proto/cicado/runner/v1/runner.proto) |
 | [adr/](adr/) | Architecture Decision Records (one decision per file, immutable once accepted) |
 
 ## ADR index
 
 | ADR | Decision | Status |
 |---|---|---|
+| [ADR-000](adr/ADR-000-template.md) | Template + ADR process | — |
 | [ADR-001](adr/ADR-001-language-go.md) | Go for control plane + runner | Accepted |
 | [ADR-002](adr/ADR-002-postgres-queue.md) | Postgres as the only queue/store for MVP | Accepted |
 | [ADR-003](adr/ADR-003-frontend-no-build.md) | No-build frontend: server-rendered HTML + SSE, htmx/vanilla | Accepted |
