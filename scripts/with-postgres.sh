@@ -81,6 +81,10 @@ cleanup() {
 	rm -rf "${PGDATA_DIR}"
 	exit ${status}
 }
+# EXIT/INT/TERM, not KILL — SIGKILL cannot be trapped by any shell, so a
+# `kill -9` on this process leaks the cluster on its loopback port with a
+# trust-auth connection until something notices and removes $PGDATA_DIR by
+# hand. Short-lived local/CI helper, so that's an accepted cost.
 trap cleanup EXIT INT TERM
 
 echo "with-postgres: starting throwaway cluster on port ${PGPORT}" >&2

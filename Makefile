@@ -63,23 +63,48 @@ proto: ## Regenerate Go code from the frozen proto, then lint and breaking-check
 	$(BUF) lint
 	@$(MAKE) --no-print-directory proto-breaking
 
+# BASE_REF is overridable so CI can point the breaking check at something
+# other than origin/master — e.g. the pre-push SHA on a push to master, where
+# the checked-out tree already *is* origin/master and comparing it against
+# itself would trivially pass rather than actually skip.
+BASE_REF ?= origin/master
+
 .PHONY: proto-breaking
-proto-breaking: ## Fail if the proto changed in a non-additive way vs. origin/master
-	@if git rev-parse --verify --quiet origin/master >/dev/null; then \
-		$(BUF) breaking --against '.git#branch=origin/master'; \
+proto-breaking: ## Fail if the proto changed in a non-additive way vs. BASE_REF (default origin/master)
+	@if ! git rev-parse --verify --quiet $(BASE_REF) >/dev/null; then \
+		echo "skipping breaking check: no $(BASE_REF) to compare against"; \
+	elif ! git cat-file -e $(BASE_REF):buf.yaml 2>/dev/null; then \
+		echo "skipping breaking check: $(BASE_REF) predates the buf module, so there is"; \
+		echo "no comparable baseline. This self-heals the moment this lands on master."; \
 	else \
-		echo "skipping breaking check: no origin/master to compare against"; \
+		$(BUF) breaking --against ".git#ref=$(BASE_REF)"; \
 	fi
 
 .PHONY: generate-check
-generate-check: ## Fail if committed generated code is stale
+generate-check: check-proto-versions ## Fail if committed generated code is stale
 	@$(BUF) generate
-	@if ! git diff --quiet -- proto/; then \
+	@if ! git diff --quiet -- proto/ || [ -n "$$(git status --porcelain -- proto/)" ]; then \
 		echo "ERROR: generated proto code is out of date. Run 'make proto' and commit the result."; \
 		git --no-pager diff --stat -- proto/; \
+		git status --porcelain -- proto/; \
 		exit 1; \
 	fi
 	@echo "generated code is up to date"
+
+.PHONY: check-proto-versions
+check-proto-versions: ## Fail if root and tools disagree on the protobuf runtime version
+	@root=$$(grep -m1 '^\s*google.golang.org/protobuf ' go.mod | awk '{print $$2}'); \
+	tools=$$(grep -m1 '^\s*google.golang.org/protobuf ' $(TOOLS_MOD)/go.mod | awk '{print $$2}'); \
+	if [ -z "$$root" ] || [ -z "$$tools" ]; then \
+		echo "ERROR: could not find a google.golang.org/protobuf requirement in go.mod and/or tools/go.mod"; \
+		exit 1; \
+	elif [ "$$root" != "$$tools" ]; then \
+		echo "ERROR: go.mod pins protobuf $$root but tools/go.mod (which builds protoc-gen-go) pins $$tools."; \
+		echo "Committed generated code is emitted by the tools-module generator but linked against the"; \
+		echo "root-module runtime; keep the two in step. Align them and run 'make tidy'."; \
+		exit 1; \
+	fi
+	@echo "root and tools agree on protobuf $$(grep -m1 '^\s*google.golang.org/protobuf ' go.mod | awk '{print $$2}')"
 
 ##@ Quality
 
@@ -117,7 +142,7 @@ check-fast: generate-check lint vet test ## Fast pre-push check: no Postgres, no
 	@echo "check-fast passed. Run 'make check' before pushing for full coverage (starts a throwaway Postgres)."
 
 .PHONY: check
-check: generate-check lint vet ## Everything CI runs, minus the database-backed tests
+check: generate-check lint vet ## Everything CI runs, including the database-backed tests (starts a throwaway Postgres)
 	./scripts/with-postgres.sh go test ./... -race
 
 .PHONY: clean
