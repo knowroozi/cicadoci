@@ -9,6 +9,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 )
 
 // Migrations are embedded into the binary rather than shipped alongside it.
@@ -27,7 +28,17 @@ func gooseProvider(db *sql.DB) (*goose.Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: root migrations FS: %w", err)
 	}
-	return goose.NewProvider(goose.DialectPostgres, db, sub)
+	// goose does not take a lock on its own — a Provider with no SessionLocker
+	// configured runs unlocked. WithSessionLocker is what makes the rolling-
+	// deploy safety this package claims actually true: a Postgres session-level
+	// advisory lock (pg_try_advisory_lock), held on the one *sql.Conn each
+	// migration runs over, so two instances racing Migrate() serialize instead
+	// of racing the same migration.
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		return nil, fmt.Errorf("store: init migration session locker: %w", err)
+	}
+	return goose.NewProvider(goose.DialectPostgres, db, sub, goose.WithSessionLocker(locker))
 }
 
 // sqlDB opens a database/sql handle over the same DSN. goose speaks
@@ -41,8 +52,9 @@ func (s *Store) sqlDB() (*sql.DB, error) {
 }
 
 // Migrate applies every pending migration. It is safe to run concurrently from
-// several server instances: goose takes an advisory lock for the duration, so
-// a rolling deploy cannot race two copies of the same migration.
+// several server instances: gooseProvider configures a session-level Postgres
+// advisory lock (see lock.NewPostgresSessionLocker above) held for the
+// duration, so a rolling deploy cannot race two copies of the same migration.
 func (s *Store) Migrate(ctx context.Context) error {
 	db, err := s.sqlDB()
 	if err != nil {

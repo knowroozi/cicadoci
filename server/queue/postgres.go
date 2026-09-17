@@ -21,6 +21,14 @@ const NotifyChannel = "cicado_job_queued"
 // while the runner was out of contact. The report is rejected, not applied.
 var ErrStaleLease = errors.New("queue: stale lease")
 
+// ErrNotRequeueable is returned when a job's status no longer matches any of
+// the states Requeue is willing to act on. This is expected, not exceptional:
+// under concurrent sweeps (or a sweep racing a runner's own completion
+// report), two callers can both select the same expired lease before either
+// one's Requeue commits — whichever runs second finds the job already moved
+// on (e.g. dead-lettered by the first) and gets this instead of a match.
+var ErrNotRequeueable = errors.New("queue: job is not requeueable")
+
 // Postgres is the Postgres-backed Queue.
 type Postgres struct {
 	pool *pgxpool.Pool
@@ -302,7 +310,7 @@ func (q *Postgres) Requeue(ctx context.Context, jobID uuid.UUID, reason string, 
 	err := q.pool.QueryRow(ctx, requeueSQL, jobID, backoff.Seconds(), reason).
 		Scan(&status, &attempts)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", fmt.Errorf("queue: job %s is not requeueable", jobID)
+		return "", fmt.Errorf("%w: job %s", ErrNotRequeueable, jobID)
 	}
 	if err != nil {
 		return "", fmt.Errorf("queue: requeue %s: %w", jobID, err)
@@ -364,6 +372,16 @@ func (q *Postgres) SweepExpiredLeases(ctx context.Context, now time.Time) ([]Swe
 		// does not spin through the fleet taking runners down with it.
 		backoff := time.Duration(1<<min(e.attempts, 6)) * time.Second
 		outcome, err := q.Requeue(ctx, e.jobID, "lease expired without a terminal status", backoff)
+		if errors.Is(err, ErrNotRequeueable) {
+			// Another server instance's sweep pass (or this job finishing on
+			// its own between the SELECT above and this Requeue) already moved
+			// this job past the states Requeue acts on. That is success, not
+			// failure — the recovery this job needed already happened — and
+			// must not abort the rest of this batch, which is exactly what a
+			// fleet outage needs swept promptly rather than one job at a time
+			// across separate 15s ticks.
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}

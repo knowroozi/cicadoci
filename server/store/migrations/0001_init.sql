@@ -148,6 +148,9 @@ CREATE TABLE jobs (
                                 CHECK (executor IN ('docker', 'shell')),
     -- Tags a runner must carry to be allowed this job: required_tags <@ runner.labels.
     required_tags   text[]      NOT NULL DEFAULT '{}',
+    -- Lower claims first (see jobs_claim_idx's ORDER BY priority, created_at):
+    -- this is a queue position, not a point score. Set below 100 to move a job
+    -- ahead of the default queue, above 100 to push it back.
     priority        integer     NOT NULL DEFAULT 100,
     timeout_seconds integer     NOT NULL DEFAULT 3600 CHECK (timeout_seconds > 0),
     env             jsonb       NOT NULL DEFAULT '{}',
@@ -443,10 +446,15 @@ $$;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
+-- available_at is checked here too, not just by the claim query: a backoff
+-- Requeue sets status = 'queued' immediately but available_at in the future,
+-- and without this the doorbell would ring for a job no claim can pick up
+-- yet — harmless (NOTIFY is fire-and-forget and the tick still covers
+-- correctness), but a wasted dispatcher pass for every backoff-delayed retry.
 CREATE TRIGGER jobs_queued_notify
     AFTER INSERT OR UPDATE OF status ON jobs
     FOR EACH ROW
-    WHEN (NEW.status = 'queued')
+    WHEN (NEW.status = 'queued' AND NEW.available_at <= now())
     EXECUTE FUNCTION cicado_notify_job_queued();
 -- +goose StatementEnd
 

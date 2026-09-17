@@ -98,6 +98,47 @@ func DSN(t *testing.T, st *store.Store) string {
 	return st.DSN()
 }
 
+// FreshDSN returns the connection string for a brand-new, empty database
+// unique to this test, and registers cleanup that drops it. Unlike New, it
+// does not migrate the database first — for tests about the migration path
+// itself, such as what happens when several instances call Migrate
+// concurrently against a database none of them have touched yet.
+func FreshDSN(t *testing.T) string {
+	t.Helper()
+
+	baseDSN := os.Getenv(EnvVar)
+	if baseDSN == "" {
+		t.Skipf("%s is not set; skipping database test (see scripts/with-postgres.sh)", EnvVar)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	dbName := "cicado_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	admin, err := pgx.Connect(ctx, baseDSN)
+	if err != nil {
+		t.Fatalf("testdb: connect: %v", err)
+	}
+	if _, err := admin.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", quote(dbName))); err != nil {
+		_ = admin.Close(ctx)
+		t.Fatalf("testdb: create database: %v", err)
+	}
+	_ = admin.Close(ctx)
+
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(cleanupCtx, baseDSN)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close(cleanupCtx) }()
+		_, _ = conn.Exec(cleanupCtx, fmt.Sprintf("DROP DATABASE IF EXISTS %s WITH (FORCE)", quote(dbName)))
+	})
+
+	return replaceDatabase(baseDSN, dbName)
+}
+
 func buildTemplate(baseDSN string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()

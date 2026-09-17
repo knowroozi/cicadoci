@@ -2,9 +2,11 @@ package store_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"cicadoci.com/cicado/internal/testdb"
+	"cicadoci.com/cicado/server/store"
 )
 
 // Migrations must be idempotent and must leave a recorded version behind: a
@@ -47,6 +49,53 @@ func TestSchemaV1Tables(t *testing.T) {
 		if !exists {
 			t.Errorf("table %q is missing from schema v1", table)
 		}
+	}
+}
+
+// The rolling-deploy safety ADR-008 promises rests on Migrate taking a real
+// lock: several instances starting against the same freshly-created,
+// never-migrated database must serialize rather than race the same
+// CREATE TABLE. Without a lock this reproduces immediately as a Postgres
+// error from whichever goroutine loses the race to create a table or claim
+// goose's own version row.
+func TestConcurrentMigrateSerializes(t *testing.T) {
+	dsn := testdb.FreshDSN(t)
+	ctx := context.Background()
+
+	const n = 5
+	stores := make([]*store.Store, n)
+	for i := range stores {
+		st, err := store.Open(ctx, dsn)
+		if err != nil {
+			t.Fatalf("open store %d: %v", i, err)
+		}
+		defer st.Close()
+		stores[i] = st
+	}
+
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i, st := range stores {
+		go func(i int, st *store.Store) {
+			defer wg.Done()
+			errs[i] = st.Migrate(ctx)
+		}(i, st)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("concurrent migrate %d: %v", i, err)
+		}
+	}
+
+	version, err := stores[0].Version(ctx)
+	if err != nil {
+		t.Fatalf("read version: %v", err)
+	}
+	if version < 1 {
+		t.Errorf("schema version = %d, want at least 1", version)
 	}
 }
 
