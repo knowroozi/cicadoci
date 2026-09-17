@@ -27,6 +27,7 @@ Self-hostable, OSS CI/CD platform: operationally simple, ChatOps-native, AI-agen
 | [ADR-005](adr/ADR-005-plugin-model.md) | Container plugins with capability manifests + signing | Accepted |
 | [ADR-006](adr/ADR-006-license.md) | Apache-2.0 core license | Accepted |
 | [ADR-007](adr/ADR-007-name-cicado.md) | Product name: CICaDo | Accepted (registration checklist pending) |
+| [ADR-008](adr/ADR-008-migrations-goose-embedded.md) | Schema migrations: goose as a library, embedded in the binary | Accepted |
 
 ## Conventions
 
