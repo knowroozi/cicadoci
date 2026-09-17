@@ -1,0 +1,7 @@
+.git
+bin/
+project-docs/
+docs/
+terraform/
+*.md
+.github/
