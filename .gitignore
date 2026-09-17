@@ -1,1 +1,8 @@
 .DS_Store
+
+# Tooling and build output; `make dev-deps` repopulates this.
+/bin/
+
+# Local development overrides.
+.env
+docker-compose.override.yml

@@ -1,0 +1,19 @@
+# Codegen for the runner protocol. Output paths come from each file's
+# `option go_package`, with the module prefix stripped, so generated code lands
+# next to nothing in particular except where the import path says it should:
+# cicadoci.com/cicado/proto/runner/v1 -> ./proto/runner/v1/
+#
+# Managed mode is off on purpose: the frozen proto states its own go_package,
+# and we would rather that be visible in the file than injected by config.
+version: v2
+managed:
+  enabled: false
+plugins:
+  - local: bin/protoc-gen-go
+    out: .
+    opt:
+      - module=cicadoci.com/cicado
+  - local: bin/protoc-gen-go-grpc
+    out: .
+    opt:
+      - module=cicadoci.com/cicado
