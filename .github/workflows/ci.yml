@@ -25,7 +25,7 @@ env:
   # GOTOOLCHAIN=local, fails. That exact mismatch shipped once already, is why
   # this guard exists, and is also why GO_VERSION itself is not 1.24: 1.24 was
   # never a chosen floor, just whatever toolchain happened to be on the
-  # machine that first ran `go mod init`. 1.26 is current as of this writing."
+  # machine that first ran `go mod init`. 1.26 is current as of this writing.
   GOTOOLCHAIN: local
 
 jobs:
@@ -94,18 +94,20 @@ jobs:
       - name: Run tests with the race detector
         run: go test ./... -race -count=1 -timeout 15m
       - name: Fail if database tests were skipped
+        # The queue and end-to-end tests are the ones that would actually
+        # catch a regression in the queue or the wire protocol. If the
+        # database was unreachable they skip quietly, and CI would go green
+        # having tested almost nothing. Assert they really ran.
+        #
+        # -json + jq on the "action" field is what's actually being asserted
+        # on, rather than grepping the verbose human-readable log: the JSON
+        # event stream is `go test`'s own stable machine format, so this
+        # survives changes to how skips are printed for humans.
         run: |
-          # The queue and end-to-end tests are the ones that would actually
-          # catch a regression in the queue or the wire protocol. If the
-          # database was unreachable they skip quietly, and CI would go green
-          # having tested almost nothing. Assert they really ran.
-          output=$(go test ./server/queue/ ./test/e2e/ -count=1 -v 2>&1) || {
-            echo "$output"
-            exit 1
-          }
-          if grep -q "SKIP" <<<"$output"; then
+          go test ./server/queue/ ./test/e2e/ -count=1 -json | tee /tmp/test-output.json | jq -r 'select(.Action == "output") | .Output' | sed '/^$/d'
+          if jq -e 'select(.Action == "skip" and .Test != null)' /tmp/test-output.json | grep -q .; then
             echo "::error::Database-backed tests skipped; CICADO_TEST_DATABASE_URL is not reaching Postgres."
-            grep "SKIP" <<<"$output"
+            jq -r 'select(.Action == "skip" and .Test != null) | "\(.Package) \(.Test)"' /tmp/test-output.json
             exit 1
           fi
 
@@ -148,7 +150,7 @@ jobs:
           target: server
           push: false
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
       - name: Build the runner image
         uses: docker/build-push-action@v6
         with:
@@ -156,4 +158,4 @@ jobs:
           target: runner
           push: false
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
