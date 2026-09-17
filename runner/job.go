@@ -32,6 +32,13 @@ func (a *Agent) startJob(ctx context.Context, assignment *runnerv1.JobAssignment
 		_ = send(ackMessage(jobID, leaseID, runnerv1.JobAck_ACCEPTED, ""))
 		return
 	}
+	// Soft backpressure: a runner at capacity rejects a new assignment outright
+	// rather than queueing it locally, so the dispatcher's Requeue puts the job
+	// back where another runner (or this one, once it frees up) can claim it.
+	// There is no partial admission — a runner exactly at capacity accepts
+	// nothing more until something finishes. That's a fine story for the shell
+	// executor's one-job-at-a-time-in-practice usage; a docker executor with
+	// higher real concurrency may want softer throttling than a hard reject.
 	if len(a.active) >= a.cfg.Capacity {
 		a.jobsMu.Unlock()
 		a.log.Warn("rejecting job: at capacity", "job_id", jobID)
@@ -247,6 +254,13 @@ func (a *Agent) setLogStream(stream runnerv1.RunnerService_LogStreamClient) {
 
 // sendLogUp writes to the bulk lane under a lock: a gRPC stream must not be
 // written from two goroutines, and steps produce output concurrently.
+//
+// Every job's pump goroutines contend on this one lock and one LogStream RPC.
+// At M0 that's fine — one runner, one job, one capacity — but it means
+// concurrent jobs on a single runner (once capacity > 1 is exercised, or the
+// docker executor lands) will serialize their log writes through here. If
+// that shows up as a bottleneck, the fix is a per-job channel feeding a
+// single writer goroutine per LogStream, not more locks.
 func (a *Agent) sendLogUp(up *runnerv1.LogUp) {
 	a.logMu.Lock()
 	defer a.logMu.Unlock()
@@ -289,6 +303,12 @@ func (a *Agent) sendEvent(jobID, leaseID string, stepIndex uint32, kind, payload
 	})
 }
 
+// finishJob releases everything keyed on jobID once a job is done.
+//
+// This is also what bounds a.seq's size: it is never cleared wholesale on
+// reconnect, only per job here, so its footprint tracks the runner's active
+// (plus recently-finished-but-not-yet-cleaned-up) jobs rather than its
+// lifetime job count.
 func (a *Agent) finishJob(jobID string) {
 	a.jobsMu.Lock()
 	delete(a.active, jobID)
@@ -330,6 +350,16 @@ func (a *Agent) cancelJob(cancel *runnerv1.CancelJob) {
 
 // resumeStates reports the jobs this runner believes it is still executing, for
 // Hello. On a fresh start it is empty.
+//
+// LastStatusSeq is a.statusSeq — the runner-wide counter, not a per-job one —
+// so it over-reports the true per-job watermark whenever more than one job is
+// active (see Agent.statusSeq). That's informational only in this protocol
+// version: the server's resumeVerdicts derives log/status watermarks from its
+// own DB-stored jobs.log_watermark/status_watermark, not from anything the
+// runner claims here. Worth fixing if a future server implementation ever
+// starts trusting this field, but there is nothing to fix in the wire
+// contract today — LastStatusSeq exists per-job in the message precisely so a
+// server could use it that way later.
 func (a *Agent) resumeStates() []*runnerv1.ResumeState {
 	a.jobsMu.Lock()
 	defer a.jobsMu.Unlock()

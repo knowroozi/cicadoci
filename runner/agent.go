@@ -4,6 +4,14 @@
 // Everything is outbound. The runner dials the server; the server never dials
 // back. That is what lets a runner sit behind NAT in a customer network with no
 // inbound firewall rules (ADR-004).
+//
+// Transport security is the caller's responsibility: New takes an already-
+// established *grpc.ClientConn, and this package has no opinion on whether it
+// carries TLS. cmd/cicado-runner refuses to build a plaintext connection
+// without an explicit -insecure flag for exactly that reason — a runner
+// talking plaintext to a server outside a fully trusted network exposes job
+// output and its own credential in the clear. TLS transport credentials land
+// with CIC-13.
 package runner
 
 import (
@@ -125,6 +133,15 @@ func (a *Agent) authContext(ctx context.Context) context.Context {
 // A dropped connection is not an error to give up on: runners live on spot
 // instances and flaky networks, and the protocol is built so that reconnecting
 // and asking for resume verdicts is the normal recovery path.
+//
+// The retry loop below deliberately reuses a.conn (and therefore a.client)
+// across iterations rather than dialing a new *grpc.ClientConn each time.
+// That's correct, not an oversight: a grpc.ClientConn manages its own
+// underlying transport and reconnects it automatically with its own backoff
+// on a transient failure — redialing here would fight that mechanism rather
+// than help it. What this loop retries is the RPC layer: a.session(ctx)
+// opens a fresh Session/LogStream pair each pass, over whatever transport
+// state the ClientConn has already recovered to (or is still recovering).
 func (a *Agent) Run(ctx context.Context) error {
 	backoff := time.Second
 	const maxBackoff = 30 * time.Second

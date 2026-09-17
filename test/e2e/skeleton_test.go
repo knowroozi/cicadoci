@@ -22,8 +22,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"cicadoci.com/cicado/internal/testdb"
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
@@ -545,8 +547,12 @@ func TestSessionRequiresHelloFirst(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("send heartbeat: %v", err)
 	}
-	if _, err := stream.Recv(); err == nil {
+	_, err = stream.Recv()
+	if err == nil {
 		t.Fatal("server accepted a session whose first message was not Hello")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("rejection code = %v, want FailedPrecondition (got: %v)", status.Code(err), err)
 	}
 }
 

@@ -155,6 +155,12 @@ func (s *Shell) Cleanup(_ context.Context) error {
 // It reads whatever is available rather than splitting on lines: a step that
 // prints a prompt without a newline, or a progress bar using carriage returns,
 // should still show up in a live tail instead of sitting in a buffer.
+//
+// The 32KB size is a ceiling, not a threshold to wait for: bufio.Reader.Read
+// does at most one Read on the underlying pipe to refill its buffer, and a
+// pipe read returns as soon as any data is available — it does not block
+// until the buffer is full. A step that prints one byte and goes quiet is
+// pumped in well under a millisecond, not held until 32KB accumulates.
 func pump(r io.Reader, stream Stream, sink OutputSink) {
 	reader := bufio.NewReaderSize(r, 32*1024)
 	buf := make([]byte, 32*1024)
