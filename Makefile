@@ -112,6 +112,10 @@ tidy: ## Tidy both modules
 fmt: ## Format all Go code
 	go fmt ./...
 
+.PHONY: check-fast
+check-fast: generate-check lint vet test ## Fast pre-push check: no Postgres, no -race
+	@echo "check-fast passed. Run 'make check' before pushing for full coverage (starts a throwaway Postgres)."
+
 .PHONY: check
 check: generate-check lint vet ## Everything CI runs, minus the database-backed tests
 	./scripts/with-postgres.sh go test ./... -race
