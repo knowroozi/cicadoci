@@ -14,6 +14,15 @@ make dev        # server + Postgres + one runner
 make dev-down   # tear it down, including volumes
 ```
 
+The runner persists its enrollment credential in the `runner-state` volume so
+it survives a restart. `make dev-down` removes that volume along with
+Postgres's, so the common cycle is safe. Resetting only the database — a plain
+`docker compose down` (no `-v`) followed by dropping and recreating it, or
+`docker compose down -v postgres` — is not: the runner comes back up with a
+credential the fresh database has never seen, fails to enroll, and the demo
+job never runs. `make dev-reset-runner` clears just the runner's state for
+exactly that recovery, without also discarding the database.
+
 The server seeds a development org, a well-known registration token, and a demo
 job on startup, so the runner enrolls itself and you can watch `echo hello`
 travel the whole path with nothing to bootstrap by hand. Within a few seconds of

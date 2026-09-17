@@ -50,6 +50,12 @@ dev: ## Bring up server + Postgres + one runner (docker-compose)
 dev-down: ## Tear down the dev stack and its volumes
 	docker compose down -v
 
+.PHONY: dev-reset-runner
+dev-reset-runner: ## Clear the runner's persisted state (recovers from a stale credential after a DB reset)
+	docker compose rm -svf runner
+	docker volume rm -f cicado_runner-state
+	@echo "runner-state cleared; 'make dev' will re-enroll the runner from scratch"
+
 .PHONY: build
 build: ## Build both binaries into ./bin
 	go build -o $(BIN)/cicado-server ./server/cmd/cicado-server

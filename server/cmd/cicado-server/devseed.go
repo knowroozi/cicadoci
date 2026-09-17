@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -70,7 +71,7 @@ func devSeed(ctx context.Context, st *store.Store, q *queue.Postgres, log *slog.
 
 	log.Info("development stack seeded",
 		"org_id", orgID,
-		"registration_token", DevRegistrationToken,
+		"registration_token_hash", hex.EncodeToString(auth.Hash(DevRegistrationToken)),
 		"demo_job_id", jobID)
 	return nil
 }

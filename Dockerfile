@@ -9,6 +9,14 @@
 # ─── build ───────────────────────────────────────────────────────────────────
 FROM golang:1.26-alpine AS build
 
+# Fail rather than silently fetch a newer toolchain if go.mod's `go` directive
+# ever drifts above this image's Go version — the same guard CI's GOTOOLCHAIN:
+# local exists for, and the same bug it would have caught: an unpinned
+# toolchain hides the mismatch locally (go just downloads what it needs) while
+# this build, pinned to one Go version, would otherwise hang trying to fetch a
+# newer one over a network that may not even be reachable from here.
+ENV GOTOOLCHAIN=local
+
 WORKDIR /src
 
 # Dependencies first, so editing source does not invalidate the module cache.
