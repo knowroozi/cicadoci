@@ -6,7 +6,7 @@ require (
 	github.com/bufbuild/buf v1.47.2
 	github.com/golangci/golangci-lint/v2 v2.13.2
 	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.5.1
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 )
 
 require (

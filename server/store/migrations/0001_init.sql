@@ -184,6 +184,15 @@ CREATE TABLE jobs (
     status_watermark    bigint      NOT NULL DEFAULT 0,
     log_watermark       bigint      NOT NULL DEFAULT 0,
 
+    -- The lease that last held this job, retained after completion. The bulk
+    -- log lane is a separate gRPC stream from the control lane, and the two
+    -- have no ordering guarantee relative to each other: a job's final log
+    -- chunks routinely arrive after its terminal status. Without a record of
+    -- the lease they were produced under, those trailing chunks fail
+    -- authorization and are dropped -- losing precisely the last lines of
+    -- output, which are the ones worth reading. See log_entries ingest.
+    last_lease_id       uuid,
+
     cancel_requested_at timestamptz,
     cancel_reason       text,
     created_at          timestamptz NOT NULL DEFAULT now(),

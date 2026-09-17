@@ -270,7 +270,8 @@ func (q *Postgres) Complete(ctx context.Context, res Completion) error {
 		       error_class  = nullif($5, ''),
 		       error_detail = nullif($6, ''),
 		       finished_at  = now(),
-		       lease_id     = NULL,
+		       last_lease_id    = lease_id,
+		       lease_id         = NULL,
 		       lease_expires_at = NULL
 		 WHERE id = $1 AND lease_id = $2 AND status IN ('claimed', 'running')`,
 		res.JobID, res.LeaseID, string(res.State), res.ExitCode,
@@ -296,6 +297,7 @@ UPDATE jobs
        error_detail = CASE WHEN attempts >= max_attempts THEN $3 ELSE error_detail END,
        error_class  = CASE WHEN attempts >= max_attempts THEN 'infra' ELSE error_class END,
        finished_at  = CASE WHEN attempts >= max_attempts THEN now() ELSE NULL END,
+       last_lease_id    = coalesce(lease_id, last_lease_id),
        lease_id         = NULL,
        claimed_by       = NULL,
        claimed_at       = NULL,
