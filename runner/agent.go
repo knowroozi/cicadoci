@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -97,7 +98,7 @@ func Enroll(ctx context.Context, conn *grpc.ClientConn, registrationToken, name 
 func capabilities(executors []string) *runnerv1.Capabilities {
 	return &runnerv1.Capabilities{
 		Executors:     executors,
-		Os:            "linux",
+		Os:            runtime.GOOS,
 		Arch:          runtimeArch(),
 		RunnerVersion: Version,
 		Features:      []string{},

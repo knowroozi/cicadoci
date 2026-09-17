@@ -26,15 +26,23 @@ type Config struct {
 	LeaseTTL time.Duration
 	// MaxBatch caps how many jobs are claimed for one runner at a time.
 	MaxBatch int
+	// UndeliveredBackoff delays a job requeued because the runner it was just
+	// claimed for turned out to be unreachable. Zero would make it claimable
+	// again immediately — fine for one bad send, but a runner that stays
+	// unreachable (full outbound buffer, mid-disconnect) would then be
+	// re-claimed and re-rejected on every dispatch pass with no delay between
+	// attempts.
+	UndeliveredBackoff time.Duration
 }
 
 // DefaultConfig returns sensible defaults.
 func DefaultConfig(leaseTTL time.Duration) Config {
 	return Config{
-		PollInterval:  5 * time.Second,
-		SweepInterval: 15 * time.Second,
-		LeaseTTL:      leaseTTL,
-		MaxBatch:      8,
+		PollInterval:       5 * time.Second,
+		SweepInterval:      15 * time.Second,
+		LeaseTTL:           leaseTTL,
+		MaxBatch:           8,
+		UndeliveredBackoff: 2 * time.Second,
 	}
 }
 
@@ -134,7 +142,7 @@ func (d *Dispatcher) dispatchOnce(ctx context.Context) {
 				// the claim and the send. Return the job immediately rather
 				// than making it wait out the lease TTL for the sweeper.
 				sess.Release(job.JobID)
-				if _, err := d.queue.Requeue(ctx, job.JobID, "runner unreachable at assignment", 0); err != nil {
+				if _, err := d.queue.Requeue(ctx, job.JobID, "runner unreachable at assignment", d.cfg.UndeliveredBackoff); err != nil {
 					d.log.Error("requeue undelivered job", "job_id", job.JobID, "error", err)
 				}
 				continue

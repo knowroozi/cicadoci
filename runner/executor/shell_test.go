@@ -147,6 +147,41 @@ func TestShellCancellationKillsProcessGroup(t *testing.T) {
 	}
 }
 
+// A step that backgrounds a child, redirects its own I/O away (the normal
+// way to write a "fire and forget" background job in a script), and exits
+// cleanly (exit 0, no timeout, no cancellation) must not leave that child
+// running on the host: it would survive into every job that runs after it.
+// cmd.Cancel alone does not cover this — it only fires on timeout/
+// cancellation — so this is a different path than
+// TestShellCancellationKillsProcessGroup.
+//
+// The grandchild must redirect its own stdout/stderr for this to exercise
+// the clean-exit reap specifically: one that keeps them open would instead
+// block RunStep itself in the pump goroutines below, which is a separate,
+// documented limitation (see the comment on the kill in RunStep).
+func TestShellCleanExitKillsProcessGroup(t *testing.T) {
+	sh := newPreparedShell(t)
+
+	marker := sh.Workspace() + "/still-alive"
+	res, err := sh.RunStep(context.Background(), executor.Step{
+		// Backgrounds a grandchild that touches a file after the step exits,
+		// then exits 0 immediately without waiting for it.
+		Command: []string{"sh", "-c", "(sleep 2; touch " + marker + ") >/dev/null 2>&1 & exit 0"},
+	}, &collectingSink{})
+	if err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", res.ExitCode)
+	}
+
+	// Wait past when the backgrounded grandchild would have fired.
+	time.Sleep(3 * time.Second)
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("a backgrounded grandchild survived a clean exit; the process group was not reaped")
+	}
+}
+
 // Steps must not inherit the runner's environment: it holds the runner's server
 // credential, and a job that can read it can impersonate the runner.
 func TestShellDoesNotLeakRunnerEnvironment(t *testing.T) {

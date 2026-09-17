@@ -22,6 +22,11 @@ import (
 // left behind. A job can poison the host for every job that follows. The docker
 // executor is the default for that reason; this one exists because some
 // infrastructure work genuinely has to touch the host it runs on.
+//
+// A *Shell is scoped to exactly one job — runner/job.go constructs a fresh one
+// per job — and workspace/mu assume that. Sharing one across concurrent jobs
+// (e.g. a future optimization that reuses executors across a runner's
+// capacity) would let them clobber each other's workspace.
 type Shell struct {
 	workspace string
 	mu        sync.Mutex
@@ -103,6 +108,28 @@ func (s *Shell) RunStep(ctx context.Context, step Step, sink OutputSink) (Result
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("shell: start %q: %w", step.Command[0], err)
 	}
+	// cmd.Cancel above only fires on timeout/cancellation, not on a clean
+	// exit. Setpgid puts the step in its own process group but does not reap
+	// it: a step that backgrounds a process (redirecting its own I/O away,
+	// which is how a background job is normally written) and exits would
+	// otherwise leave that process running on the host for every job that
+	// runs after it — the poisoned-host failure mode this executor's own doc
+	// comment warns about. Killing the group on every return path closes
+	// that; it is a no-op once the group's leader and everything under it
+	// are already gone.
+	//
+	// This does NOT reap a grandchild that keeps its own copy of stdout or
+	// stderr (i.e. it did not redirect them): the pump goroutines below block
+	// on read until every holder of the pipe's write end closes it, so
+	// RunStep itself will not return — and this kill will not run — until
+	// that grandchild exits on its own or the step's own timeout/cancel
+	// fires. Reaping was deliberately not made to race ahead of that by
+	// calling cmd.Wait() before the pumps drain: doing so once let cmd.Wait's
+	// own pipe close race the pump reads and silently dropped a step's
+	// entire captured output under -race (caught by
+	// TestShellRunsAndCapturesBothStreams flaking under repeated runs) —
+	// worse than the leak this is fixing.
+	defer func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }()
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -123,8 +150,15 @@ func (s *Shell) RunStep(ctx context.Context, step Step, sink OutputSink) (Result
 		// The step ran and failed. That is a job result, not an executor error.
 		code := int32(exitErr.ExitCode())
 		if code < 0 {
-			// Killed by a signal; report a shell-conventional 128+signal.
-			code = 137
+			// Killed by a signal, not a normal exit: report the shell
+			// convention of 128+signal (137 for SIGKILL, but not every kill
+			// here is a SIGKILL — a step can catch and re-raise its own).
+			code = 128
+			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+				code += int32(ws.Signal())
+			} else {
+				code += int32(syscall.SIGKILL)
+			}
 		}
 		return Result{ExitCode: code, TimedOut: timedOut, Duration: duration}, nil
 	default:
