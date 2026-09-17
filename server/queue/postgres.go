@@ -315,6 +315,12 @@ func (q *Postgres) Requeue(ctx context.Context, jobID uuid.UUID, reason string, 
 //
 // This is what makes a lost runner cost one job's latency instead of a job that
 // hangs forever.
+//
+// The 500-row cap per call is a production guardrail, not a correctness
+// limit: a fleet outage affecting more than 500 jobs just takes multiple
+// passes to fully drain. That only stays cheap if whoever calls this on a
+// timer picks an interval well above 500 * lease TTL — otherwise consecutive
+// sweeps overlap the same backlog instead of making progress through it.
 func (q *Postgres) SweepExpiredLeases(ctx context.Context, now time.Time) ([]SweptJob, error) {
 	rows, err := q.pool.Query(ctx, `
 		SELECT id, coalesce(claimed_by, '00000000-0000-0000-0000-000000000000'::uuid), attempts, max_attempts

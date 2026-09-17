@@ -458,6 +458,34 @@ func TestRequeueDeadLettersAfterMaxAttempts(t *testing.T) {
 	if s := jobStatus(t, st.Pool(), jobID); s != "dead_letter" {
 		t.Errorf("job status = %q, want dead_letter", s)
 	}
+
+	// A dead-lettered job must stay dead. Requeue clears claimed_by and
+	// lease_id on every transition including the terminal one, so this also
+	// guards the lease-consistency CHECK constraint: a status of 'dead_letter'
+	// with a lease would be claimable-looking without being claimable, and a
+	// future code path that forgets to clear the lease on a status change
+	// into ('claimed','running') is exactly what that constraint exists to
+	// catch. Confirm no runner — including a fresh one — can pick this back up.
+	another := seedRunner(t, st.Pool(), []string{"linux"})
+	claimed, err := q.Claim(ctx, queue.ClaimRequest{
+		RunnerID: another, Labels: []string{"linux"},
+		Executors: []string{"shell"}, Limit: 10, LeaseTTL: testLeaseTTL,
+	})
+	if err != nil {
+		t.Fatalf("claim after dead-letter: %v", err)
+	}
+	for _, c := range claimed {
+		if c.JobID == jobID {
+			t.Fatal("a dead-lettered job was claimed")
+		}
+	}
+	var leaseID *uuid.UUID
+	if err := st.Pool().QueryRow(ctx, `SELECT lease_id FROM jobs WHERE id = $1`, jobID).Scan(&leaseID); err != nil {
+		t.Fatalf("read lease: %v", err)
+	}
+	if leaseID != nil {
+		t.Error("a dead-lettered job still holds a lease")
+	}
 }
 
 // Backoff must actually hide the job: a requeue with a delay that has not

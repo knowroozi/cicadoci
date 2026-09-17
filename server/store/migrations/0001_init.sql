@@ -334,9 +334,15 @@ CREATE TABLE secrets (
     )
 );
 
--- Uniqueness across a nullable scope. NULLs do not compare equal, so the
--- nullable columns are folded to sentinels in the index expression rather than
--- relying on NULLS NOT DISTINCT (PG15+) — this works on any supported version.
+-- Uniqueness across a nullable scope.
+--
+-- Postgres treats NULL as distinct from every other NULL for uniqueness
+-- purposes, so a plain UNIQUE(org_id, repo_id, environment, name) would let
+-- two org-scoped secrets (both with repo_id/environment NULL) silently share
+-- a name — the exact duplicate this index exists to prevent. The nullable
+-- columns are folded to fixed sentinels here so NULL compares equal to NULL
+-- for this purpose, rather than relying on NULLS NOT DISTINCT (PG15+), so
+-- this works on any supported version.
 CREATE UNIQUE INDEX secrets_scope_name_idx ON secrets (
     org_id,
     coalesce(repo_id, '00000000-0000-0000-0000-000000000000'::uuid),
