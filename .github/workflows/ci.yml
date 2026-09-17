@@ -32,12 +32,18 @@ jobs:
   build:
     name: Build and vet
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          # Two modules, root and tools/ — without this the cache keys only
+          # on the root go.mod and never restores for the tools module.
+          cache-dependency-path: |
+            go.mod
+            tools/go.mod
       - run: go build ./...
       - run: go vet ./...
       - name: Check both modules are tidy
@@ -54,12 +60,16 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: |
+            go.mod
+            tools/go.mod
       - name: Install pinned tooling
         run: make dev-deps
       - run: ./bin/golangci-lint run ./... --timeout 5m
@@ -67,6 +77,7 @@ jobs:
   test:
     name: Test (race)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16-alpine
@@ -91,29 +102,51 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: |
+            go.mod
+            tools/go.mod
       - name: Run tests with the race detector
-        run: go test ./... -race -count=1 -timeout 15m
-      - name: Fail if database tests were skipped
-        # The queue and end-to-end tests are the ones that would actually
-        # catch a regression in the queue or the wire protocol. If the
-        # database was unreachable they skip quietly, and CI would go green
-        # having tested almost nothing. Assert they really ran.
+        # -json + jq on the "action" field is what the skip check below is
+        # actually asserting on, rather than grepping the verbose human-
+        # readable log: the JSON event stream is `go test`'s own stable
+        # machine format, so this survives changes to how skips are printed
+        # for humans.
+        run: go test ./... -race -count=1 -timeout 15m -json | tee /tmp/test-output.json | jq -r 'select(.Action == "output") | .Output' | sed '/^$/d'
+      - name: Fail if any test was skipped
+        # A database-backed test is the one that would actually catch a
+        # regression in the queue or the wire protocol; if the database was
+        # unreachable it skips quietly, and CI would go green having tested
+        # almost nothing. This checks every package, not a hardcoded list —
+        # a skip in a future DB-backed test package would otherwise go
+        # unguarded — and both a single test's skip (.Test set) and a whole
+        # package skipping outright (.Test is null: e.g. testdb.New failing
+        # in a TestMain, or every test in a package sharing one skip guard).
         #
-        # -json + jq on the "action" field is what's actually being asserted
-        # on, rather than grepping the verbose human-readable log: the JSON
-        # event stream is `go test`'s own stable machine format, so this
-        # survives changes to how skips are printed for humans.
+        # A package with no test files at all *also* reports Action=="skip"
+        # with Test==null — that's Go's own protocol for "nothing to run
+        # here", not a guard that fired, and every such package in this repo
+        # (runner, server/dispatch, proto/runner/v1, ...) would otherwise
+        # false-positive this check on every single run. It's distinguished
+        # from a real skip by the "[no test files]" line go test emits as
+        # that package's own output, immediately before its skip event.
         run: |
-          go test ./server/queue/ ./test/e2e/ -count=1 -json | tee /tmp/test-output.json | jq -r 'select(.Action == "output") | .Output' | sed '/^$/d'
-          if jq -e 'select(.Action == "skip" and .Test != null)' /tmp/test-output.json | grep -q .; then
-            echo "::error::Database-backed tests skipped; CICADO_TEST_DATABASE_URL is not reaching Postgres."
-            jq -r 'select(.Action == "skip" and .Test != null) | "\(.Package) \(.Test)"' /tmp/test-output.json
+          skips=$(jq -rs '
+            (map(select(.Action == "output" and ((.Output // "") | contains("[no test files]"))))
+              | map(.Package)) as $notest
+            | .[] | select(.Action == "skip") | . as $s
+            | select(($notest | index($s.Package)) == null)
+            | "\(.Package) \(.Test // "(whole package)")"
+          ' /tmp/test-output.json)
+          if [ -n "$skips" ]; then
+            echo "::error::A test was skipped; CICADO_TEST_DATABASE_URL may not be reaching Postgres."
+            echo "$skips"
             exit 1
           fi
 
   proto:
     name: Protocol
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -123,6 +156,9 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: |
+            go.mod
+            tools/go.mod
       - name: Install pinned tooling
         run: make dev-deps
       - name: Lint the proto
@@ -133,13 +169,40 @@ jobs:
         # The runner protocol is frozen (ADR-004): additive changes only. This
         # is the check that enforces it, rather than trusting review to catch a
         # renumbered field.
+        #
+        # On a pull_request this compares against the PR's base branch (still
+        # inert until master carries a buf.yaml — see proto-breaking's own
+        # skip message). On a push to master the checked-out ref *is* the new
+        # tip, so comparing against origin/master would diff the commit
+        # against itself and trivially pass; compare against the pre-push SHA
+        # instead. github.event.before is the all-zero SHA on a new branch's
+        # first push (nothing to compare against yet, not a failure) or when
+        # history was rewritten, either of which is worth skipping honestly
+        # rather than failing the job over.
         run: |
-          git fetch origin master --depth=1 || true
-          make proto-breaking
+          if [ "${{ github.event_name }}" = "push" ]; then
+            before="${{ github.event.before }}"
+            if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              echo "no pre-push commit to compare against (new branch or rewritten history); skipping"
+            else
+              make proto-breaking BASE_REF="$before"
+            fi
+          else
+            git fetch origin master
+            make proto-breaking BASE_REF=origin/master
+          fi
 
   docker:
     name: Docker images
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The top-level `permissions: contents: read` locks every other scope to
+    # none, which includes the Actions cache API cache-from/cache-to below
+    # write to (type=gha). Without this, build-push-action logs a permission
+    # warning and the cache silently doesn't persist rather than failing loud.
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
