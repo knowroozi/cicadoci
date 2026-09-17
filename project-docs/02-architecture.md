@@ -33,9 +33,16 @@ Two binaries. Server embeds the web UI (`embed.FS`). Postgres is the only statef
 `orgs → repos → workflows → runs → jobs → steps`
 
 - **runs**: trigger metadata (event, ref, sha, actor), status, timings
-- **jobs**: the schedulable unit; `needs` edges; runner tag requirements; claimed_by/claimed_at (queue fields)
+- **jobs**: the schedulable unit; runner tag requirements; queue and lease fields
+  (claimed_by, claimed_at, lease_id, lease_expires_at, attempts, available_at). `needs` edges live
+  in **job_dependencies** so "which jobs just became eligible" is an index lookup, not a scan
+- **job_status_updates**: (job_id, seq) idempotent status upserts, per the protocol's redelivery rules
 - **steps**: image/run/env resolved; exit code; structured event stream reference
-- **log_chunks**: (job_id, seq, bytes) hot storage; compacted to S3 object on completion
+- **log_entries**: (job_id, seq) hot storage for log chunks *and* structured events in one
+  sequence space — the protocol gives them a shared seq so a single watermark covers both and
+  replay ordering after a reconnect is total, so schema v1 makes that a primary key rather than
+  an application invariant across two tables. Compacted to an S3 object on completion
+  (**log_archives** records where it went).
 - **secrets**: name, scope (org/repo/env), KMS-wrapped ciphertext, version
 - **runners**: identity, tags, last_heartbeat, capacity
 - **tokens**: hashed, scoped claims, expiry (job tokens, MCP tokens, API tokens)
