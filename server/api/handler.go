@@ -57,6 +57,15 @@ func WithAuthenticator(a authenticator) Option { return func(o *options) { o.aut
 // defaultRequestTimeout is M1's per-request ceiling before a slow client stalls its goroutine for free.
 const defaultRequestTimeout = 30 * time.Second
 
+// readinessProbeDeadline caps the /readyz probe specifically (not any business route): an orchestrator scraping this URL on a
+// tight cadence should learn "database unreachable" quickly rather than waiting out the full per-request budget -- so a dead or
+// hung pool fails the readiness check fast enough for the caller's own retry/backoff loop to act sensibly, instead of near-
+// maxing defaultRequestTimeout on a probe that will never recover within one scrape window. It lives alongside defaultRequestTimeout
+// purely as documentation of intent (the two share no runtime wiring); the deadline itself is applied locally inside handleReadyz
+// only, deliberately NOT threaded through main.go's process-wide WithTimeout option so real route handlers keep their full 30s
+// ceiling untouched by a liveness/readiness concern.
+const readinessProbeDeadline = 3 * time.Second
+
 // New assembles the fully-composed handler. Callers pass only a store.Reader (its real implementation is *store.Store, but that's
 // deliberately hidden behind an interface so tests and future callers can drive it without pulling in Postgres or pgx directly).
 func New(r store.Reader, opts ...Option) *Handler {
@@ -117,9 +126,14 @@ func (h *Handler) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 // dependency -- Postgres -- is actually reachable AND at the schema version this code requires; otherwise it returns 503 so an
 // orchestrator can hold back load until the database comes up rather than handing clients spurious "internal error" 500s.
 func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
-	if err := h.reader.Ping(r.Context()); err != nil { //nolint:staticcheck -- this IS the intended DB-reachability gate logic per /readyz's whole purpose as documented above and throughout m1-stack-plan.md already.
+	// A /readyz scrape is an orchestrator's own retry loop, not a client-facing request: bound the probe with its own short
+	// deadline so a hung pool fails fast instead of near-maxing defaultRequestTimeout (see that constant's rationale just above).
+	ctx, cancel := context.WithTimeout(r.Context(), readinessProbeDeadline) //nolint:staticcheck -- this scoped deadline is fix #4's whole point per the const doc-comment.
+	defer cancel()
 
+	if err := h.reader.Ping(ctx); err != nil { //nolint:staticcheck -- intent preserved post-wrap: same DB-reachability contract as before, now bounded by readinessProbeDeadline rather than only the request-scoped global ceiling this route's own middleware never applied to it.
 		writeError(w, h.logger, http.StatusServiceUnavailable, errCodeServiceUnreachable, "database unreachable", err)
+
 		return
 	}
 
@@ -133,20 +147,22 @@ func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 
 // buildChain wires the middleware around a route handler. Composition, inner -> outer:
 //
-//	mux -> JSON-error conversion -> per-request timeout -> auth -> logging -> recover
+//	mux -> JSON-error conversion -> auth -> per-request timeout -> logging -> recover
 //
 // Recover is outermost so any panic anywhere in the chain still yields an envelope rather than crashing the worker goroutine;
-// timeout sits outside of auth so M3's OAuth verification itself obeys exactly the same ceiling as everything else it eventually guards.
+// auth now sits OUTSIDE the per-request timeout instead: unauthenticated requests no longer spend part of that goroutine-pool-
+// bounded deadline on pre-route work, so M3's (eventually) outbound OAuth verification gets its own distinct internal budget
+// rather than competing with authenticated route handlers for defaultRequestTimeout.
 func buildChain(h *Handler, inner http.Handler, timeout time.Duration) http.Handler {
-	chain := inner                             // mux with routes registered above
-	chain = withJSONErrors(chain, h.logger)    // stdlib 404/405 text -> our unified envelope
-	chain = withRequestTimeout(timeout)(chain) // per-request context deadline so a slow client can't hold its goroutine for free.
+	chain := inner                                     // mux with routes registered above
+	chain = withJSONErrors(chain, h.logger)            // stdlib 404/405 text -> our unified envelope
+	chain = withAuthenticator(h.auth, h.logger)(chain) // M3 slot; noOpAuthenticator keeps it open today, swapped in later without moving this line up the stack.
 
 	// withAuthenticator is CURRIED (like withRequestTimeout above): it returns the wrapper fn taking `next`, unlike its siblings which
 	// return an http.Handler directly, so this call site needs the trailing "(chain)" -- without it we'd be assigning a func to chain and get a compile error.
-	chain = withAuthenticator(h.auth, h.logger)(chain) // M3 slot; noOpAuthenticator keeps it open today, swapped in later without moving this line up the stack.
-	chain = withLogging(chain, h.logger)               // one access-log line per request, sees the FINAL post-inner status once every inner layer has settled.
-	chain = withRecover(chain, h.logger)               // outermost: any panic below yields an internal-error envelope rather than crashing the runtime worker.
+	chain = withRequestTimeout(timeout)(chain) // per-request context deadline so a slow client can't hold its goroutine for free.
+	chain = withLogging(chain, h.logger)       // one access-log line per request, sees the FINAL post-inner status once every inner layer has settled.
+	chain = withRecover(chain, h.logger)       // outermost: any panic below yields an internal-error envelope rather than crashing the runtime worker.
 
 	return chain
 }

@@ -18,16 +18,19 @@ import (
 
 // fakeReader satisfies store.Reader for unit tests.
 type fakeReader struct {
-	runs       []store.Run
-	hasMore    bool
-	runners    []store.Runner
-	pingErr    error
-	errForList error
+	runs         []store.Run
+	hasMore      bool
+	runners      []store.Runner
+	pingErr      error
+	errForList   error                  // last field of the pre-existing struct body;
+	lastListOpts *store.ListRunsOptions // records each ListRuns call's incoming options for later assertion by this test set.
 }
 
 var _ store.Reader = (*fakeReader)(nil)
 
-func (f *fakeReader) ListRuns(_ context.Context, _ store.ListRunsOptions) ([]store.Run, bool, error) {
+func (f *fakeReader) ListRuns(_ context.Context, opts store.ListRunsOptions) ([]store.Run, bool, error) {
+	f.lastListOpts = &opts // capture the actual incoming call verbatim so callers downstream can assert its shape.
+
 	if f.errForList != nil {
 		return nil, false, f.errForList
 	}
@@ -93,7 +96,8 @@ func TestHealthzLiveness(t *testing.T) { //nolint:paralleltest -- single httptes
 	srv := newTestServer(t, &fakeReader{})
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/healthz") //nolint:bodyclose -- httptest manages lifetime via Close above and per-call body handling below for this specific test function's scope only.
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/healthz", nil)
+	resp, err := http.DefaultClient.Do(req)
 
 	if err != nil {
 		t.Fatalf("GET /healthz: %v", err)
@@ -117,7 +121,8 @@ func TestReadyzReflectingPing(t *testing.T) { //nolint:paralleltest -- sub-runs 
 		srv := newTestServer(t, &fakeReader{})
 		defer srv.Close()
 
-		resp, err := http.Get(srv.URL + "/readyz") //nolint:bodyclose -- httptest manages lifetime per this specific sub-call's scope only just as TestHealthzLiveness' single top-level call did above it in the same file already.
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/readyz", nil)
+		resp, err := http.DefaultClient.Do(req)
 
 		if err != nil {
 			t.Fatalf("GET /readyz: %v", err)
@@ -138,7 +143,8 @@ func TestReadyzReflectingPing(t *testing.T) { //nolint:paralleltest -- sub-runs 
 		srv := newTestServer(t, &fakeReader{pingErr: context.Canceled}) //nolint:contextcheck -- the specific error value doesn't matter for this assertion itself since fakeReader only ever passes it back via its Ping() method which handler.go then routes wholesale into service_unreachable regardless of WHICH concrete non-nil cause was set here.
 
 		defer srv.Close()
-		resp, err := http.Get(srv.URL + "/readyz") //nolint:bodyclose -- httptest owns lifetime per this specific sub-call's own scope just like every other route/sub-route check already above or below it in the same file across M1's initial HTTP suite draft as a whole.
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/readyz", nil)
+		resp, err := http.DefaultClient.Do(req)
 
 		if err != nil {
 			t.Fatalf("GET /readyz: %v", err) //nolint:lll -- body-inline diagnostic value per uniform convention now established throughout this entire package's route-test layer for consistency going forward even into later milestones that add more routes on top of these first five.
@@ -163,7 +169,8 @@ func TestListRunsHappy(t *testing.T) { //nolint:paralleltest -- a single httptes
 	srv := newTestServer(t, r)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/v1/runs") //nolint:bodyclose -- httptest owns lifetime per this exact call's own scope only just as every other route/sub-route assertion already above or below across the whole rest of this file does for M1's initial HTTP suite as a single coherent unit.
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/runs", nil)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET /runs: %v", err) //nolint:lll -- body-inline diagnostic per uniform convention now firmly settled on throughout this entire package's route-test layer since an early draft here already forced us to actually care about that trade-off in practice rather than just theoretically discussing it.
 
@@ -204,7 +211,8 @@ func TestListRunsLimitValidation(t *testing.T) { //nolint:paralleltest -- same r
 			srv := newTestServer(t, &fakeReader{}) // empty reader: anything reaching store layer still returns [] after fakeReader's normalization kicks in per documented behavior; these sub-tests ONLY exercise EARLY rejection of a bad limit input BEFORE any query is ever constructed or dispatched downstream toward Postgres anyway.
 
 			defer srv.Close()
-			resp, err := http.Get(srv.URL + tc.query) //nolint:bodyclose -- httptest owns lifetime here just like literally EVERY route/sub-route test in this entire package does throughout M1's initial HTTP suite draft already established by now as a coherent unit across multiple passes.
+			req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+tc.query, nil)
+			resp, err := http.DefaultClient.Do(req)
 
 			if err != nil {
 				t.Fatalf("GET %s: %v", tc.query, err) //nolint:lll -- query + err inline per uniform convention for keeping each sub-run fully self-diagnosing on its own even before we bother looking at status/body-level assertions below it in the same exact test function structure.
@@ -223,6 +231,68 @@ func TestListRunsLimitValidation(t *testing.T) { //nolint:paralleltest -- same r
 	}
 }
 
+// TestListRunsLimitResolution pins fix #3's contract directly against the fakeReader seam: when ?limit is absent, an interim
+// default cap (defaultListLimit==100 today) must reach store.ListRunsOptions.Limit rather than the zero-value that would have meant "no
+// cap at all" before this fix landed; and when a client passes its own explicit ?limit=N we must forward N verbatim with no hidden
+// +1 of our own -- that one-past-the-cap sentinel lives inside store.Reader's implementation, not here. These two assertions together
+// are exactly the shape today's earlier off-by-one bug had: opts.Limit was being pre-incremented *before* handing off to a store layer
+// that already adds its own hidden row for more-detection, silently over-fetching and mis-reporting "more" one call early. Because
+// fakeReader now captures each ListRunsOptions it receives (its lastListOpts field) rather than ignoring the argument entirely as the
+// original pre-fix scaffold did, this assertion can read back what actually crossed that seam -- which is precisely why today's earlier
+// green suite could never have caught this bug at all in the first place. This proves only an API-layer contract (what we hand off);
+// store.Reader's own internal +1 row-count behaviour itself remains integration-checked per the two-part manual/DB-backed checklist norm,
+// asserted here only as "we do not double-apply our own increment on top of it".
+func TestListRunsLimitResolution(t *testing.T) { //nolint:paralleltest -- same httptest-per-sub-run isolation reasoning as its limit-validation sibling directly above already established for this exact suite shape.
+
+	cases := []struct {
+		name  string
+		query string
+		limit int
+	}{
+		// omitted ?limit must backstop to M1 pre-auth default page, hardcoded as a plain literal here rather than an unexported
+		// const-in-api-package name (invisible from this external _test package), so the row stays decoupled from any future re-numbering.
+		{"omitted", "/api/v1/runs", 100},
+		// explicit ?limit=5 guards today's compounding bug shape: an N+1 in listRuns on top of store.Reader's own hidden +1 row
+		// for more-detection would surface here as a clean readback of 6 rather than the correct pass-through value 5.
+		{"explicit", "/api/v1/runs?limit=5", 5},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// capture the concrete fakeReader at construction time; this external api_test package cannot reach it via an unexported field
+			// on httptest.Server after the fact, so assert directly off `reader` itself below instead of a server-side probe.
+			reader := &fakeReader{}
+			srv := newTestServer(t, reader)
+			defer srv.Close()
+
+			req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+tc.query, nil)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("GET %s: %v", tc.query, err)
+
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("%s = %d, want 200 (body=%q)", tc.name, resp.StatusCode, string(body))
+
+			}
+
+			if reader.lastListOpts == nil {
+				// a nil capture means the seam plumbing itself (fakeReader.ListRuns opts-capturing change) regressed, not this fix under test.
+				t.Fatalf("%s: ListRuns received no options -- seam capture wiring regressed", tc.name)
+
+			}
+			if got := reader.lastListOpts.Limit; got != tc.limit {
+				// a mismatch here (especially an off-by-one reading 6 instead of the correct 5 for the explicit case) is exactly today's
+				// compounding bug resurfacing via a future re-introduction rather than merely being masked downstream in store layer.
+				t.Errorf("%s: ListRuns received Limit=%d, want %d", tc.name, got, tc.limit)
+
+			}
+		})
+	}
+}
+
 // TestGetRunNotFound proves /runs/{id}'s not-found branch: a well-formed UUID that matches nothing must map cleanly into store.ErrNotFound -> 404 not_found via withJSONErrors' uniform envelope, NOT some raw bare-text outcome or silent-500 -- this is exactly what "client-visible uniform error shape" means as a runtime contract we're responsible for upholding honestly even when an otherwise-validly-routed request resolves to nothing concrete in the underlying data store itself.
 func TestGetRunNotFound(t *testing.T) { //nolint:paralleltest -- same pattern already established consistently throughout this exact package's initial M1 HTTP suite draft above; single route check with no genuine concurrency-based correctness signal to gain specifically here anyway given how trivial the actual liveness-style check itself is.
 
@@ -230,7 +300,8 @@ func TestGetRunNotFound(t *testing.T) { //nolint:paralleltest -- same pattern al
 	defer srv.Close()
 	missingID := uuid.New() //nolint:staticcheck -- specific value is irrelevant per design intent here; ALL we're asserting is "a well-formed-UUID-but-not-a-record-that-exists case" which ANY random fresh UUID satisfies already anyway so there's no need for any more elaborate fixture-building machinery surrounding this one simple check specifically.
 
-	resp, err := http.Get(srv.URL + "/api/v1/runs/" + missingID.String()) //nolint:bodyclose -- httptest owns lifetime per uniform file-wide convention established throughout now across every route/sub-route test in M1's initial HTTP suite as a coherent intentional unit going forward even into later milestones adding more routes on top of these first five foundational ones.
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/runs/"+missingID.String(), nil)
+	resp, err := http.DefaultClient.Do(req)
 
 	if err != nil {
 		t.Fatalf("GET /runs/{id}: %v", err) //nolint:lll -- body-inline diagnostic per exact same uniform convention already applied consistently everywhere else in this entire package's route-test layer throughout M1 initial suite draft itself.
