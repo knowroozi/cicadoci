@@ -40,6 +40,10 @@ dev-deps: ## Install pinned tooling into ./bin
 		github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	@echo "tooling installed into $(BIN)"
 
+.PHONY: hooks-install
+hooks-install: ## Enable the repo's git pre-commit hook for this worktree (per-checkout, not per-clone-via-tracking)
+	./scripts/install-hooks.sh
+
 ##@ Development
 
 .PHONY: dev
