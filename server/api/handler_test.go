@@ -18,12 +18,13 @@ import (
 
 // fakeReader satisfies store.Reader for unit tests.
 type fakeReader struct {
-	runs         []store.Run
-	hasMore      bool
-	runners      []store.Runner
-	pingErr      error
-	errForList   error                  // last field of the pre-existing struct body;
-	lastListOpts *store.ListRunsOptions // records each ListRuns call's incoming options for later assertion by this test set.
+	runs           []store.Run
+	hasMore        bool
+	runners        []store.Runner
+	pingErr        error
+	errForList     error                  // last field of the pre-existing struct body;
+	listRunnerzErr error                  // injectable failure point for ListRunners specifically, mirroring errForList's role one route up
+	lastListOpts   *store.ListRunsOptions // records each ListRuns call's incoming options for later assertion by this test set.
 }
 
 var _ store.Reader = (*fakeReader)(nil)
@@ -51,6 +52,9 @@ func (f *fakeReader) GetRun(_ context.Context, id uuid.UUID) (store.Run, error) 
 }
 
 func (f *fakeReader) ListRunners(_ context.Context) ([]store.Runner, error) {
+	if f.listRunnerzErr != nil {
+		return nil, f.listRunnerzErr
+	}
 	if f.runners == nil {
 		f.runners = []store.Runner{} // zero-state serializes as "runners":[] rather than null.
 	}
@@ -331,4 +335,79 @@ func TestNewPanicsOnNilReader(t *testing.T) { //nolint:paralleltest -- single ca
 	}()
 	_ = api.New(nil) // intentionally triggering the panic path itself; assignment-to-blank here just satisfies compiler's "unused-result" check since we only care about whether or not New actually DID panic at all given illegal argument shape per its own documented M1 contract.
 
+}
+
+// TestListRunnersHappy covers GET /api/v1/runners' happy and error paths directly -- the route that PR #8's body claimed a
+// dedicated zero-state trio of tests for but which never gained one: a populated fleet, an empty fleet (whose zero-shape must
+// still serialize as "runners":[] rather than null), and a store-level failure propagating cleanly into the same 500 envelope
+// every other route in this suite already uses.
+func TestListRunnersHappy(t *testing.T) {
+	t.Run("populated", func(t *testing.T) {
+		srv := newTestServer(t, &fakeReader{runners: []store.Runner{{Name: "r1"}, {Name: "r2"}}})
+		defer srv.Close()
+
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/runners", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET /runners: %v", err)
+		}
+		defer resp.Body.Close()
+
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("/runners = %d, want 200 (body=%q)", resp.StatusCode, string(body))
+		}
+		var got struct {
+			Runners []store.Runner `json:"runners"`
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatalf("decode /runners: %v (body=%q)", err, string(body))
+		}
+		if len(got.Runners) != 2 || got.Runners[0].Name != "r1" || got.Runners[1].Name != "r2" {
+			t.Errorf("/runners = %+v; want two runners, newest-registration first", got)
+		}
+	})
+
+	t.Run("zero-state", func(t *testing.T) {
+		srv := newTestServer(t, &fakeReader{}) // no runners seeded: must still serialize as an empty list, not null.
+		defer srv.Close()
+
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/runners", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET /runners: %v", err)
+		}
+		defer resp.Body.Close()
+
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("/runners = %d (zero-state), want 200 (body=%q)", resp.StatusCode, string(body))
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(body, &raw); err != nil {
+			t.Fatalf("decode /runners: %v", err)
+		}
+		runnersJSON, ok := raw["runners"]
+		if !ok || string(runnersJSON) == "null" {
+			t.Errorf("/runners zero-state serialized as null or absent, want an empty list (body=%q)", string(body))
+		}
+	})
+
+	t.Run("store-error", func(t *testing.T) {
+		srv := newTestServer(t, &fakeReader{listRunnerzErr: context.Canceled}) // any non-nil cause suffices; only the envelope shape is asserted here.
+		defer srv.Close()
+
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/runners", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET /runners: %v", err)
+		}
+		defer resp.Body.Close()
+
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusInternalServerError {
+			t.Errorf("/runners = %d (store error), want 500 (body=%q)", resp.StatusCode, string(body))
+		}
+		mustDecodeEnvelope(t, body, "internal_error")
+	})
 }
