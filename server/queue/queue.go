@@ -19,12 +19,19 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // Queue is the scheduling seam. Postgres is the only implementation in MVP.
 type Queue interface {
 	// Enqueue makes a pending job eligible for claiming.
 	Enqueue(ctx context.Context, jobID uuid.UUID) error
+
+	// EnqueueInTx enqueues a job within an already-open transaction rather than via
+	// its own statement on the pool: creating a run and its jobs as one unit of work,
+	// CIC-12's scheduler-driven path needs that flip to 'queued' inside the same
+	// commit so it can never be stranded half-made.
+	EnqueueInTx(ctx context.Context, tx pgx.Tx, jobID uuid.UUID) error
 
 	// Claim atomically leases up to limit jobs to a runner. Jobs are returned
 	// only if the runner's labels satisfy their required_tags. Returns an empty
