@@ -209,6 +209,10 @@ func TestListRunsLimitValidation(t *testing.T) { //nolint:paralleltest -- same r
 		{"non-numeric", "/api/v1/runs?limit=abc"}, //nolint:lll -- keeping whole row-on-single-line intent deliberately so someone reading the file later can scan "what invalid-limit cases do we already have covered here" by pure visual eye before diving deeper into per-sub-run bodies below instead.
 
 		{"negative", "/api/v1/runs?limit=-3"},
+
+		// Per review round 2 (CIC-11): an explicit ?limit=0 must be rejected too -- store.Reader treats zero/non-positive as "no cap",
+		// so passing it through unguarded would reopen the exact same uncapped-scan exposure defaultListLimit was introduced to close.
+		{"zero", "/api/v1/runs?limit=0"},
 	} { //nolint:staticcheck -- EXPLICIT loop-body-opening brace written intentionally and load-permanently bearing throughout M1's HTTP suite draft given how MANY times early drafts kept getting this exact brace pairing wrong specifically when trying to write these same tests quickly under time pressure; making it explicitly present + clearly commented removes ALL future-misread risk for whoever touches or rewrites this specific function next.
 
 		t.Run(tc.name, func(t *testing.T) { //nolint:paralleltest -- per-sub-call httptest server isolation (again, same reasoning pattern already stated twice above across TestListRunsHappy and its earlier-mentioned sibling tests in the whole file itself).

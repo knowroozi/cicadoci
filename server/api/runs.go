@@ -31,8 +31,13 @@ func (h *Handler) listRuns(w http.ResponseWriter, r *http.Request) {
 	// Because that sentinel fetch lives in the store layer already, we pass the request size through verbatim here rather than re-adding one.
 	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
 		n, err := strconv.Atoi(rawLimit)
-		if err != nil || n < 0 || n > maxListLimit {
-			writeError(w, h.logger, http.StatusBadRequest, errCodeBadRequest, "invalid limit: must be between 0 and "+strconv.Itoa(maxListLimit), nil)
+		// n <= 0 (not just < 0): store.Reader treats a non-positive Limit as "no cap at all" per its own documented zero-is-no-cap
+		// contract, so an explicit ?limit=0 would silently bypass every guard this route has on unbounded full-table scans -- the
+		// exact same DoS-exposure shape defaultListLimit was introduced to close for omitted-limit requests, just reachable via a
+		// literal 0 value instead of a wholly missing param.
+		errMsg := "invalid limit: must be between 1 and " + strconv.Itoa(maxListLimit)
+		if err != nil || n <= 0 || n > maxListLimit {
+			writeError(w, h.logger, http.StatusBadRequest, errCodeBadRequest, errMsg, nil)
 			return
 		}
 		opts.Limit = n
