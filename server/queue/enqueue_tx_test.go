@@ -2,8 +2,8 @@ package queue_test
 
 import (
 	"context"
-	"fmt"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -125,11 +125,6 @@ func TestEnqueuedJobIsAbsentAfterRollback(t *testing.T) {
 		t.Errorf("claimed %d job(s); a rolled-back enqueue must leave nothing to claim", len(jobs))
 	}
 }
-
-// SweepExpiredLeases caps at 500 per call as a production guardrail, not a correctness limit:
-// after sweeping 501 jobs in one go it must only recover the first 500 that pass, and a second
-// sweep picks up exactly the remainder. Without this cap, a genuine fleet outage (hundreds of
-// crashed runners at once) could take a single sweep call arbitrarily long inside one transaction.
 
 // SweepExpiredLeases caps at 500 rows per call as a production guardrail against unbounded work in a
 // single transaction, not as a correctness limit (a genuine fleet outage simply drains across multiple
