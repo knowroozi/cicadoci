@@ -130,15 +130,23 @@ func seedDemoJob(ctx context.Context, st *store.Store, q *queue.Postgres, repoID
 		}
 	}
 
+	// Enqueue in this same transaction that created the run and its job, rather than
+	// afterwards as a separate statement on the pool: "this run exists" and "its top-
+	// level job is queued" must commit as one atomic fact or not at all. A crash in
+	// between two steps would leave stranded work no dispatcher ever wakes up for,
+	// which is exactly the gap CIC-12 asks us to close here -- real run creation later
+	// will use this same call, devseed just exercises it now so that path has a tested
+	// home before then. The AFTER UPDATE trigger still rings the LISTEN/NOTIFY doorbell
+	// only at COMMIT, exactly as before.
+	if err := q.EnqueueInTx(ctx, tx, jobID); err != nil && !errors.Is(err, context.Canceled) {
+		return uuid.Nil, fmt.Errorf("queue demo job: %w", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, fmt.Errorf("commit demo job: %w", err)
 	}
 
-	// Enqueue after the commit that built the job, which is what rings the
-	// doorbell. (M1's scheduler will do this inside the same transaction as
-	// run creation; the job rows must simply exist first either way.)
-	if err := q.Enqueue(ctx, jobID); err != nil && !errors.Is(err, context.Canceled) {
-		return uuid.Nil, fmt.Errorf("queue demo job: %w", err)
-	}
+	// The commit above is what rings the LISTEN/NOTIFY doorbell for anyone waiting:
+	// a dispatcher on its own connection wakes and claims without polling.
 	return jobID, nil
 }

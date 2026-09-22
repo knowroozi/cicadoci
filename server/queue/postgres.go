@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -39,15 +40,33 @@ func NewPostgres(pool *pgxpool.Pool) *Postgres { return &Postgres{pool: pool} }
 
 var _ Queue = (*Postgres)(nil)
 
-// Enqueue flips a pending job to queued. The schema's AFTER UPDATE trigger
-// fires the doorbell at COMMIT, so a dispatcher woken by the notification is
-// guaranteed to see the row.
-func (q *Postgres) Enqueue(ctx context.Context, jobID uuid.UUID) error {
-	tag, err := q.pool.Exec(ctx, `
-		UPDATE jobs
-		   SET status = 'queued'
-		 WHERE id = $1
-		   AND status = 'pending'`, jobID)
+// enqueueSQL flips a 'pending' job to 'queued'. Kept as one shared constant rather
+// than inlined separately into each call site so that Enqueue (pool-path) and the
+// transaction-scoped EnqueueInTx below can only ever drift apart if someone edits
+// this exact spot -- the whole point of CIC-12's atomic-enqueue change is that run
+// creation and its jobs reaching 'queued' stay a single unit, so a second
+// independently-worded copy of the same statement would quietly reintroduce a
+// dual-write gap no review could easily catch by eye.
+const enqueueSQL = `
+UPDATE jobs
+   SET status = 'queued'
+ WHERE id = $1
+   AND status = 'pending'`
+
+// enqueuer is anything that can run one update. Both the connection pool and an
+// open transaction satisfy it, which is what lets Enqueue and EnqueueInTx share a
+// single body instead of carrying each its own copy.
+type enqueuer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+var (
+	_ enqueuer = (*pgxpool.Pool)(nil)
+	_ enqueuer = pgx.Tx(nil)
+)
+
+func enqueue(ctx context.Context, target enqueuer, jobID uuid.UUID) error {
+	tag, err := target.Exec(ctx, enqueueSQL, jobID)
 	if err != nil {
 		return fmt.Errorf("queue: enqueue %s: %w", jobID, err)
 	}
@@ -55,6 +74,26 @@ func (q *Postgres) Enqueue(ctx context.Context, jobID uuid.UUID) error {
 		return fmt.Errorf("queue: job %s is not pending", jobID)
 	}
 	return nil
+}
+
+// Enqueue makes a pending job claimable through the connection pool. The schema's
+// AFTER UPDATE trigger fires the doorbell at COMMIT, so a dispatcher woken by the
+// notification is guaranteed to see the row.
+func (q *Postgres) Enqueue(ctx context.Context, jobID uuid.UUID) error {
+	return enqueue(ctx, q.pool, jobID)
+}
+
+// EnqueueInTx makes a pending job claimable inside an already-open transaction,
+// rather than via its own statement on the pool. This is the shape CIC-12's
+// scheduler needs: creating a run and its jobs and enqueuing them are one unit of
+// work, so they must commit together or not at all -- a job that exists as 'pending'
+// but never made it to 'queued' would leave stranded work nothing wakes up for. The
+// NOTIFY trigger still rings only at COMMIT (exactly as before), so this changes when
+// the enqueue happens relative to run creation, not when anyone can observe or claim
+// the job: both a standalone Enqueue and an in-transaction one become visible and
+// ring that same doorbell at precisely their own commit moment.
+func (q *Postgres) EnqueueInTx(ctx context.Context, tx pgx.Tx, jobID uuid.UUID) error {
+	return enqueue(ctx, tx, jobID)
 }
 
 // claimSQL is the heart of the queue.
