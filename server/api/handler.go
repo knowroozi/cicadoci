@@ -150,9 +150,9 @@ func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 //	mux -> JSON-error conversion -> auth -> per-request timeout -> logging -> recover
 //
 // Recover is outermost so any panic anywhere in the chain still yields an envelope rather than crashing the worker goroutine;
-// auth now sits OUTSIDE the per-request timeout instead: unauthenticated requests no longer spend part of that goroutine-pool-
-// bounded deadline on pre-route work, so M3's (eventually) outbound OAuth verification gets its own distinct internal budget
-// rather than competing with authenticated route handlers for defaultRequestTimeout.
+// auth sits INSIDE the per-request timeout: the timeout context's deadline is attached before auth runs, so M3's (eventual)
+// outbound OAuth verification call shares -- and is bounded by -- the same defaultRequestTimeout ceiling as every other
+// route handler, rather than getting a separate budget of its own.
 func buildChain(h *Handler, inner http.Handler, timeout time.Duration) http.Handler {
 	chain := inner                                     // mux with routes registered above
 	chain = withJSONErrors(chain, h.logger)            // stdlib 404/405 text -> our unified envelope
