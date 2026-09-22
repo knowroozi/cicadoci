@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# CICaDo pre-commit hook: run the linter before a commit lands locally.
+#
+# Invoked by git as `core.hooksPath=/…/cicado/.githooks` (wired up once with
+# `make hooks-install`, or by hand with `git config core.hooksPath .githooks`).
+# It intentionally delegates to the same entry point CI uses — `make lint` ->
+# `$(GOLANGCILINT) run ./...` from the root Makefile, which resolves the pinned
+# binary under ./bin — so there is a single source of truth for "what lint means"
+# rather than a hand-rolled second invocation that can drift out of sync with CI.
+#
+# Escape hatches (each exits 0, i.e. "do not block this commit"):
+#   CICADO_SKIP_PRECOMMIT_LINT=1     skip the linter unconditionally for one run:
+#                                    `CICADO_SKIP_PRECOMMIT_LINT=1 git commit …`
+#   The hook also soft-skips (warn, do NOT block) when ./bin/golangci-lint is not
+# installed yet on this machine — e.g. right after a fresh clone before `make dev-deps`.
+#   Once the tool exists on disk it runs for real and blocks hard on failure, matching
+#   CI's behavior so nothing that would turn Lint RED in CI ever gets committed locally first.
+
+set -euo pipefail
+
+if [[ "${CICADO_SKIP_PRECOMMIT_LINT:-0}" == "1" ]]; then
+	echo "pre-commit: linter skipped (CICADO_SKIP_PRECOMMIT_LINT=1)" >&2
+	exit 0
+fi
+
+# Resolve the repo root regardless of which subdirectory git invoked us from.
+repo_root="$(git rev-parse --show-toplevel)"
+golangci_lint="${repo_root}/bin/golangci-lint"
+
+if [[ ! -x "${golangci_lint}" ]]; then
+	echo "pre-commit: warning — ${golangci_lint} not found; skipping Lint check for this commit." >&2
+	echo "             run 'make dev-deps' (needs network) to install pinned tooling, so future commits are checked." >&2
+	exit 0
+fi
+
+# Delegate to the canonical target rather than reimplementing the invocation.
+cd "${repo_root}"
+exec make lint
