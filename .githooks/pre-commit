@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # CICaDo pre-commit hook: run the linter before a commit lands locally.
 #
-# Invoked by git as `core.hooksPath=/…/cicado/.githooks` (wired up once with
-# `make hooks-install`, or by hand with `git config core.hooksPath .githooks`).
+# Invoked by git as `core.hooksPath=.githooks`, wired up per-worktree either via the
+# Makefile target `make hooks-install` (which just calls scripts/install-hooks.sh),
+# or by hand with `git config core.hooksPath .githooks`.
 # It intentionally delegates to the same entry point CI uses — `make lint` ->
 # `$(GOLANGCILINT) run ./...` from the root Makefile, which resolves the pinned
 # binary under ./bin — so there is a single source of truth for "what lint means"
