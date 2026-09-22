@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/reflection"
 
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
+	"cicadoci.com/cicado/server/api"
 	"cicadoci.com/cicado/server/dispatch"
 	"cicadoci.com/cicado/server/queue"
 	"cicadoci.com/cicado/server/runnersvc"
@@ -109,7 +110,7 @@ func run() error {
 
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
-		Handler:           newHTTPHandler(st),
+		Handler:           api.New(st, api.WithLogger(log)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -176,33 +177,6 @@ func run() error {
 
 	return group.Wait()
 }
-
-// newHTTPHandler serves the health endpoints. The API proper arrives with M1.
-func newHTTPHandler(st *store.Store) http.Handler {
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok\n"))
-	})
-
-	// Readiness depends on the database: a control plane that cannot reach
-	// Postgres cannot schedule anything, so it should not receive traffic.
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-		defer cancel()
-		if err := st.Pool().Ping(ctx); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte("database unreachable\n"))
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ready\n"))
-	})
-
-	return mux
-}
-
 func newLogger(level string) *slog.Logger {
 	var lv slog.Level
 	if err := lv.UnmarshalText([]byte(level)); err != nil {
