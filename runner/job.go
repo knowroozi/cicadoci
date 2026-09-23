@@ -13,6 +13,13 @@ import (
 	"cicadoci.com/cicado/runner/executor"
 )
 
+// infraErrorClass labels a StatusUpdate the runner sends when a job could not
+// even be prepared or its executor built — an infrastructure failure, as opposed
+// to a code failure inside a command that did run. Kept as one const because
+// every such block reports exactly this class (goconst would otherwise flag the
+// repeated literal).
+const infraErrorClass = "infra"
+
 func runtimeArch() string { return runtime.GOARCH }
 
 // startJob acknowledges an assignment and runs it in the background.
@@ -92,7 +99,17 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 		State: runnerv1.StatusUpdate_PREPARING,
 	})
 
-	exec := executor.NewShell()
+	exec, err := executor.NewExecutor(spec.GetExecutor())
+	if err != nil {
+		a.log.Error("unknown executor", "job_id", jobID, "executor", spec.GetExecutor(), "error", err)
+		a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{
+			State:      runnerv1.StatusUpdate_FAILED,
+			ExitCode:   -1,
+			ErrorClass: infraErrorClass,
+			Detail:     err.Error(),
+		})
+		return
+	}
 	job := executor.Job{
 		ID:            jobID,
 		RunID:         spec.GetRunId(),
@@ -105,7 +122,7 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 		a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{
 			State:      runnerv1.StatusUpdate_FAILED,
 			ExitCode:   -1,
-			ErrorClass: "infra",
+			ErrorClass: infraErrorClass,
 			Detail:     err.Error(),
 		})
 		return
@@ -153,7 +170,7 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 				State:      runnerv1.StatusUpdate_FAILED,
 				StepIndex:  stepIndex,
 				ExitCode:   -1,
-				ErrorClass: "infra",
+				ErrorClass: infraErrorClass,
 				Detail:     err.Error(),
 			})
 			return
