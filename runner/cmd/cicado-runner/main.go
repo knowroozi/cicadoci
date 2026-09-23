@@ -7,6 +7,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -20,6 +22,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"cicadoci.com/cicado/runner"
@@ -45,15 +48,20 @@ func main() {
 
 func run() error {
 	var (
-		serverAddr = flag.String("server", envOr("CICADO_SERVER", "localhost:8081"), "server gRPC address (host:port)")
-		regToken   = flag.String("registration-token", os.Getenv("CICADO_REGISTRATION_TOKEN"), "one-time registration token (first run only)")
-		statePath  = flag.String("state", envOr("CICADO_RUNNER_STATE", "/var/lib/cicado/runner.json"), "where to persist runner identity")
-		name       = flag.String("name", envOr("CICADO_RUNNER_NAME", defaultName()), "operator-facing runner name")
-		workspace  = flag.String("workspace", envOr("CICADO_WORKSPACE_ROOT", "/var/lib/cicado/workspaces"), "root directory for job workspaces")
-		capacity   = flag.Int("capacity", 1, "how many jobs to run concurrently")
-		executors  = flag.String("executors", envOr("CICADO_EXECUTORS", "shell"), "comma-separated executors to offer")
-		insecureTL = flag.Bool("insecure", envBool("CICADO_INSECURE", false), "connect without TLS (development only)")
-		logLevel   = flag.String("log-level", envOr("CICADO_LOG_LEVEL", "info"), "debug, info, warn, or error")
+		serverAddr    = flag.String("server", envOr("CICADO_SERVER", "localhost:8081"), "server gRPC address (host:port)")
+		regToken      = flag.String("registration-token", os.Getenv("CICADO_REGISTRATION_TOKEN"), "one-time registration token (first run only)")
+		statePath     = flag.String("state", envOr("CICADO_RUNNER_STATE", "/var/lib/cicado/runner.json"), "where to persist runner identity")
+		name          = flag.String("name", envOr("CICADO_RUNNER_NAME", defaultName()), "operator-facing runner name")
+		workspace     = flag.String("workspace", envOr("CICADO_WORKSPACE_ROOT", "/var/lib/cicado/workspaces"), "root directory for job workspaces")
+		capacity      = flag.Int("capacity", 1, "how many jobs to run concurrently")
+		executors     = flag.String("executors", envOr("CICADO_EXECUTORS", "shell"), "comma-separated executors to offer")
+		insecureTL    = flag.Bool("insecure", envBool("CICADO_INSECURE", false), "connect without TLS (development only)")
+		tlsCA         = flag.String("tls-ca", envOr("CICADO_TLS_CA_FILE", ""), "CA certificate (PEM) to verify the server; empty = system trust store")
+		tlsServerName = flag.String("tls-server-name", envOr("CICADO_TLS_SERVER_NAME", ""), "override the TLS server name for a self-signed dev CA")
+		tlsCert       = flag.String("tls-cert", envOr("CICADO_TLS_CERT_FILE", ""), "client certificate (PEM) for mTLS; requires -tls-key")
+		tlsKey        = flag.String("tls-key", envOr("CICADO_TLS_KEY_FILE", ""), "client private key (PEM) for mTLS; requires -tls-cert")
+		drainTimeout  = flag.Duration("drain-timeout", envDur("CICADO_DRAIN_TIMEOUT", 30*time.Second), "seconds to wait for in-flight jobs on SIGTERM before cancelling (0 = cancel now)")
+		logLevel      = flag.String("log-level", envOr("CICADO_LOG_LEVEL", "info"), "debug, info, warn, or error")
 	)
 	flag.Parse()
 
@@ -68,7 +76,13 @@ func run() error {
 		return errors.New("no executors configured")
 	}
 
-	conn, err := dial(*serverAddr, *insecureTL)
+	conn, err := dial(*serverAddr, dialOptions{
+		insecure:   *insecureTL,
+		caFile:     *tlsCA,
+		serverName: *tlsServerName,
+		clientCert: *tlsCert,
+		clientKey:  *tlsKey,
+	})
 	if err != nil {
 		return err
 	}
@@ -113,6 +127,7 @@ func run() error {
 		RunnerID:      id.RunnerID,
 		WorkspaceRoot: *workspace,
 		Capacity:      *capacity,
+		DrainTimeout:  *drainTimeout,
 		Executors:     executorList,
 		Logger:        log,
 	}, conn)
@@ -124,20 +139,89 @@ func run() error {
 	return agent.Run(ctx)
 }
 
-func dial(addr string, allowInsecure bool) (*grpc.ClientConn, error) {
-	if !allowInsecure {
-		// The protocol is gRPC over TLS with no plaintext fallback (protocol
-		// §11). Refusing here rather than silently downgrading means a
-		// misconfigured production runner fails loudly instead of shipping job
-		// output and credentials in the clear.
-		return nil, errors.New("TLS transport credentials are not configured yet (CIC-13); " +
-			"pass -insecure for local development against a development server")
+// dialOptions selects the transport security for the runner's connection to the
+// server.
+type dialOptions struct {
+	insecure   bool // plaintext; development only
+	caFile     string
+	serverName string
+	clientCert string
+	clientKey  string
+}
+
+// dial builds a gRPC client connection to the server.
+//
+// By default the connection is TLS: a runner is the only process that ever sends
+// job secrets, logs, and its own credential outward, so a plaintext tunnel would
+// hand every one of those to anything that can sniff it. Without a CA file the
+// runner verifies the server against the system trust store; with -tls-ca it
+// verifies against an operator-supplied CA (handy for a self-signed dev CA behind
+// a NAT'd runner). -tls-cert/-tls-key add client authentication (mTLS) when the
+// server wants it.
+//
+// -insecure opts out of TLS entirely. It is a development convenience only and
+// must not be used against a server outside a fully trusted network: a runner
+// talking plaintext exposes job output and its credential in the clear.
+func dial(addr string, opts dialOptions) (*grpc.ClientConn, error) {
+	creds, err := transportCredentials(opts)
+	if err != nil {
+		return nil, err
 	}
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
 	return conn, nil
+}
+
+// transportCredentials assembles the gRPC transport credentials from the dial
+// options. Split out so the insecure-vs-TLS selection and each file that gets
+// read are testable without dialing.
+func transportCredentials(opts dialOptions) (credentials.TransportCredentials, error) {
+	if opts.insecure {
+		return insecure.NewCredentials(), nil
+	}
+	cfg, err := buildTLSConfig(opts)
+	if err != nil {
+		return nil, err
+	}
+	return credentials.NewTLS(cfg), nil
+}
+
+// buildTLSConfig builds the *tls.Config for the secure path. It is deliberately
+// permissive about which material is present so the same code serves a
+// client-verifies-server setup, an mTLS setup, and a self-signed dev CA, and it
+// fails loudly when the material a mode needs is missing or unparseable.
+func buildTLSConfig(opts dialOptions) (*tls.Config, error) {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if opts.serverName != "" {
+		cfg.ServerName = opts.serverName
+	}
+	if opts.caFile != "" {
+		//nolint:gosec // operator explicitly selected this path
+		caPEM, err := os.ReadFile(opts.caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read -tls-ca %q: %w", opts.caFile, err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("no PEM certificate in -tls-ca %q", opts.caFile)
+		}
+		cfg.RootCAs = pool
+	}
+	if opts.clientCert != "" || opts.clientKey != "" {
+		// mTLS is all-or-nothing; a half-specified pair is a misconfiguration.
+		if opts.clientCert == "" || opts.clientKey == "" {
+			return nil, errors.New("-tls-cert and -tls-key must be set together for mTLS")
+		}
+		//nolint:gosec // operator explicitly selected these paths
+		pair, err := tls.LoadX509KeyPair(opts.clientCert, opts.clientKey)
+		if err != nil {
+			return nil, fmt.Errorf("load client key pair (-tls-cert/-tls-key): %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{pair}
+	}
+	return cfg, nil
 }
 
 // loadIdentity reads the persisted runner identity.
@@ -195,6 +279,17 @@ func splitAndTrim(csv string) []string {
 		}
 	}
 	return out
+}
+
+// envDur reads a duration flag's environment default, falling back when the
+// value is absent or unparseable.
+func envDur(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return fallback
 }
 
 func parseLevel(level string) slog.Level {

@@ -7,11 +7,15 @@
 //
 // Transport security is the caller's responsibility: New takes an already-
 // established *grpc.ClientConn, and this package has no opinion on whether it
-// carries TLS. cmd/cicado-runner refuses to build a plaintext connection
-// without an explicit -insecure flag for exactly that reason — a runner
-// talking plaintext to a server outside a fully trusted network exposes job
-// output and its own credential in the clear. TLS transport credentials land
-// with CIC-13.
+// carries TLS. cmd/cicado-runner supplies TLS by default and refuses a plaintext
+// connection unless it is passed an explicit -insecure flag — a runner talking
+// plaintext to a server outside a fully trusted network exposes job output and
+// its own credential in the clear.
+//
+// A dropped connection is not fatal: Run reconnects on a jittered backoff and
+// asks the server for resume verdicts, and a SIGTERM/SIGINT triggers a graceful
+// drain — in-flight jobs are given a grace window to finish before being
+// cancelled, rather than being cancelled the instant the signal arrives.
 package runner
 
 import (
@@ -20,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -48,7 +53,11 @@ type Config struct {
 	Capacity int
 	// Executors this runner offers.
 	Executors []string
-	Logger    *slog.Logger
+	// DrainTimeout bounds how long a graceful shutdown waits for in-flight jobs to
+	// finish on their own before it cancels them. Zero cancels them immediately
+	// (the fast, deterministic default used by the drain unit tests).
+	DrainTimeout time.Duration
+	Logger       *slog.Logger
 }
 
 // Agent is a connected runner.
@@ -70,6 +79,19 @@ type Agent struct {
 	active map[string]*activeJob
 
 	statusSeq atomic.Uint64
+
+	// jobCtx is the parent of every in-flight job's context. It lives for the
+	// whole Run, not per session, so a transient reconnect never cancels work the
+	// runner may resume (see Run); only a drain ends it.
+	jobCtx    context.Context
+	jobCancel context.CancelFunc
+
+	// draining stops the agent from accepting new work once a shutdown has begun.
+	draining atomic.Bool
+
+	// drainWG counts in-flight jobs so a drain can wait for them within a grace
+	// window before cancelling whatever is still running.
+	drainWG sync.WaitGroup
 }
 
 type activeJob struct {
@@ -129,50 +151,75 @@ func (a *Agent) authContext(ctx context.Context) context.Context {
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+a.cfg.Credential)
 }
 
-// Run opens both streams and serves until the context is cancelled.
+// Run serves the runner until ctx is cancelled, reconnecting on transient
+// failures and draining in-flight work on the way out.
 //
 // A dropped connection is not an error to give up on: runners live on spot
 // instances and flaky networks, and the protocol is built so that reconnecting
 // and asking for resume verdicts is the normal recovery path.
 //
-// The retry loop below deliberately reuses a.conn (and therefore a.client)
-// across iterations rather than dialing a new *grpc.ClientConn each time.
-// That's correct, not an oversight: a grpc.ClientConn manages its own
-// underlying transport and reconnects it automatically with its own backoff
-// on a transient failure — redialing here would fight that mechanism rather
-// than help it. What this loop retries is the RPC layer: a.session(ctx)
-// opens a fresh Session/LogStream pair each pass, over whatever transport
-// state the ClientConn has already recovered to (or is still recovering).
+// Two contexts keep the connection and the jobs on different lifetimes. The
+// session's own context derives from ctx, so a signal tears it down promptly;
+// but the jobs a session spawns derive from a separate jobCtx that lives for the
+// whole Run, so a transient disconnect never cancels work the runner may resume
+// — the loop reconnects and the server answers each resume with a verdict. Only
+// a drain ends jobCtx, and even then after a grace window (see drain).
+//
+// The retry loop reuses a.conn (and therefore a.client) across iterations rather
+// than dialing a new *grpc.ClientConn each time — that conn manages its own
+// transport recovery, so redialing would fight it. What this loop retries is the
+// RPC layer: a.session(ctx, jobCtx) opens a fresh Session/LogStream pair each
+// pass.
 func (a *Agent) Run(ctx context.Context) error {
-	backoff := time.Second
-	const maxBackoff = 30 * time.Second
+	jobCtx, jobCancel := context.WithCancel(context.Background())
+	a.jobCtx = jobCtx
+	a.jobCancel = jobCancel
+	defer jobCancel()
 
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
+	// On any exit, drain in-flight work within the grace window before the
+	// process goes away. It is deferred ahead of jobCancel so it runs first
+	// (LIFO) and cancels only the stragglers that outlived the grace.
+	defer a.drain(a.cfg.DrainTimeout)
+
+	const (
+		baseBackoff = time.Second
+		maxBackoff  = 30 * time.Second
+	)
+
+	for attempt := 0; ; attempt++ {
+		// A stop signal tears the job-independent job context down in the deferred
+		// drain, so a cancelled ctx is the cue to stop reconnecting and let that
+		// drain finish rather than dialing another session.
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 
-		err := a.session(ctx)
-		if ctx.Err() != nil {
-			return ctx.Err()
+		err := a.session(ctx, jobCtx)
+		if errCtx := ctx.Err(); errCtx != nil {
+			return errCtx
 		}
 		if err != nil {
-			a.log.Warn("session ended; reconnecting", "error", err, "retry_in", backoff)
+			a.log.Warn("session ended; reconnecting", "error", err, "attempt", attempt)
 		}
 
+		// A freshly drawn, full-jittered value so a fleet of runners that dropped
+		// together does not stampede the server on identical retry ticks.
+		sleep := jitteredBackoff(attempt, baseBackoff, maxBackoff, randJitter)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(backoff):
+		case <-time.After(sleep):
 		}
-		backoff = min(backoff*2, maxBackoff)
 	}
 }
 
 // session runs one connection's lifetime: Hello, ServerHello, then the message
 // loop with a heartbeat ticker alongside.
-func (a *Agent) session(ctx context.Context) error {
-	sessionCtx, cancel := context.WithCancel(ctx)
+func (a *Agent) session(stopCtx, jobCtx context.Context) error {
+	// The session's own context derives from stopCtx, so a signal tears the
+	// session down promptly; the jobs it spawns derive from jobCtx (see Run), so
+	// a transient disconnect ends the session without cancelling their work.
+	sessionCtx, cancel := context.WithCancel(stopCtx)
 	defer cancel()
 
 	authCtx := a.authContext(sessionCtx)
@@ -240,7 +287,7 @@ func (a *Agent) session(ctx context.Context) error {
 	errc := make(chan error, 2)
 
 	go func() { errc <- a.heartbeatLoop(sessionCtx, send, heartbeat) }()
-	go func() { errc <- a.receiveLoop(sessionCtx, stream, send) }()
+	go func() { errc <- a.receiveLoop(sessionCtx, stream, send, jobCtx) }()
 
 	err = <-errc
 	cancel()
@@ -267,7 +314,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context, send func(*runnerv1.RunnerMes
 	}
 }
 
-func (a *Agent) receiveLoop(ctx context.Context, stream runnerv1.RunnerService_SessionClient, send func(*runnerv1.RunnerMessage) error) error {
+func (a *Agent) receiveLoop(ctx context.Context, stream runnerv1.RunnerService_SessionClient, send func(*runnerv1.RunnerMessage) error, jobCtx context.Context) error {
 	for {
 		msg, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -279,7 +326,9 @@ func (a *Agent) receiveLoop(ctx context.Context, stream runnerv1.RunnerService_S
 
 		switch m := msg.Msg.(type) {
 		case *runnerv1.ServerMessage_JobAssignment:
-			a.startJob(ctx, m.JobAssignment, send)
+			// Jobs run on jobCtx, not this session's context, so a transient
+			// disconnect that ends this loop does not cancel their execution.
+			a.startJob(jobCtx, m.JobAssignment, send)
 
 		case *runnerv1.ServerMessage_CancelJob:
 			a.cancelJob(m.CancelJob)
@@ -303,3 +352,28 @@ func (a *Agent) receiveLoop(ctx context.Context, stream runnerv1.RunnerService_S
 		}
 	}
 }
+
+// jitteredBackoff is the pure core of the reconnect schedule: an exponentially
+// expanding window under full jitter, so a fleet of runners that dropped at once
+// does not retry on identical ticks. The window is base*2^attempt capped at max,
+// and the value returned is a uniform draw in [0, window). rnd must honor that
+// range; a zero draw is floored to base so a retry never busy-loops.
+func jitteredBackoff(attempt int, base, max time.Duration, rnd func(window int64) int64) time.Duration {
+	window := int64(base)
+	for i := 0; i < attempt; i++ {
+		window *= 2
+		if window > int64(max) || window <= 0 {
+			window = int64(max) // cap, and guard int64 overflow of a long attempt run
+			break
+		}
+	}
+	if sleep := int64(time.Duration(rnd(window))); sleep > 0 {
+		return time.Duration(sleep)
+	}
+	return base
+}
+
+// randJitter is the production jitter source: a uniform value in [0, window) over
+// math/rand/v2's global source. This is retry jitter, not a cryptographic use, so
+// the runtime-seeded global is fine.
+func randJitter(window int64) int64 { return rand.Int64N(window) }

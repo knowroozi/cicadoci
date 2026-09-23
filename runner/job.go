@@ -27,11 +27,21 @@ func runtimeArch() string { return runtime.GOARCH }
 // The ack goes out before execution starts: the server needs to know quickly
 // whether this runner took the job, and a slow Prepare must not look like a
 // silent drop.
-func (a *Agent) startJob(ctx context.Context, assignment *runnerv1.JobAssignment, send func(*runnerv1.RunnerMessage) error) {
+func (a *Agent) startJob(jobParent context.Context, assignment *runnerv1.JobAssignment, send func(*runnerv1.RunnerMessage) error) {
 	jobID := assignment.GetJobId()
 	leaseID := assignment.GetLeaseId()
 
 	a.jobsMu.Lock()
+	// A draining runner takes on no new work: a job rejected here is requeued by
+	// the server and another runner — or this one once restarted — runs it.
+	// Setting draining under this same lock keeps drain's WaitGroup race-free:
+	// an assignment that began before we drained has already registered its job,
+	// and anything after is refused here before it can register.
+	if a.draining.Load() {
+		a.jobsMu.Unlock()
+		_ = send(ackMessage(jobID, leaseID, runnerv1.JobAck_REJECTED, "draining"))
+		return
+	}
 	if _, running := a.active[jobID]; running {
 		a.jobsMu.Unlock()
 		// A redelivered assignment for a job we are already running. Ack it and
@@ -62,10 +72,17 @@ func (a *Agent) startJob(ctx context.Context, assignment *runnerv1.JobAssignment
 		return
 	}
 
-	jobCtx, cancel := context.WithCancel(ctx)
+	// The job's context derives from jobParent (the agent-level job context set
+	// in Run), not this session's, so a transient disconnect that ends the session
+	// must not cancel the job; only an explicit drain ends jobParent.
+	jobCtx, cancel := context.WithCancel(jobParent)
 	if timeout := spec.GetTimeoutSeconds(); timeout > 0 {
-		jobCtx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+		jobCtx, cancel = context.WithTimeout(jobParent, time.Duration(timeout)*time.Second)
 	}
+	// Register the job in the drain WaitGroup and the active map under one lock,
+	// so a concurrent drain either already counted it (its Add ran first) or is
+	// blocked behind us and wakes to find it after we release the lock.
+	a.drainWG.Add(1)
 	a.active[jobID] = &activeJob{leaseID: leaseID, cancel: cancel}
 	a.jobsMu.Unlock()
 
@@ -74,8 +91,13 @@ func (a *Agent) startJob(ctx context.Context, assignment *runnerv1.JobAssignment
 	}
 
 	go func() {
-		defer cancel()
+		// Order matters for a drain: return the job's context to cancel first, only
+		// then release the drain WaitGroup, and bookkeep last — a draining caller
+		// waits on drainWG, so we must not signal "no longer running" before the job
+		// has actually had a chance to observe its cancellation.
 		defer a.finishJob(jobID)
+		defer a.drainWG.Done()
+		defer cancel()
 		a.executeJob(jobCtx, assignment, send)
 	}()
 }
@@ -344,6 +366,56 @@ func (a *Agent) activeJobIDs() []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// activeCount is the number of jobs the agent is currently running.
+func (a *Agent) activeCount() int {
+	a.jobsMu.Lock()
+	defer a.jobsMu.Unlock()
+	return len(a.active)
+}
+
+// drain finishes a graceful shutdown.
+//
+// It stops the agent from taking new work, then gives in-flight jobs a grace
+// window to finish on their own before it cancels whatever is still running. A
+// zero grace cancels them straight away. It is safe to call more than once; in
+// practice the single deferred call at Run's exit makes that moot.
+func (a *Agent) drain(grace time.Duration) {
+	// Set the flag under the same lock startJob takes before it registers a job,
+	// so no new job can slip past us between the check and the count below.
+	a.jobsMu.Lock()
+	a.draining.Store(true)
+	a.jobsMu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		a.drainWG.Wait()
+		close(done)
+	}()
+
+	if grace <= 0 {
+		if a.jobCancel != nil {
+			a.jobCancel()
+		}
+		<-done
+		return
+	}
+
+	select {
+	case <-done:
+		return // every in-flight job finished within the grace window
+	case <-time.After(grace):
+		if remaining := a.activeCount(); remaining > 0 {
+			a.log.Warn("graceful drain grace elapsed; cancelling in-flight jobs",
+				"remaining", remaining,
+				"grace", grace)
+		}
+		if a.jobCancel != nil {
+			a.jobCancel()
+		}
+		<-done
+	}
 }
 
 // cancelJob kills local execution of a job the server has taken back.
