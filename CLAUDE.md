@@ -31,7 +31,7 @@ These are recorded in ADRs. Changing one requires a new ADR, not a code change.
 
 - **One pull request per Linear ticket.** Never bundle a milestone, or several tickets, into a single PR. Work that spans tickets spans PRs.
 - **Stack the branches.** Each PR targets the branch of the ticket it builds on, not `master`, so its diff shows only that ticket's changes. Order the stack so every step builds and its tests pass on its own.
-- **Take branch names from Linear** — the issue's `gitBranchName` field (e.g. `swervogm/cic-7-postgres-schema-v1-migration-0001_initsql`). Linear then links the PR to the ticket automatically.
+- **Take branch names from Linear** — the issue's `gitBranchName` field (e.g. `knowroozi/cic-7-postgres-schema-v1-migration-0001_initsql`). Linear then links the PR to the ticket automatically.
 - Put the ticket ID in the PR title and body.
 - **Review is manual and is meant to teach.** Keep each PR small enough to read in one sitting, and put the reasoning for non-obvious decisions in the PR body — especially anything a reviewer might reasonably have done differently.
 - When a PR earlier in the stack changes, rebase the rest of the stack onto it.
