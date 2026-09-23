@@ -181,9 +181,13 @@ func (a *Agent) Run(ctx context.Context) error {
 	// (LIFO) and cancels only the stragglers that outlived the grace.
 	defer a.drain(a.cfg.DrainTimeout)
 
+	// Reconnect backoff schedule: a 1 s base, full-jittered up to the cap. The 60 s
+	// cap matches the protocol's "jittered exp backoff (1 s -> 60 s cap)" for a
+	// server restart (project-docs/04-runner-protocol.md §9); it is inherited from
+	// that FROZEN spec, not a locally-tuned number.
 	const (
 		baseBackoff = time.Second
-		maxBackoff  = 30 * time.Second
+		maxBackoff  = 60 * time.Second
 	)
 
 	for attempt := 0; ; attempt++ {
