@@ -54,6 +54,16 @@ type Queue interface {
 	// SweepExpiredLeases requeues jobs whose lease expired without a terminal
 	// status — the recovery path for a runner that died mid-job.
 	SweepExpiredLeases(ctx context.Context, now time.Time) ([]SweptJob, error)
+
+	// RequestCancel marks a job cancelled and records who asked and why. It is the
+	// write side of a user-initiated cancellation: the dispatcher reads the flag
+	// the row now carries and pushes a CancelJob down the runner's session, the
+	// runner stops in-flight execution within its grace window and reports a
+	// terminal CANCELLED. A job that had already reached a terminal state is
+	// untouched and reported as not active; a second cancel of a still-in-flight
+	// job is harmless. The claim query skips cancelled jobs so one cancelled while
+	// unclaimed is never handed out.
+	RequestCancel(ctx context.Context, jobID uuid.UUID, reason string) (CancelResult, error)
 }
 
 // ClaimRequest is one dispatcher's attempt to lease work for a runner.
@@ -138,4 +148,20 @@ type SweptJob struct {
 	RunnerID uuid.UUID
 	Outcome  RequeueOutcome
 	Attempts int32
+}
+
+// CancelResult reports what RequestCancel did to a job so the caller (the
+// dispatcher or an API route) knows which runner, if any, to notify.
+type CancelResult struct {
+	// Active tells whether the job was still in-flight when the request arrived,
+	// i.e. whether anything downstream (a runner, or the queue itself for a job
+	// not yet claimed) still has work to do. A terminal job is not active.
+	Active bool
+	// RunnerID is the runner that currently holds the job's lease, so a
+	// CancelJob can be pushed to the one session that owns it. It is the zero
+	// UUID when the job was still queued with no claimer (Active may still be
+	// true), meaning there is nothing to push yet: the flag alone is enough and
+	// the claim query skips cancelled jobs rather than handing them out. It is
+	// also the zero UUID when the job was terminal (Active is false then).
+	RunnerID uuid.UUID
 }

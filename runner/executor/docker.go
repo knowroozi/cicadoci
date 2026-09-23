@@ -270,6 +270,8 @@ func NewExecutor(name string) (Executor, error) {
 	switch name {
 	case "", "shell":
 		return NewShell(), nil
+	case "cicanscript":
+		return NewCicanscript(), nil
 	case "docker":
 		return NewDocker(), nil
 	default:

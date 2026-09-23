@@ -17,6 +17,15 @@ import (
 // when a job becomes claimable.
 const NotifyChannel = "cicado_job_queued"
 
+// CancelChannel is the LISTEN/NOTIFY channel the dispatcher watches for cancel
+// requests. It is a separate name from NotifyChannel so the two doorbells —
+// job-queued and cancel-requested — can wake the single dispatch loop without
+// one clogging the other. Both listeners share the same process-level dispatch
+// loop via Dispatcher.Wake and Dispatcher.WakeCancel, but keeping them on
+// separate channels means a burst of cancels can't starve a burst of queue
+// notifications, and vice versa.
+const CancelChannel = "cicado_job_cancel"
+
 // ErrStaleLease is returned when a runner reports against a lease that is no
 // longer the job's live lease — the job was requeued, reassigned, or cancelled
 // while the runner was out of contact. The report is rejected, not applied.
@@ -126,6 +135,7 @@ UPDATE jobs
           AND available_at <= now()
           AND required_tags <@ $3::text[]
           AND executor = ANY($4::text[])
+          AND cancel_requested_at IS NULL
         ORDER BY priority, created_at
           FOR UPDATE SKIP LOCKED
         LIMIT $5
@@ -434,4 +444,121 @@ func (q *Postgres) SweepExpiredLeases(ctx context.Context, now time.Time) ([]Swe
 		})
 	}
 	return swept, nil
+}
+
+// ---------------------------------------------------------------------------
+// Cancellation
+//
+
+// requestCancelSQL flips the durable cancel flag on a non-terminal row. The
+// status guard makes the call idempotent against a finish that races the
+// cancel: terminal rows are skipped so a cancel of an already-succeeded job is
+// a no-op, not an overwrite.
+//
+// coalesce returns the zero-uuid when the job was never claimed, so a single
+// RETURNING answers both "was it active?" and "who owns it?" in one round trip.
+const requestCancelSQL = `
+UPDATE jobs
+   SET cancel_requested_at = now(),
+       cancel_reason       = $2
+ WHERE id = $1
+   AND status IN ('queued', 'claimed', 'running')
+RETURNING coalesce(claimed_by, '00000000-0000-0000-000000000000'::uuid)
+`
+
+// RequestCancel marks a job cancelled and rings the cancel doorbell.
+//
+// It is a single atomic UPDATE ... RETURNING: no read-then-write window. If a
+// concurrent terminal StatusUpdate landed first, the status guard causes
+// RETURNING to return zero rows; this call then reports Active = false (a
+// cancel of a finished job is a no-op). If the job was still in-flight, the
+// flag is written and claimed_by returned, so the caller learns the owner in
+// one round trip.
+//
+// The two halves of a cancellation are split across the system on purpose:
+//   - the row flag (cancel_requested_at) is the durable, long-lived record. A
+//     job cancelled while unclaimed has no session to reach, so the flag suffices:
+//     the claim query skips cancelled jobs, and the dispatcher terminalizes it.
+//   - the CancelJob pushed to the runner's live session is the fast path for
+//     stopping execution in flight. The dispatcher sends it; it is the
+//     dispatcher that owns push-or-retry, not this function.
+//
+// Idempotency: a repeat cancel refreshes the timestamp and reason with no
+// side-effect on the runner (Runner's cancelJob is a per-context cancel).
+func (q *Postgres) RequestCancel(ctx context.Context, jobID uuid.UUID, reason string) (CancelResult, error) {
+	var owner uuid.UUID
+	err := q.pool.QueryRow(ctx, requestCancelSQL, jobID, reason).Scan(&owner)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Already terminal, or the job does not exist.
+			return CancelResult{}, nil
+		}
+		return CancelResult{}, fmt.Errorf("queue: request cancel %s: %w", jobID, err)
+	}
+
+	// Ring the cancel doorbell so a dispatcher wakes and pushes the job.
+	_, _ = q.pool.Exec(ctx, "SELECT pg_notify($1, $2)",
+		[]byte(CancelChannel), mustMarshalCancel(jobID))
+
+	return CancelResult{Active: true, RunnerID: owner}, nil
+}
+
+func mustMarshalCancel(jobID uuid.UUID) []byte {
+	b, err := json.Marshal(QueuedNotification{JobID: jobID.String()})
+	if err != nil {
+		panic(fmt.Sprintf("queue: marshal cancel notification for %s: %v", jobID, err))
+	}
+	return b
+}
+
+// cancelScanSQL is the dispatcher's cancel-scan SELECT: one row per job that
+// has a pending cancel and is not yet terminal.
+//
+// The status IN ('queued', 'claimed', 'running') guard mirrors the same guard
+// in the Requeue SQL — a job that finished between the cancel request and this
+// scan is out of scope, and the dispatcher ignores it.
+const cancelScanSQL = `
+SELECT id,
+       coalesce(claimed_by, '00000000-0000-0000-0000-000000000000'::uuid),
+       cancel_reason
+  FROM jobs
+ WHERE cancel_requested_at IS NOT NULL
+   AND status IN ('queued', 'claimed', 'running')
+ ORDER BY cancel_requested_at
+ LIMIT $1
+`
+
+// terminalCancelSQL marks a queued-but-unclaimed job as terminal CANCELLED.
+// Called by the dispatcher's cancel scan when it sees a cancel requested for a
+// job that no runner owns — the job is in the queue and never started.
+//
+// The status = 'queued' guard makes it safe to call even after a runner has
+// claimed and already finished the job: that terminal write is authoritative
+// and this UPDATE matches zero rows.
+const terminalCancelSQL = `
+UPDATE jobs
+   SET status       = 'cancelled',
+       finished_at  = now()
+ WHERE id = $1
+   AND status = 'queued'
+`
+
+// QueryCancelPending returns one row per job that has a pending cancel and has
+// not yet reached a terminal state. The dispatcher iterates these rows each tick.
+func (q *Postgres) QueryCancelPending(ctx context.Context, limit int) (pgx.Rows, error) {
+	return q.pool.Query(ctx, cancelScanSQL, int32(limit))
+}
+
+// TerminalizeCancel marks a queued-but-unclaimed cancelled job as terminal
+// CANCELLED. The dispatcher calls this for each row returned by
+// QueryCancelPending with owner == zero-uuid.
+//
+// The status = 'queued' guard means this is safe even if a race re-queued the
+// job between the scan and this call.
+func (q *Postgres) TerminalizeCancel(ctx context.Context, jobID uuid.UUID) (int32, error) {
+	tag, err := q.pool.Exec(ctx, terminalCancelSQL, jobID)
+	if err != nil {
+		return 0, fmt.Errorf("queue: terminalize cancel %s: %w", jobID, err)
+	}
+	return int32(tag.RowsAffected()), nil
 }
