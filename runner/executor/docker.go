@@ -51,9 +51,21 @@ const workspaceMountPoint = "/cicado/workspace"
 // non-zero paths where the client exits cleanly.
 //
 // Env is passed as repeated `-e KEY=VALUE` flags. Those values are briefly
-// visible in the process listing while the daemon forks — the same surface
-// Shell's buildEnv exposes on the host. Closing that gap (a 0600 file on a
-// mounted volume instead of argv) is future hardening, not M1.
+// visible in the process listing while the daemon forks — and this is a *wider*
+// surface than Shell's buildEnv, which is a common mistake to equate them:
+// Shell's cmd.Env lives in the child's environment block, readable via
+// /proc/<pid>/environ and gated to the owning UID/root, whereas
+// `docker run -e KEY=VALUE` puts the value in the argv of the `docker` client
+// process, world-readable via `ps` / /proc/<pid>/cmdline by *any* local user,
+// no privilege needed — a materially wider blast radius, not the same one. That
+// says nothing about what flows through *today*: StepSpec.env / JobSpec.env are
+// "plaintext, non-secret env only" (runner.proto) and secret values arrive only
+// via GetJobSecrets against the live lease, which is not wired into this
+// executor yet, so no live secret reaches the `-e` path now. Flagging it here so
+// whoever adds secret injection (CIC-16 or a follow-up) doesn't reuse `-e` for
+// it by default — the right hardening is a 0600 host file on a mounted volume a
+// container owns, not argv. A documented, deliberate M1 framing, not an
+// oversight.
 type Docker struct {
 	workspace string
 	mu        sync.Mutex
