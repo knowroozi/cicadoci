@@ -455,15 +455,15 @@ func (q *Postgres) SweepExpiredLeases(ctx context.Context, now time.Time) ([]Swe
 // cancel: terminal rows are skipped so a cancel of an already-succeeded job is
 // a no-op, not an overwrite.
 //
-// coalesce returns the zero-uuid when the job was never claimed, so a single
-// RETURNING answers both "was it active?" and "who owns it?" in one round trip.
+// claimed_by returns NULL for a job that was never claimed; the Go caller
+// converts that to uuid.Nil.
 const requestCancelSQL = `
 UPDATE jobs
    SET cancel_requested_at = now(),
        cancel_reason       = $2
  WHERE id = $1
    AND status IN ('queued', 'claimed', 'running')
-RETURNING coalesce(claimed_by, '00000000-0000-0000-000000000000'::uuid)
+RETURNING claimed_by
 `
 
 // RequestCancel marks a job cancelled and rings the cancel doorbell.
@@ -486,7 +486,10 @@ RETURNING coalesce(claimed_by, '00000000-0000-0000-000000000000'::uuid)
 // Idempotency: a repeat cancel refreshes the timestamp and reason with no
 // side-effect on the runner (Runner's cancelJob is a per-context cancel).
 func (q *Postgres) RequestCancel(ctx context.Context, jobID uuid.UUID, reason string) (CancelResult, error) {
-	var owner uuid.UUID
+	// claimed_by is NULL for an unclaimed (queued) job. pgx sets the
+	// pointer to nil in that case; we detect it without a coalesce/zero-literal
+	// in the RETURNING clause.
+	var owner *uuid.UUID
 	err := q.pool.QueryRow(ctx, requestCancelSQL, jobID, reason).Scan(&owner)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -496,11 +499,16 @@ func (q *Postgres) RequestCancel(ctx context.Context, jobID uuid.UUID, reason st
 		return CancelResult{}, fmt.Errorf("queue: request cancel %s: %w", jobID, err)
 	}
 
+	runnerID := uuid.Nil
+	if owner != nil {
+		runnerID = *owner
+	}
+
 	// Ring the cancel doorbell so a dispatcher wakes and pushes the job.
 	_, _ = q.pool.Exec(ctx, "SELECT pg_notify($1, $2)",
 		[]byte(CancelChannel), mustMarshalCancel(jobID))
 
-	return CancelResult{Active: true, RunnerID: owner}, nil
+	return CancelResult{Active: true, RunnerID: runnerID}, nil
 }
 
 func mustMarshalCancel(jobID uuid.UUID) []byte {
