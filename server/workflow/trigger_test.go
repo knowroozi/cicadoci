@@ -230,3 +230,23 @@ func TestGlob_Question(t *testing.T) {
 		t.Error("v?.0 should NOT match v12.0")
 	}
 }
+
+func TestMatchPullRequest_NilEventPR(t *testing.T) {
+	// event.PR must be non-nil for safe matching. When nil (e.g. a malformed
+	// forge webhook payload in CIC-28), matchPullRequest returns false — it
+	// does not panic.
+	on := &On{PullRequest: &PullRequestTrigger{}}
+	got := on.Matches(Event{Type: "pull_request"})
+	if got {
+		t.Error("expected Match to return false when event.PR is nil")
+	}
+}
+
+func TestMatchPullRequest_NilEventPRNoPanic(t *testing.T) {
+	// Also verify no panic with types filter set and PR nil.
+	on := &On{PullRequest: &PullRequestTrigger{Types: []string{"opened"}}}
+	got := on.Matches(Event{Type: "pull_request"})
+	if got {
+		t.Error("expected false match, got true (types filter should be bypassed)")
+	}
+}

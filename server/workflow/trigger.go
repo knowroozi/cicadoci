@@ -110,6 +110,14 @@ func matchPush(t *PushTrigger, event Event) bool {
 }
 
 func matchPullRequest(t *PullRequestTrigger, event Event) bool {
+	// Defensive guard: event.PR must be non-nil for pull_request events.
+	// The caller (On.Matches) asserts this in the contract, but the future
+	// forge-adapter caller (CIC-28) parses external payloads that may be
+	// malformed — a nil PR is a correct non-match, not a panic.
+	if event.PR == nil {
+		return false
+	}
+
 	// Type matching.
 	if len(t.Types) > 0 {
 		matched := false
@@ -222,6 +230,3 @@ func globMatch(pattern, s string) bool {
 		return globMatch(pattern[1:], s[1:])
 	}
 }
-
-// ensureImportUsed is a no-op that prevents an "unused import" error when
-// `strings` is not yet exercised.
