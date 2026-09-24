@@ -55,7 +55,7 @@ func (j *MemoryJournal) Trim(jobID string, lane Lane, upTo uint64) {
 	if !ok || len(entries) == 0 {
 		return
 	}
-	// Binary search for the last entry to keep.
+	// Linear scan for the last entry to keep.
 	i := 0 // entries[i-1].Seq <= upTo, entries[i].Seq > upTo (if present)
 	for i < len(entries) && entries[i].Seq <= upTo {
 		i++

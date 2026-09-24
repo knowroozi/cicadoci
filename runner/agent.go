@@ -281,7 +281,7 @@ func (a *Agent) session(stopCtx, jobCtx context.Context) error {
 	a.setLogStream(logStream)
 	defer a.setLogStream(nil)
 
-	// // Drain log acks so the server's flow control is not blocked by an unread
+	// Drain log acks so the server's flow control is not blocked by an unread
 	// stream.  Each ack trims the journal log lane up to the server's
 	// acknowledged sequence so unacked entries can be replayed on RESUME.
 	go func() {
