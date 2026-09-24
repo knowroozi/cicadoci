@@ -93,6 +93,11 @@ type PullRequestTrigger struct {
 	// Known values: "opened", "synchronize", "reopened".
 	// An empty slice means all types.
 	Types []string `yaml:"types,omitempty" json:"types,omitempty"`
+
+	// Paths restricts which changed paths trigger the workflow.
+	// Only relevant for pull_request events on forges that report
+	// per-PR changed paths (e.g. GitHub).
+	Paths []string `yaml:"paths,omitempty" json:"paths,omitempty"`
 }
 
 // ScheduleTrigger fires on a cron schedule.
