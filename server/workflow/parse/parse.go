@@ -45,6 +45,23 @@ func (e *ParseError) Error() string {
 // ParseErrors is a collection of positional errors.
 type ParseErrors struct {
 	Errors []*ParseError
+	// positions records top-level key positions so structural
+	// validators reference the real node location, not {1,1}.
+	positions map[string]nodePos
+}
+
+func (pe *ParseErrors) pos(key string, n *yaml.Node) {
+	if pe.positions == nil {
+		pe.positions = make(map[string]nodePos)
+	}
+	pe.positions[key] = posOf(n)
+}
+
+func (pe *ParseErrors) at(key string) nodePos {
+	if p, ok := pe.positions[key]; ok {
+		return p
+	}
+	return nodePos{Line: 1, Column: 1}
 }
 
 func (pe *ParseErrors) Error() string {
@@ -144,6 +161,7 @@ func parseDoc(node *yaml.Node, fileName string) (*workflow.Workflow, *ParseError
 
 		switch key {
 		case "name":
+			pe.pos("name", keyNode)
 			if valNode.Kind != yaml.ScalarNode {
 				add(pe, fileName, posOf(keyNode),
 					"'name' must be a string", "example: name: deploy-api")
@@ -152,6 +170,7 @@ func parseDoc(node *yaml.Node, fileName string) (*workflow.Workflow, *ParseError
 			wf.Name = valNode.Value
 
 		case "on":
+			pe.pos("on", keyNode)
 			if valNode.Kind != yaml.MappingNode {
 				add(pe, fileName, posOf(keyNode),
 					"'on' must be a mapping of trigger types to their configuration",
@@ -161,6 +180,7 @@ func parseDoc(node *yaml.Node, fileName string) (*workflow.Workflow, *ParseError
 			wf.On = parseOn(valNode, fileName, pe)
 
 		case "jobs":
+			pe.pos("jobs", keyNode)
 			if valNode.Kind != yaml.MappingNode {
 				add(pe, fileName, posOf(keyNode),
 					"'jobs' must be a mapping of job-name to job specification",
@@ -185,17 +205,17 @@ func parseDoc(node *yaml.Node, fileName string) (*workflow.Workflow, *ParseError
 // validateStructural adds structural-validation errors to pe.
 func validateStructural(wf *workflow.Workflow, fileName string, pe *ParseErrors) {
 	if wf.Name == "" {
-		add(pe, fileName, nodePos{Line: 1, Column: 1},
+		add(pe, fileName, pe.at("name"),
 			"workflow name is empty",
 			"add 'name: <your-workflow-name>' at the top of the file")
 	}
 	if !hasTrigger(&wf.On) {
-		add(pe, fileName, nodePos{Line: 1, Column: 1},
+		add(pe, fileName, pe.at("on"),
 			"workflow has no triggers",
 			"add at least one trigger under 'on:', e.g. on:\n  push:\n    branches: [main]")
 	}
 	if len(wf.Jobs) == 0 {
-		add(pe, fileName, nodePos{Line: 1, Column: 1},
+		add(pe, fileName, pe.at("jobs"),
 			"workflow has no jobs",
 			"add at least one job under 'jobs:', e.g. jobs:\n  build:\n    steps: [...]")
 	}
@@ -394,6 +414,11 @@ func parseJob(node *yaml.Node, name string, fileName string, pe *ParseErrors) *w
 				break
 			}
 			job.Steps = parseSteps(valNode, name, fileName, pe)
+			if len(job.Steps) == 0 {
+				add(pe, fileName, posOf(keyNode),
+					fmt.Sprintf("job %q has empty steps", name),
+					"every job must define at least one step")
+			}
 		case "approval":
 			if valNode.Kind != yaml.MappingNode {
 				add(pe, fileName, posOf(keyNode),
@@ -620,6 +645,12 @@ func parseInt(node *yaml.Node, fileName string, pe *ParseErrors, path, hintText 
 	if err != nil {
 		add(pe, fileName, posOf(node),
 			fmt.Sprintf("%s: not a valid integer: %q", path, node.Value),
+			"example: "+hintText)
+		return 0
+	}
+	if val < 0 {
+		add(pe, fileName, posOf(node),
+			fmt.Sprintf("%s: negative values are not allowed", path),
 			"example: "+hintText)
 		return 0
 	}

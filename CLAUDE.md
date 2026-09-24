@@ -60,3 +60,11 @@ Listing something as verified when it was not actually run is the one thing that
   `Line`, `Column`, `Message`, `Hint` — the top-3 UX differentiator vs GitHub
   Actions' silent YAML failures. Validates schema fields (empty name, no
   triggers, no jobs, uses/run exclusivity, if/identity enums, approval fields).
+- 2026-09-24: **CIC-20 PR-review fixes.** (1) Empty steps (`steps: []`) now
+  produces a parse error — the `hasKey` check was insufficient; after `parseSteps`
+  returns we also check `len(job.Steps) == 0`. (2) Structural errors ("empty
+  name", "no triggers", "no jobs") now carry the real YAML node position
+  (via `pe.pos()`/`pe.at()` on `ParseErrors`) instead of a hard-coded `{1,1}`,
+  matching the headline UX differentiator. (3) `timeoutSeconds` now rejects
+  negative values, matching `workflow-v1.json`'s `minimum: 0`. (4)
+  `gopkg.in/yaml.v3` removed `// indirect` tag via `go mod tidy`.
