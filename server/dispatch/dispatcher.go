@@ -12,6 +12,9 @@ import (
 	"sync"
 	"time"
 
+	uuid "github.com/google/uuid"
+
+	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
 	"cicadoci.com/cicado/server/queue"
 	"cicadoci.com/cicado/server/runnersvc"
 )
@@ -33,6 +36,14 @@ type Config struct {
 	// re-claimed and re-rejected on every dispatch pass with no delay between
 	// attempts.
 	UndeliveredBackoff time.Duration
+	// MaxCancelBatch caps how many pending cancels are processed per pass. It
+	// mirrors MaxBatch so a burst of cancel requests cannot produce a burst of
+	// CancelJob pushes on one pass.
+	MaxCancelBatch int
+	// CancelGraceSeconds is the grace window a CancelJob tells the runner to
+	// honour before it kills in-flight work. A larger value gives a job more
+	// time to finish cleanly; a zero value means "cancel immediately."
+	CancelGraceSeconds uint32
 }
 
 // DefaultConfig returns sensible defaults.
@@ -43,6 +54,8 @@ func DefaultConfig(leaseTTL time.Duration) Config {
 		LeaseTTL:           leaseTTL,
 		MaxBatch:           8,
 		UndeliveredBackoff: 2 * time.Second,
+		MaxCancelBatch:     8,
+		CancelGraceSeconds: 5,
 	}
 }
 
@@ -53,21 +66,25 @@ type Dispatcher struct {
 	cfg      Config
 	log      *slog.Logger
 
-	wake chan struct{}
-	mu   sync.Mutex
+	// wake and cancelWake are two independent level-triggered channels: one for
+	// new job-queued notifications, one for new cancel requests. Both feed the
+	// same dispatch loop so they do not compete for attention, and each one
+	// being level-triggered means many simultaneous notifications cause exactly
+	// one more pass, not one per notification.
+	wake       chan struct{}
+	cancelWake chan struct{}
+	mu         sync.Mutex
 }
 
 // New builds a dispatcher.
 func New(q *queue.Postgres, sessions *runnersvc.SessionRegistry, cfg Config, log *slog.Logger) *Dispatcher {
 	return &Dispatcher{
-		queue:    q,
-		sessions: sessions,
-		cfg:      cfg,
-		log:      log,
-		// Buffered depth 1: the wake signal is level-triggered, not a queue.
-		// Several notifications arriving while a pass is running should cause
-		// exactly one more pass, not one per notification.
-		wake: make(chan struct{}, 1),
+		queue:      q,
+		sessions:   sessions,
+		cfg:        cfg,
+		log:        log,
+		wake:       make(chan struct{}, 1),
+		cancelWake: make(chan struct{}, 1),
 	}
 }
 
@@ -79,6 +96,16 @@ func (d *Dispatcher) Wake() {
 	}
 }
 
+// WakeCancel asks for a cancel pass. It never blocks and is level-triggered like
+// Wake, so a flood of cancel requests causes exactly one more cancel pass, not
+// one per request.
+func (d *Dispatcher) WakeCancel() {
+	select {
+	case d.cancelWake <- struct{}{}:
+	default:
+	}
+}
+
 // Run drives the dispatch loop until the context is cancelled.
 func (d *Dispatcher) Run(ctx context.Context) error {
 	poll := time.NewTicker(d.cfg.PollInterval)
@@ -86,7 +113,10 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	sweep := time.NewTicker(d.cfg.SweepInterval)
 	defer sweep.Stop()
 
+	// Run one pass of each kind on startup so jobs and cancels that arrived
+	// before this process started are picked up immediately.
 	d.dispatchOnce(ctx)
+	d.dispatchCancelOnce(ctx)
 
 	for {
 		select {
@@ -94,10 +124,93 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-d.wake:
 			d.dispatchOnce(ctx)
+		case <-d.cancelWake:
+			d.dispatchCancelOnce(ctx)
 		case <-poll.C:
 			d.dispatchOnce(ctx)
+			d.dispatchCancelOnce(ctx)
 		case <-sweep.C:
 			d.sweepOnce(ctx)
+		}
+	}
+}
+
+// dispatchCancelOnce handles one round of pending cancellations. There are two
+// shapes a cancel can take, and the dispatcher handles them differently:
+//
+// Claimed, live session case. The job the cancel targets has a runner attached
+// to it through a currently connected gRPC session. The cancel push is a
+// best-effort send: if the outbound buffer is full the push is dropped, but the
+// same row will be seen again on the next pass since the flag outlives the
+// attempt. When the runner does receive the CancelJob it stops in-flight
+// execution within GraceSeconds and sends a terminal CANCELLED StatusUpdate.
+// The flag is intentionally not cleared: the terminal StatusUpdate transitions
+// the job out of the scan window, and a redundant cancel of an already-finishing
+// job is harmless because the runner's cancel logic is idempotent.
+//
+// Unclaimed case: a cancel arrives while the job is still in the queue, before
+// a runner has claimed it. The claim query skips cancelled jobs, so the
+// dispatcher is the only authority that can move such a job to a terminal state.
+// It writes directly to the jobs table rather than sending a CancelJob to a
+// session that does not exist.
+func (d *Dispatcher) dispatchCancelOnce(ctx context.Context) {
+	rows, err := d.queue.QueryCancelPending(ctx, d.cfg.MaxCancelBatch)
+	if err != nil {
+		d.log.Warn("cancel scan failed", "err", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var jobID, ownerID uuid.UUID
+		var reason string
+		if err := rows.Scan(&jobID, &ownerID, &reason); err != nil {
+			d.log.Warn("cancel scan: row scan failed", "err", err)
+			continue
+		}
+
+		// Unclaimed: terminalize in place.
+		//
+		// A job that was cancelled while it was still in the queue has no runner
+		// to talk to. The claim query skips cancelled jobs, so the dispatcher is
+		// the only authority that can move it to a terminal state. This is a
+		// guarded UPDATE: if the runner that claimed it (the claim race lost the
+		// cancel race) has finished between the scan and this write, the
+		// terminal-cancel guard (status = 'queued') misses, RowsAffected is 0,
+		// and nothing bad happens — no double-advance, no incorrect state.
+		if ownerID == uuid.Nil {
+			if _, err := d.queue.TerminalizeCancel(ctx, jobID); err != nil {
+				d.log.Warn("terminal cancel of unclaimed job failed", "job", jobID, "err", err)
+			}
+			continue
+		}
+
+		sess, ok := d.sessions.Get(ownerID)
+		if !ok {
+			// The owner runner has disconnected but the job's lease has not yet
+			// expired. The sweeper will reclaim it when the lease expires; the
+			// cancel flag will ride along to the next claim, at which point
+			// the cancel pass for the new owner will fire again. Do not clear
+			// the flag: the job is not done yet, and clearing it would make
+			// the next owner unaware that it should be cancelled.
+			continue
+		}
+
+		// Best-effort push to the live session. If the buffer is full the push
+		// is dropped, but the same flag still exists on the job, so the next
+		// cancel pass (or the poll tick) will retry.
+		if !sess.Send(&runnerv1.ServerMessage{
+			Msg: &runnerv1.ServerMessage_CancelJob{
+				CancelJob: &runnerv1.CancelJob{
+					JobId:        jobID.String(),
+					Reason:       reason,
+					GraceSeconds: d.cfg.CancelGraceSeconds,
+				},
+			},
+		}) {
+			d.log.Warn("cancel push dropped (buffer full)", "job", jobID, "runner", ownerID)
+		} else {
+			d.log.Debug("cancel pushed to runner", "job", jobID, "runner", ownerID)
 		}
 	}
 }
