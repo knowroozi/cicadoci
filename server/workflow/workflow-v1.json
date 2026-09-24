@@ -1,201 +1,207 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cicadoci.com/schema/workflow-v1.json",
-  "title": "CICaDo Workflow Schema v1",
-  "description": "Schema for CICaDo workflow files. Deliberately constrained: no loops, no expressions beyond `if: success|failure|always`, no templating language. Logic belongs in scripts and containers.",
-  "type": "object",
-  "required": ["name", "on", "jobs"],
-  "additionalProperties": true,
-  "properties": {
-    "name": {
-      "type": "string",
-      "description": "Human-readable workflow name. Must be non-empty and unique within a repository.",
-      "minLength": 1
-    },
-    "on": {
-      "description": "Event triggers that activate this workflow. At least one of push, pull_request, or schedule must be set.",
-      "type": "object",
-      "properties": {
-        "push": {
-          "type": "object",
-          "description": "Fire on git push events.",
-          "properties": {
-            "branches": {
-              "type": "array",
-              "items": {"type": "string"},
-              "description": "Glob patterns matching branch names. Empty or absent means all branches. Supports *, **, ? (gitignore rules)."
-            },
-            "tags": {
-              "type": "array",
-              "items": {"type": "string"},
-              "description": "Glob patterns matching tag names."
-            },
-            "paths": {
-              "type": "array",
-              "items": {"type": "string"},
-              "description": "Pathspecs (git pathspec syntax). Empty or absent means all paths."
-            }
-          },
-          "additionalProperties": false
-        },
-        "pull_request": {
-          "type": "object",
-          "description": "Fire on pull-request events.",
-          "properties": {
-            "branches": {"type": "array", "items": {"type": "string"}},
-            "tags": {"type": "array", "items": {"type": "string"}},
-            "types": {
-              "type": "array",
-              "items": {"type": "string", "enum": ["opened", "synchronize", "reopened"]},
-              "description": "Event types to handle. Empty means all types."
-            }
-          },
-          "additionalProperties": false
-        },
-        "schedule": {
-          "type": "object",
-          "description": "Fire on a cron schedule (5-field, UTC).",
-          "required": ["cron"],
-          "properties": {
-            "cron": {
-              "type": "array",
-              "items": {"type": "string"},
-              "minItems": 1,
-              "description": "List of standard 5-field cron expressions in UTC. Multiple entries are OR'd."
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": true
-    },
-    "jobs": {
-      "type": "object",
-      "description": "Map of job-name to job specification. At least one job is required. Job names are unique within the workflow.",
-      "minProperties": 1,
-      "additionalProperties": {
-        "type": "object",
-        "description": "A single job within the workflow.",
-        "required": ["steps"],
-        "additionalProperties": false,
-        "properties": {
-          "runs-on": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Labels/tags a runner must carry. All must be present on the runner (required_tags <@ runner.labels)."
-          },
-          "needs": {
-            "description": "Names of upstream jobs that must all succeed before this job runs. A single string or a list of strings. Must not reference this job (no self-edges).",
-            "oneOf": [
-              {"type": "string"},
-              {"type": "array", "items": {"type": "string"}}
-            ]
-          },
-          "steps": {
-            "type": "array",
-            "description": "Ordered list of steps to execute. At least one step is required.",
-            "minItems": 1,
-            "items": {
-              "type": "object",
-              "description": "A single step. Exactly one of `uses` or `run` must be set.",
-              "anyOf": [
-                {
-                  "description": "A built-in or marketplace step.",
-                  "required": ["uses"],
-                  "not": {"required": ["run"]},
-                  "properties": {"uses": {"type": "string"}}
-                },
-                {
-                  "description": "A shell-run step.",
-                  "required": ["run"],
-                  "not": {"required": ["uses"]},
-                  "properties": {"run": {"type": "string"}}
-                }
-              ],
-              "additionalProperties": false,
-              "properties": {
-                "name": {
-                  "type": "string",
-                  "description": "Human-readable step label."
-                },
-                "uses": {
-                  "type": "string",
-                  "description": "Built-in step name (e.g. 'checkout') or a fully-qualified package reference. Mutually exclusive with `run`."
-                },
-                "run": {
-                  "type": "string",
-                  "description": "Shell command executed by the runner. Mutually exclusive with `uses`."
-                },
-                "image": {
-                  "type": "string",
-                  "description": "Container image for this step. Empty means use the job-level image. Should be digest-pinned where possible."
-                },
-                "identity": {
-                  "type": "string",
-                  "enum": ["", "none", "aws"],
-                  "description": "Cloud identity this step runs with. 'none' or '' is default. 'aws' uses OIDC AssumeRoleWithWebIdentity."
-                },
-                "env": {
-                  "type": "object",
-                  "additionalProperties": {"type": "string"},
-                  "description": "Per-step environment overrides merged on top of job-level env. Secret refs use the format 'secrets.NAME'."
-                },
-                "if": {
-                  "type": "string",
-                  "enum": ["success", "failure", "always"],
-                  "description": "When this step runs conditionally. Default is 'success' (all prior steps succeeded)."
-                },
-                "timeout": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "description": "Wall-clock budget for this step in seconds. 0 means use the job or server default."
-                },
-                "network": {
-                  "type": "boolean",
-                  "description": "When true, opt the step into outbound network access. Default is false (docker uses --network none)."
-                }
-              }
-            }
-          },
-          "approval": {
-            "type": "object",
-            "description": "A human-approval gate. When set, the job waits until a human on the allow-list approves it before running.",
-            "required": ["channel", "allow"],
-            "additionalProperties": false,
-            "properties": {
-              "channel": {
-                "type": "string",
-                "description": "Chat channel or DM to post the approval request to (e.g. '#deploys')."
-              },
-              "allow": {
-                "type": "array",
-                "items": {"type": "string"},
-                "minItems": 1,
-                "description": "Principals permitted to approve. Format: 'kind:name'. Known kinds: 'user', 'team', 'group'. Example: ['user:@alice', 'team:platform']."
-              },
-              "timeout": {
-                "type": "integer",
-                "minimum": 0,
-                "description": "How long (seconds) to wait for approval before auto-failing the gate. 0 means wait indefinitely."
-              }
-            }
-          },
-          "image": {
-            "type": "string",
-            "description": "Job-level default image for all steps. A step's own image field overrides this."
-          },
-          "env": {
-            "type": "object",
-            "additionalProperties": {"type": "string"},
-            "description": "Environment map applied to every step in this job. A step's own env takes precedence."
-          },
-          "timeout": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Total wall-clock budget for the entire job (all steps) in seconds. 0 means no explicit timeout."
-          }
-        }
-      }
-    }
-  }
+   "$schema": "https://json-schema.org/draft/2020-12/schema",
+   "$id": "https://cicadoci.com/schema/workflow-v1.json",
+   "title": "CICaDo Workflow Schema v1",
+   "description": "Schema for CICaDo workflow files. Deliberately constrained: no loops, no expressions beyond `if: success|failure|always`, no templating language. Logic belongs in scripts and containers.",
+   "type": "object",
+   "required": ["name", "on", "jobs"],
+   "additionalProperties": false,
+   "properties": {
+     "name": {
+       "type": "string",
+       "description": "Human-readable workflow name. Must be non-empty and unique within a repository.",
+       "minLength": 1
+     },
+     "on": {
+       "description": "Event triggers that activate this workflow. At least one of push, pull_request, or schedule must be set. Unknown trigger types are intentionally accepted (additionalProperties: true) for forward-compatibility with new trigger types; the Go type On.Additional is populated by CIC-20's custom unmarshaler.",
+       "type": "object",
+       "properties": {
+         "push": {
+           "type": "object",
+           "description": "Fire on git push events.",
+           "properties": {
+             "branches": {
+               "type": "array",
+               "items": {"type": "string"},
+               "description": "Glob patterns matching branch names. Empty or absent means all branches. Supports *, **, ? (gitignore rules)."
+             },
+             "tags": {
+               "type": "array",
+               "items": {"type": "string"},
+               "description": "Glob patterns matching tag names."
+             },
+             "paths": {
+               "type": "array",
+               "items": {"type": "string"},
+               "description": "Pathspecs (git pathspec syntax). Empty or absent means all paths."
+             }
+           },
+           "additionalProperties": false
+         },
+         "pull_request": {
+           "type": "object",
+           "description": "Fire on pull-request events.",
+           "properties": {
+             "branches": {"type": "array", "items": {"type": "string"}},
+             "tags": {"type": "array", "items": {"type": "string"}},
+             "paths": {
+               "type": "array",
+               "items": {"type": "string"},
+               "description": "Pathspecs matching changed files."
+             },
+             "types": {
+               "type": "array",
+               "items": {"type": "string", "enum": ["opened", "synchronize", "reopened"]},
+               "description": "Event types to handle. Empty means all types."
+             }
+           },
+           "additionalProperties": false
+         },
+         "schedule": {
+           "type": "object",
+           "description": "Fire on a cron schedule (5-field, UTC).",
+           "required": ["cron"],
+           "properties": {
+             "cron": {
+               "type": "array",
+               "items": {"type": "string"},
+               "minItems": 1,
+               "description": "List of standard 5-field cron expressions in UTC. Multiple entries are OR'd."
+             }
+           },
+           "additionalProperties": false
+         }
+       },
+       "additionalProperties": true,
+       "$comment": "Forward-compat: new trigger types not yet in the schema are accepted, not rejected. The Go On.Additional map captures them; CIC-20 owns the custom-unmarshal logic."
+     },
+     "jobs": {
+       "type": "object",
+       "description": "Map of job-name to job specification. At least one job is required. Job names are unique within the workflow.",
+       "minProperties": 1,
+       "additionalProperties": {
+         "type": "object",
+         "description": "A single job within the workflow.",
+         "required": ["steps"],
+         "additionalProperties": false,
+         "properties": {
+           "runs-on": {
+             "type": "array",
+             "items": {"type": "string"},
+             "description": "Labels/tags a runner must carry. All must be present on the runner (required_tags <@ runner.labels)."
+           },
+           "needs": {
+             "description": "Names of upstream jobs that must all succeed before this job runs. A single string or a list of strings. Must not reference this job (no self-edges). CIC-20's custom unmarshaler normalizes both forms; the Go type is []string.",
+             "oneOf": [
+               {"type": "string"},
+               {"type": "array", "items": {"type": "string"}}
+             ]
+           },
+           "steps": {
+             "type": "array",
+             "description": "Ordered list of steps to execute. At least one step is required.",
+             "minItems": 1,
+             "items": {
+               "type": "object",
+               "description": "A single step. Exactly one of `uses` or `run` must be set.",
+               "anyOf": [
+                 {
+                   "description": "A built-in or marketplace step.",
+                   "required": ["uses"],
+                   "not": {"required": ["run"]},
+                   "properties": {"uses": {"type": "string"}}
+                 },
+                 {
+                   "description": "A shell-run step.",
+                   "required": ["run"],
+                   "not": {"required": ["uses"]},
+                   "properties": {"run": {"type": "string"}}
+                 }
+               ],
+               "additionalProperties": false,
+               "properties": {
+                 "name": {
+                   "type": "string",
+                   "description": "Human-readable step label."
+                 },
+                 "uses": {
+                   "type": "string",
+                   "description": "Built-in step name (e.g. 'checkout') or a fully-qualified package reference. Mutually exclusive with `run`."
+                 },
+                 "run": {
+                   "type": "string",
+                   "description": "Shell command executed by the runner. Mutually exclusive with `uses`."
+                 },
+                 "image": {
+                   "type": "string",
+                   "description": "Container image for this step. Empty means use the job-level image. Should be digest-pinned where possible."
+                 },
+                 "identity": {
+                   "type": "string",
+                   "enum": ["", "none", "aws"],
+                   "description": "Cloud identity this step runs with. 'none' or '' is default. 'aws' uses OIDC AssumeRoleWithWebIdentity."
+                 },
+                 "env": {
+                   "type": "object",
+                   "additionalProperties": {"type": "string"},
+                   "description": "Per-step environment overrides merged on top of job-level env. Secret refs use the format 'secrets.NAME'."
+                 },
+                 "if": {
+                   "type": "string",
+                   "enum": ["", "success", "failure", "always"],
+                   "description": "When this step runs conditionally. '' or 'success' means all prior steps succeeded; 'failure' means prior steps failed; 'always' means run regardless."
+                 },
+                 "timeout": {
+                   "type": "integer",
+                   "minimum": 0,
+                   "description": "Wall-clock budget for this step in seconds. 0 means use the job or server default."
+                 },
+                 "network": {
+                   "type": "boolean",
+                   "description": "When true, opt the step into outbound network access. Default is false (docker uses --network none)."
+                 }
+               }
+             }
+           },
+           "approval": {
+             "type": "object",
+             "description": "A human-approval gate. When set, the job waits until a human on the allow-list approves it before running.",
+             "required": ["channel", "allow"],
+             "additionalProperties": false,
+             "properties": {
+               "channel": {
+                 "type": "string",
+                 "description": "Chat channel or DM to post the approval request to (e.g. '#deploys')."
+               },
+               "allow": {
+                 "type": "array",
+                 "items": {"type": "string"},
+                 "minItems": 1,
+                 "description": "Principals permitted to approve. Format: 'kind:name'. Known kinds: 'user', 'team', 'group'. Example: ['user:@alice', 'team:platform']."
+               },
+               "timeout": {
+                 "type": "integer",
+                 "minimum": 0,
+                 "description": "How long (seconds) to wait for approval before auto-failing the gate. 0 means wait indefinitely."
+               }
+             }
+           },
+           "image": {
+             "type": "string",
+             "description": "Job-level default image for all steps. A step's own image field overrides this."
+           },
+           "env": {
+             "type": "object",
+             "additionalProperties": {"type": "string"},
+             "description": "Environment map applied to every step in this job. A step's own env takes precedence."
+           },
+           "timeout": {
+             "type": "integer",
+             "minimum": 0,
+             "description": "Total wall-clock budget for the entire job (all steps) in seconds. 0 means no explicit timeout."
+           }
+         }
+       }
+     }
+   }
 }

@@ -53,6 +53,11 @@ type On struct {
 	// This allows forward compatibility for new trigger types without a
 	// schema change. The map key is the trigger type name (e.g. "cron" if
 	// someone adds it in the future). In M1 this is reserved/unused.
+	//
+	// NOTE: `json:"-"` and the absence of a `yaml` inline tag mean a plain
+	// unmarshal will never populate this field. CIC-20 owns the custom
+	// unmarshaling logic (either `UnmarshalYAML` on `On` or a decoder
+	// pass that populates this map from the raw YAML node).
 	Additional map[string]any `json:"-"`
 }
 
@@ -167,6 +172,11 @@ type Job struct {
 // `job_id` = current job and `depends_on_job_id` = the named upstream.
 //
 // A self-reference (a job that lists itself) is a validation error.
+//
+// NOTE: `needs` may be written as a bare string (e.g. `needs: build`) in
+// YAML and is schema-accepted as `oneOf: [string, array]`.  A plain
+// unmarshal into `[]string` will fail on the string form — CIC-20
+// owns a custom unmarshal that normalizes both forms.
 type Needs []string
 
 // Step is a single step within a job.

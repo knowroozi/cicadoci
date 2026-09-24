@@ -155,20 +155,35 @@ func TestValidate_NilJob(t *testing.T) {
 }
 
 func TestValidate_ApprovalGateMissingAllow(t *testing.T) {
-	// This test exercises the case a nil job is caught; ApprovalGate validation
-	// would be a deeper concern handled by CIC-20 (the parser).
+	// An approval gate with a channel but no allow-list is invalid.
+	// The JSON Schema requires allow with minItems: 1, and the Go
+	// validator enforces the same constraint so the two agree.
 	w := validWorkflow()
 	w.Jobs["deploy"] = &Job{
-		Steps: []*Step{{Name: "deploy", Run: "aws s3 sync ./dist s3://bucket"}},
-		Approval: &ApprovalGate{
-			Channel: "#deploys",
-			// No Allow list — the gate has no approvers, effectively blocking
-			// but the nil/empty check in the struct itself would be an M2 parser concern.
-		},
+		Steps:    []*Step{{Name: "deploy", Run: "aws s3 sync ./dist s3://bucket"}},
+		Approval: &ApprovalGate{Channel: "#deploys"},
 	}
-	// The gate is structurally fine for our validator (we don't check
-	// AllowList in the simple validator — that's a M2 concern).
-	// This test just ensures a job with an ApprovalGate set passes.
+	err := Validate(w)
+	if err == nil {
+		t.Fatal("expected error for approval gate with empty allow-list")
+		return
+	}
+	verr := &ValidationError{}
+	if !errors.As(err, &verr) {
+		t.Fatalf("expected *ValidationError, got %T", err)
+	}
+	if len(verr.Errors()) == 0 {
+		t.Error("expected at least one error for empty allow-list")
+	}
+}
+
+func TestValidate_ApprovalGateWithAllowList(t *testing.T) {
+	// A valid approval gate with a non-empty allow-list passes.
+	w := validWorkflow()
+	w.Jobs["deploy"] = &Job{
+		Steps:    []*Step{{Name: "deploy", Run: "aws s3 sync ./dist s3://bucket"}},
+		Approval: &ApprovalGate{Channel: "#deploys", Allow: []string{"alice", "bob"}},
+	}
 	if err := Validate(w); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -93,6 +93,16 @@ func validateJob(jobName string, j *Job) []error {
 		errs = append(errs, validateStep(jobName, i, step)...)
 	}
 
+	// Approval gate, when set, must have a non-empty allow-list.
+	if j.Approval != nil {
+		if j.Approval.Channel == "" {
+			errs = append(errs, fmt.Errorf("job %q: approval gate has empty channel", jobName))
+		}
+		if len(j.Approval.Allow) == 0 {
+			errs = append(errs, fmt.Errorf("job %q: approval gate must have a non-empty allow-list", jobName))
+		}
+	}
+
 	return errs
 }
 
