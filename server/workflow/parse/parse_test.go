@@ -386,24 +386,26 @@ func TestParse_NegativeTimeoutFails(t *testing.T) {
 
 func TestParse_EmptyNameHasRealPosition(t *testing.T) {
 	// The "workflow name is empty" error should carry the real
-	// line/column of the `name` key, not {1,1}. We put name on line 5
-	// so we can assert the error references line 5.
-	src := "on:\n  push: {}\njobs:\n  build:\n    steps:\n      - run: echo\nname:\n"
+	// line/column of the `name` key, not a hard-coded {1,1}.
+	// `name:` appears on line 7 of the source below.
+	src := "on:\n  push: {}\njobs:\n  build:\n    steps:\n        - run: echo\nname:\n"
 	_, perr, err := Parse([]byte(src), "test.yaml")
 	_ = err
 	if perr == nil || len(perr.Errors) == 0 {
 		t.Fatal("expected parse errors for empty name")
 	}
-	// At least one error should reference the name key's position
-	// Since name is on line 7, the error should NOT be at line 1.
-	found := false
+	// Find the "name is empty" error and assert it references line 7.
+	var nameErr *ParseError
 	for _, e := range perr.Errors {
-		if e.Line == 1 && e.Column == 1 {
-			found = true
+		if strings.Contains(e.Message, "name is empty") {
+			nameErr = e
+			break
 		}
 	}
-	// Note: it's OK to also still have some errors at {1,1} from the
-	// YAML syntax check path; we just can't have *only* {1,1}.
-	// This test at least ensures the fix ran without crashing.
-	_ = found
+	if nameErr == nil {
+		t.Fatal("expected an error containing 'name is empty'; got: " + perr.Error())
+	}
+	if nameErr.Line != 7 {
+		t.Errorf("expected 'name is empty' error at line 7, got line %d (col %d)", nameErr.Line, nameErr.Column)
+	}
 }

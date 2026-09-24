@@ -133,6 +133,12 @@ func Parse(src []byte, fileName string) (*workflow.Workflow, *ParseErrors, error
 	wf, perr := parseDoc(body, fileName)
 	if perr != nil {
 		pe.Errors = append(pe.Errors, perr.Errors...)
+		for k, v := range perr.positions {
+			if pe.positions == nil {
+				pe.positions = make(map[string]nodePos)
+			}
+			pe.positions[k] = v
+		}
 	}
 
 	// Structural validation: empty name, no triggers, no jobs.
@@ -199,7 +205,7 @@ func parseDoc(node *yaml.Node, fileName string) (*workflow.Workflow, *ParseError
 	if len(pe.Errors) > 0 {
 		return nil, pe
 	}
-	return wf, nil
+	return wf, pe
 }
 
 // validateStructural adds structural-validation errors to pe.
