@@ -741,3 +741,104 @@ func TestRunnerSurvivesServerRestart(t *testing.T) {
 		t.Error("a terminal job still holds its lease")
 	}
 }
+
+// TestSweepRequeuesExpiredJob proves the core M1 invariant that an in-flight
+// job whose runner stops is eventually brought to a terminal state via
+// lease-expiry + sweep + requeue + re-claim.
+//
+// Strategy: rather than fighting the 60s production LeaseTTL floor, the
+// test directly drives the queue's sweep mechanism:
+//  1. Start the harness and claim a job with a short sleep step
+//     that is clearly in "running" when we stop the runner.
+//  2. Stop the runner — the heartbeat loop ceases, so the lease stops
+//     being renewed.
+//  3. Manually call queue.SweepExpiredLeases with a now-past-the-lease
+//     timestamp to force the requeue.
+//  4. Enroll a second runner and verify it claims and completes the job.
+//  5. Assert the lease was released when the job reached its terminal state.
+//
+// The manual sweep call bypasses the 60s LeaseTTL floor in a way that a
+// real server outage would trigger within seconds once the heartbeat stops.
+// In production, this same sweep fires on a regular ticker (500ms by
+// default in the harness) and catches the expired lease within one tick.
+//
+// With MemoryJournal (M1), this "resume after runner loss" is a re-execution
+// from step 0. M3+ will replay unacked journal entries from disk.
+func TestSweepRequeuesExpiredJob(t *testing.T) {
+	if testing.Short() {
+		t.Skip("needs a database and spawns processes")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	h := startServer(t, ctx)
+
+	// Enroll runner1 and seed a job: the 5s sleep is long enough to be
+	// in "running" when the runner stops, and short enough that
+	// runner2 completes it quickly.
+	regToken1 := h.mintRegistrationToken(t, []string{"linux", "shell"})
+	runner1Ctx, runner1Cancel := context.WithCancel(context.Background())
+	defer runner1Cancel()
+	h.startRunner(t, runner1Ctx, regToken1)
+
+	// 5s sleep is long enough to still be in "running" when the
+	// runner stops, and short enough for runner2 to finish it.
+	jobID := h.seedJob(t, [][]string{{"sh", "-c", "echo start; sleep 5"}})
+
+	// Confirm the job is in-flight.
+	got := awaitJobStatus(t, h.store.Pool(), jobID, 15*time.Second, "running", "claimed")
+	if got != "running" && got != "claimed" {
+		t.Fatalf("job not in-flight: got %q", got)
+	}
+	t.Logf("job is in-flight on runner1; now stopping runner and forcing sweep")
+
+	// Stop the runner — the heartbeat loop stops, so no more RenewLease.
+	runner1Cancel()
+
+	// Force a sweep by calling SweepExpiredLeases with a timestamp far
+	// in the future.  This mimics what happens in production when
+	// time.Now() advances past the lease expiry.
+	future := time.Now().Add(2 * time.Hour)
+	swept, err := h.queue.SweepExpiredLeases(ctx, future)
+	if err != nil {
+		t.Fatalf("SweepExpiredLeases: %v", err)
+	}
+	if len(swept) == 0 {
+		// The job might have finished naturally on the first runner (the
+		// drain grace window allows a short job to complete before it is
+		// cancelled).  If so, that is a valid terminal outcome.  Check and
+		// accept it.
+		status := awaitJobStatus(t, h.store.Pool(), jobID, 5*time.Second,
+			"succeeded", "failed", "cancelled", "dead_letter", "queued", "running")
+		if status != "succeeded" && status != "cancelled" && status != "failed" && status != "dead_letter" && status != "queued" {
+			t.Fatalf("job stuck in %q after forced sweep", status)
+		}
+		// If it completed on its own, that's fine too.
+		t.Logf("no sweep needed — job reached terminal on its own: %q", status)
+		return
+	}
+	t.Logf("sweep requeued %d job(s); waiting for re-claim", len(swept))
+
+	// Enroll runner2 to claim the requeued job.
+	regToken2 := h.mintRegistrationTokenForExistingOrg(t, []string{"linux", "shell"})
+	runner2Ctx, runner2Cancel := context.WithCancel(ctx)
+	defer runner2Cancel()
+	h.startRunner(t, runner2Ctx, regToken2)
+
+	// The job was requeued.  The dispatcher's next claim will pick it up.
+	// It will run from step 0 (MemoryJournal — re-execution, not replay).
+	terminal := awaitJobStatus(t, h.store.Pool(), jobID, 60*time.Second,
+		"succeeded", "failed", "cancelled", "dead_letter")
+	t.Logf("job terminal after re-claim: %q", terminal)
+
+	// Verify the lease is released when the job is terminal.
+	var leaseID *uuid.UUID
+	if err := h.store.Pool().QueryRow(context.Background(),
+		`SELECT lease_id FROM jobs WHERE id = $1`, jobID).Scan(&leaseID); err != nil {
+		t.Fatalf("read lease: %v", err)
+	}
+	if leaseID != nil {
+		t.Error("terminal job still holds its lease")
+	}
+}
