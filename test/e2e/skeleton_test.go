@@ -796,11 +796,6 @@ func TestSweepRequeuesExpiredJob(t *testing.T) {
 	// Stop the runner — the heartbeat loop stops, so no more RenewLease.
 	runner1Cancel()
 
-	// Wait briefly for in-flight status updates to drain before we force
-	// the sweep.  Without this, there's a small window where the job's
-	// running status hasn't been written yet.
-	time.Sleep(500 * time.Millisecond)
-
 	// Force a sweep by calling SweepExpiredLeases with a timestamp far
 	// in the future.  This mimics what happens in production when
 	// time.Now() advances past the lease expiry.
@@ -839,8 +834,10 @@ func TestSweepRequeuesExpiredJob(t *testing.T) {
 
 	// Verify the lease is released when the job is terminal.
 	var leaseID *uuid.UUID
-	_ = h.store.Pool().QueryRow(context.Background(),
-		"SELECT lease_id FROM jobs WHERE id = $1", jobID).Scan(&leaseID)
+	if err := h.store.Pool().QueryRow(context.Background(),
+		`SELECT lease_id FROM jobs WHERE id = $1`, jobID).Scan(&leaseID); err != nil {
+		t.Fatalf("read lease: %v", err)
+	}
 	if leaseID != nil {
 		t.Error("terminal job still holds its lease")
 	}
