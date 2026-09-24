@@ -34,6 +34,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
+	"cicadoci.com/cicado/runner/journal"
 )
 
 // Version is the runner build version reported in Capabilities.
@@ -92,6 +93,13 @@ type Agent struct {
 	// drainWG counts in-flight jobs so a drain can wait for them within a grace
 	// window before cancelling whatever is still running.
 	drainWG sync.WaitGroup
+
+	// journal tracks unacked outbound messages (both lanes, all jobs) so that
+	// a RESUME verdict replay can re-send entries from the server's
+	// high-water mark.  Trimmed by StatusAck (LaneStatus) and LogAck
+	// (LaneLog) as they arrive.  M1 implementation (MemoryJournal) is
+	// in-process; a disk-backed journal for crash survival is deferred.
+	journal *journal.MemoryJournal
 }
 
 type activeJob struct {
@@ -137,12 +145,13 @@ func New(cfg Config, conn *grpc.ClientConn) *Agent {
 		cfg.Capacity = 1
 	}
 	return &Agent{
-		cfg:    cfg,
-		conn:   conn,
-		client: runnerv1.NewRunnerServiceClient(conn),
-		log:    log,
-		seq:    make(map[string]*atomic.Uint64),
-		active: make(map[string]*activeJob),
+		cfg:     cfg,
+		conn:    conn,
+		client:  runnerv1.NewRunnerServiceClient(conn),
+		log:     log,
+		seq:     make(map[string]*atomic.Uint64),
+		active:  make(map[string]*activeJob),
+		journal: journal.NewMemoryJournal(),
 	}
 }
 
@@ -251,8 +260,9 @@ func (a *Agent) session(stopCtx, jobCtx context.Context) error {
 	if serverHello == nil {
 		return errors.New("runner: first server message was not ServerHello")
 	}
-
-	a.applyResumeVerdicts(serverHello.GetResumeVerdicts())
+	// Server verdicts are applied after the send and log streams are
+	// ready below, so that a RESUME replay has both lanes available.
+	verdicts := serverHello.GetResumeVerdicts()
 
 	heartbeat := time.Duration(serverHello.GetHeartbeatIntervalSeconds()) * time.Second
 	if heartbeat <= 0 {
@@ -271,12 +281,20 @@ func (a *Agent) session(stopCtx, jobCtx context.Context) error {
 	a.setLogStream(logStream)
 	defer a.setLogStream(nil)
 
-	// Drain log acks so the server's flow control is not blocked by an unread
-	// stream. The acks themselves only matter once there is a journal to trim.
+	// // Drain log acks so the server's flow control is not blocked by an unread
+	// stream.  Each ack trims the journal log lane up to the server's
+	// acknowledged sequence so unacked entries can be replayed on RESUME.
 	go func() {
 		for {
-			if _, err := logStream.Recv(); err != nil {
+			down, err := logStream.Recv()
+			if err != nil {
 				return
+			}
+			if ack := down.GetAck(); ack != nil {
+				jobID := ack.GetJobId()
+				ackedSeq := ack.GetAckedSeq()
+				a.log.Debug("log ack: trimming journal", "job_id", jobID, "acked_seq", ackedSeq)
+				a.journal.Trim(jobID, journal.LaneLog, ackedSeq)
 			}
 		}
 	}()
@@ -289,6 +307,21 @@ func (a *Agent) session(stopCtx, jobCtx context.Context) error {
 	}
 
 	errc := make(chan error, 2)
+
+	// Apply verdicts now that send and the log stream are ready: ABANDON
+	// cancels each job immediately; RESUME replays unacked entries from
+	// the journal starting at the server's high-water mark.
+	a.applyResumeVerdicts(verdicts)
+	a.replayJournal(verdicts, send, func(up *runnerv1.LogUp) {
+		a.logMu.Lock()
+		defer a.logMu.Unlock()
+		if a.logStream == nil {
+			return
+		}
+		if err := a.logStream.Send(up); err != nil {
+			a.log.Debug("replay log chunk failed", "job_id", up.GetChunk().GetJobId(), "error", err)
+		}
+	})
 
 	go func() { errc <- a.heartbeatLoop(sessionCtx, send, heartbeat) }()
 	go func() { errc <- a.receiveLoop(sessionCtx, stream, send, jobCtx) }()
@@ -338,7 +371,10 @@ func (a *Agent) receiveLoop(ctx context.Context, stream runnerv1.RunnerService_S
 			a.cancelJob(m.CancelJob)
 
 		case *runnerv1.ServerMessage_StatusAck:
-			// Nothing to trim yet: the local journal lands with CIC-17.
+			// Trim the journal status lane up to the server's acknowledged
+			// sequence so unacked entries that survive a transient disconnect
+			// can be replayed on RESUME.
+			a.journal.Trim(m.StatusAck.GetJobId(), journal.LaneStatus, m.StatusAck.GetAckedSeq())
 
 		case *runnerv1.ServerMessage_Throttle:
 			a.log.Info("server asked us to throttle",
@@ -381,3 +417,52 @@ func jitteredBackoff(attempt int, base, max time.Duration, rnd func(window int64
 // math/rand/v2's global source. This is retry jitter, not a cryptographic use, so
 // the runtime-seeded global is fine.
 func randJitter(window int64) int64 { return rand.Int64N(window) }
+
+// replayJournal re-sends any unacked status updates and log chunks recorded in
+// the journal for the jobs the server told us to RESUME.  The server provides
+// a per-job high-water mark (StatusAck.acked_seq / LogAck.acked_seq) and the
+// journal replays from watermark+1; each subsequent ack trims so the window
+// shrinks monotonically.
+//
+// M1 implementation is MemoryJournal: an empty journal after a process restart
+// means nothing to replay, the lease expiry re-queues the job, and the server's
+// idempotent upserts make that safe.
+func (a *Agent) replayJournal(
+	verdicts []*runnerv1.ResumeVerdict,
+	send func(*runnerv1.RunnerMessage) error,
+	logSender func(*runnerv1.LogUp),
+) {
+	for _, v := range verdicts {
+		if v.GetVerdict() != runnerv1.ResumeVerdict_RESUME {
+			continue
+		}
+		jobID := v.GetJobId()
+		logWatermark := v.GetLogWatermark()
+		statusWatermark := v.GetStatusWatermark()
+
+		// Replay status lane.
+		for _, e := range a.journal.Replay(jobID, journal.LaneStatus, statusWatermark) {
+			su, ok := e.Msg.(*runnerv1.StatusUpdate)
+			if !ok {
+				continue
+			}
+			a.log.Debug("replaying status update", "job_id", jobID, "seq", su.GetSeq())
+			if err := send(&runnerv1.RunnerMessage{
+				Msg: &runnerv1.RunnerMessage_StatusUpdate{StatusUpdate: su},
+			}); err != nil {
+				a.log.Error("replay status failed", "job_id", jobID,
+					"seq", su.GetSeq(), "error", err)
+			}
+		}
+
+		// Replay log lane (chunks + structured events).
+		for _, e := range a.journal.Replay(jobID, journal.LaneLog, logWatermark) {
+			lg, ok := e.Msg.(*runnerv1.LogUp)
+			if !ok {
+				continue
+			}
+			a.log.Debug("replaying log entry", "job_id", jobID, "seq", e.Seq)
+			logSender(lg)
+		}
+	}
+}
