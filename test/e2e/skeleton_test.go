@@ -617,3 +617,45 @@ func (h *harness) mintRegistrationTokenForExistingOrg(t *testing.T, labels []str
 func bearerContext(ctx context.Context, credential string) context.Context {
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+credential)
 }
+
+// TestCancelPropagates asserts that a cancel request on a running job is
+// observed by the runner and the job ends in the terminal "cancelled" state.
+//
+// Depends on CIC-16 (RequestCancel + CancelChannel) merged to the target branch.
+//
+// When CIC-16 is merged, the test body becomes:
+//  1. seed a job with one slow step (sleep 30)
+//  2. wait for the job to reach "running"
+//  3. call h.queue.RequestCancel(ctx, jobID, "e2e test")
+//  4. assert awaitJobStatus returns "cancelled"
+//
+// For now, the test is a skip placeholder that documents the contract.
+func TestCancelPropagates(t *testing.T) {
+	if testing.Short() {
+		t.Skip("needs CIC-16 (RequestCancel + CancelChannel) merged")
+	}
+	t.Skip("placeholder: cancel propagation path lands with CIC-16 merge")
+}
+
+// TestRunnerSurvivesServerRestart asserts that when the gRPC server stops
+// mid-job the runner's reconnect / resume machinery eventually reconnects and
+// the in-flight job is not silently lost.
+//
+// Depends on CIC-17 (resume verdicts + journal) merged to the target branch.
+//
+// When both CIC-16 and CIC-17 are merged, the test body becomes:
+//  1. seed and start a multi-step job
+//  2. wait for "running"
+//  3. stop the gRPC server (GracefulStop)
+//  4. start a new server on a fresh port
+//  5. have the runner reconnect (it polls on jittered backoff)
+//  6. assert the job's status in the DB is either "running" (reconnected and
+//     resumed) or a clean terminal state, but NOT "lost"
+//
+// For now the test is a skip placeholder that documents the contract.
+func TestRunnerSurvivesServerRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("needs CIC-17 (resume verdicts + journal) merged")
+	}
+	t.Skip("placeholder: survive-restart path lands with CIC-17 merge")
+}
