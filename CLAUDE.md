@@ -48,4 +48,4 @@ Listing something as verified when it was not actually run is the one thing that
 - Estimates in docs are engineer-weeks (ew), not calendar time
 - Work is tracked in Linear (team `CIC`, project "CICaDo MVP"), milestones M0–M9
 - Update the doc in the same PR as the change it describes
-- Current milestone: **M0 — Foundations**
+- Current milestone: **M2 — Workflow definition**
