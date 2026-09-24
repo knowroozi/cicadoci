@@ -49,3 +49,14 @@ Listing something as verified when it was not actually run is the one thing that
 - Work is tracked in Linear (team `CIC`, project "CICaDo MVP"), milestones M0–M9
 - Update the doc in the same PR as the change it describes
 - Current milestone: **M2 — Workflow definition**
+
+## Decisions log
+
+<!-- Reverse-chron order. New entries go ABOVE the existing ones -->
+
+- 2026-09-24: **CIC-20 — YAML parser with positional error messages.** New
+  package `server/workflow/parse/` with `Parse(src []byte, fileName string)`.
+  Uses `gopkg.in/yaml.v3` (added to `go.mod`). `ParseError` carries `File`,
+  `Line`, `Column`, `Message`, `Hint` — the top-3 UX differentiator vs GitHub
+  Actions' silent YAML failures. Validates schema fields (empty name, no
+  triggers, no jobs, uses/run exclusivity, if/identity enums, approval fields).
