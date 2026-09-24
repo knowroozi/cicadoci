@@ -86,17 +86,19 @@ func (h *Handler) handleValidate(w http.ResponseWriter, r *http.Request) {
 
 	// Run the full parse + structural-validation pipeline.
 	// parse.Parse returns (nil, pe, pe) on any error and (wf, nil, nil) on
-	// success, so the third return value is the guard.
+	// success, so the third return value is the error guard and perr is
+	// always a *parse.ParseErrors when non-nil.
 	_, _, perr := parse.Parse([]byte(req.YAML), fileName)
 	if perr == nil {
 		writeJSON(w, http.StatusOK, validateResponse{Valid: true})
 		return
 	}
 
-	// perr is a *parse.ParseErrors carrying every positional problem found.
 	var perrs *parse.ParseErrors
+	// parse.Parse always wraps a *ParseErrors on failure, so this assertion
+	// is always true. We still use errors.As for type safety rather than a
+	// raw assert, to avoid panicking if the contract ever changes.
 	if !errors.As(perr, &perrs) {
-		// Shouldn't happen: Parse always wraps a *ParseErrors on failure.
 		writeError(w, h.logger, http.StatusInternalServerError, errCodeInternal,
 			"unexpected parse error type", perr)
 		return

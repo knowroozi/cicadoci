@@ -89,35 +89,46 @@ func cmdValidate(args []string) error {
 	}
 
 	anyParseFail := false
+	var firstReadErr error // first I/O failure seen; reported in priority below anyParseFail
 	for _, path := range args {
 		if err := validateFile(path); err != nil {
 			var pe *parse.ParseErrors
 			if errors.As(err, &pe) {
 				// Print each positional error on its own line.
-				for _, err := range pe.Errors {
-					fmt.Fprintln(os.Stderr, err)
+				for _, e := range pe.Errors {
+					fmt.Fprintln(os.Stderr, e)
 				}
 				anyParseFail = true
 			} else {
 				// Read-level failure (file not found, permissions, etc.).
-				// Return the original error so callers can distinguish it
-				// from a validation failure via errors.Is.
+				// Report it but keep iterating so a parse failure found in an
+				// earlier file isn't silently lost.
 				fmt.Fprintf(os.Stderr, "cicado: %s: %v\n", path, err)
-				return err
+				if firstReadErr == nil {
+					firstReadErr = err
+				}
 			}
 		}
 	}
 
+	// Validation failures take priority: they are the expected failure mode
+	// for a CLI invoked from CI. Pure I/O errors are operational and get exit 2.
 	if anyParseFail {
 		return errValidateFailed
 	}
-	return nil
+	return firstReadErr // nil when there were no read errors
 }
 
 // validateFile reads a workflow YAML file from disk, runs the full parse +
-// structural-validation pipeline, and returns a *parse.ParseErrors carrying
-// every positional error found. On success it prints "valid" to stderr so the
-// CI output stays clean.
+// structural-validation pipeline, and returns an error if any problem is found.
+// On success it prints "valid" to stderr. There are two distinct error types:
+//
+//	os I/O errors (wrapped "read: ...") — file not found, permissions, etc.
+//	*parse.ParseErrors — the file was read but contains one or more
+//	   positional parse/validation errors (file:line:col: message).
+//
+// Callers use errors.As to distinguish the two: parse failures map to exit 1,
+// I/O failures to exit 2.
 func validateFile(path string) error {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -125,19 +136,11 @@ func validateFile(path string) error {
 	}
 
 	fileName := filepath.Base(path)
-	_, perrs, perr := parse.Parse(src, fileName)
-
-	// parse.Parse returns (nil, nil, nil) on success and (nil, pe, pe) on
-	// failure, so the third and second return values are the same pointer
-	// when non-nil.  Use the third (error) as the guard.
+	_, _, perr := parse.Parse(src, fileName)
+	// parse.Parse returns (nil, pe, pe) on failure and (wf, nil, nil) on
+	// success, so the third return is the error guard.
 	if perr != nil {
 		return perr
-	}
-
-	// Defensive: a non-nil *ParseErrors with a nil error shouldn't happen,
-	// but guard against it anyway.
-	if perrs != nil && len(perrs.Errors) > 0 {
-		return perrs
 	}
 
 	fmt.Fprintf(os.Stderr, "cicado: %s: valid\n", fileName)

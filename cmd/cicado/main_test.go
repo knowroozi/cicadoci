@@ -130,3 +130,41 @@ func TestValidateFile_YAMLSyntaxError(t *testing.T) {
 		t.Error("validateFile: error should have non-empty string form")
 	}
 }
+
+// TestCmdValidate_MultiFile_ReadErrorAfterParseError verifies that when a
+// parse failure is found in an earlier file and a read error occurs in a
+// later file, the parse failure takes priority (exit 1, errValidateFailed)
+// rather than the read error silently winning (exit 2).
+func TestCmdValidate_MultiFile_ReadErrorAfterParseError(t *testing.T) {
+	dir := t.TempDir()
+
+	// bad.yaml fails validation.
+	badFile := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(badFile, []byte("name: test\n"), 0o644); err != nil {
+		t.Fatalf("setup bad: %v", err)
+	}
+
+	// missing.yaml doesn't exist (read error).
+	missingFile := filepath.Join(dir, "nope.yaml")
+
+	err := cmdValidate([]string{badFile, missingFile})
+	if err == nil {
+		t.Fatal("cmdValidate: expected error, got nil")
+	}
+	// Parse failure found first, so errValidateFailed should win over the I/O error.
+	if !errors.Is(err, errValidateFailed) {
+		t.Errorf("cmdValidate: got %q, want errValidateFailed", err)
+	}
+}
+
+// TestCmdValidate_AllReadErrors verifies that when all files are unreadable,
+// the first read error is returned directly (not errValidateFailed).
+func TestCmdValidate_AllReadErrors(t *testing.T) {
+	err := cmdValidate([]string{"/nonexistent/a.yaml", "/nonexistent/b.yaml"})
+	if err == nil {
+		t.Fatal("cmdValidate: expected error, got nil")
+	}
+	if errors.Is(err, errValidateFailed) {
+		t.Error("cmdValidate: all-read-error should not produce errValidateFailed")
+	}
+}
