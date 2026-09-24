@@ -51,6 +51,11 @@ type Journal interface {
 	// entry in any lane.  It is a snapshot; a concurrent Record for a
 	// job that has just been trimmed may or may not appear.
 	Jobs() []string
+	// Forget discards **all** recorded entries for jobID across every lane.
+	// Used when a job has been ABANDONed and will never receive further
+	// acks, so its remaining journal entries are a permanent memory leak.
+	// It is safe to call concurrently.
+	Forget(jobID string)
 	// Len returns the total number of unacked entries across all lanes
 	// and jobs.  Intended for diagnostics and tests.
 	Len() int

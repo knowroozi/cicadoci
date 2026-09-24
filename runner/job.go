@@ -504,11 +504,15 @@ func (a *Agent) applyResumeVerdicts(verdicts []*runnerv1.ResumeVerdict) {
 		}
 
 		a.log.Warn("abandoning job: lease is gone", "job_id", v.GetJobId())
+		jobID := v.GetJobId()
 		a.jobsMu.Lock()
-		if job, ok := a.active[v.GetJobId()]; ok {
+		if job, ok := a.active[jobID]; ok {
 			job.cancel()
-			delete(a.active, v.GetJobId())
+			delete(a.active, jobID)
 		}
 		a.jobsMu.Unlock()
+		// No further acks will arrive for this job, so discard its journal
+		// entries directly instead of waiting for an ack that will never come.
+		a.journal.Forget(jobID)
 	}
 }

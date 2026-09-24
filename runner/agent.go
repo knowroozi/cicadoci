@@ -312,9 +312,14 @@ func (a *Agent) session(stopCtx, jobCtx context.Context) error {
 	// cancels each job immediately; RESUME replays unacked entries from
 	// the journal starting at the server's high-water mark.
 	a.applyResumeVerdicts(verdicts)
+
+	// replayJournal acquires a.logMu for its whole loop so live log sends
+	// (sendChunk / sendEvent → sendLogUp) are fenced until the replay
+	// window closes, guaranteeing that replayed entries are on the wire
+	// in ascending seq order relative to new live sends.
+	//
 	a.replayJournal(verdicts, send, func(up *runnerv1.LogUp) {
-		a.logMu.Lock()
-		defer a.logMu.Unlock()
+		// replayJournal holds logMu for its whole loop; no per-message lock here.
 		if a.logStream == nil {
 			return
 		}
@@ -424,14 +429,30 @@ func randJitter(window int64) int64 { return rand.Int64N(window) }
 // journal replays from watermark+1; each subsequent ack trims so the window
 // shrinks monotonically.
 //
+// func (a *Agent) replayJournal(...)
+//
 // M1 implementation is MemoryJournal: an empty journal after a process restart
 // means nothing to replay, the lease expiry re-queues the job, and the server's
 // idempotent upserts make that safe.
+//
+// logMu is held for the entire loop so live log sends from running jobs are
+// fenced until the replay window closes. Because MemoryJournal's Replay
+// returns a snapshot, the entries being replayed are a fixed set at call time;
+// new records appended concurrently by the live path are NOT included in this
+// replay and will flow through the live sendLogUp path (which also acquires
+// logMu).  This ordering guarantee means the server never sees log entries out
+// of seq order for a single job, even though the server's ON CONFLICT (job_id,
+// seq) upsert would handle out-of-order arrivals harmlessly.
 func (a *Agent) replayJournal(
 	verdicts []*runnerv1.ResumeVerdict,
 	send func(*runnerv1.RunnerMessage) error,
 	logSender func(*runnerv1.LogUp),
 ) {
+	// Fence live log-stream sends for the duration of this replay.  After this
+	// returns, logMu is released and the live path can use it again.
+	a.logMu.Lock()
+	defer a.logMu.Unlock()
+
 	for _, v := range verdicts {
 		if v.GetVerdict() != runnerv1.ResumeVerdict_RESUME {
 			continue
@@ -456,6 +477,7 @@ func (a *Agent) replayJournal(
 		}
 
 		// Replay log lane (chunks + structured events).
+		// logSender is called without an extra lock: replayJournal holds logMu.
 		for _, e := range a.journal.Replay(jobID, journal.LaneLog, logWatermark) {
 			lg, ok := e.Msg.(*runnerv1.LogUp)
 			if !ok {

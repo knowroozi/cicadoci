@@ -133,4 +133,16 @@ func (j *MemoryJournal) cleanupJobLocked(jobID string) {
 	}
 }
 
+// Forget discards all recorded entries for jobID across every lane.  Used
+// when a job has been ABANDONed and will never receive further acks, so its
+// remaining journal entries would otherwise be a permanent memory leak.
+func (j *MemoryJournal) Forget(jobID string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.byKey[jobID] == nil {
+		return
+	}
+	j.cleanupJobLocked(jobID)
+}
+
 var _ Journal = (*MemoryJournal)(nil)
