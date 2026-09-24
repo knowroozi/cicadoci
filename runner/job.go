@@ -11,6 +11,7 @@ import (
 
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
 	"cicadoci.com/cicado/runner/executor"
+	"cicadoci.com/cicado/runner/journal"
 )
 
 // infraErrorClass labels a StatusUpdate the runner sends when a job could not
@@ -266,6 +267,11 @@ func (a *Agent) sendStatus(send func(*runnerv1.RunnerMessage) error, jobID, leas
 	upd.Seq = a.statusSeq.Add(1)
 	upd.RunnerTs = timestamppb.Now()
 
+	// Record before send so that a transient disconnect still retains the
+	// message for replay on RESUME.  The journal is trimmed by StatusAck as the
+	// server acknowledges each one.
+	a.journal.Record(journal.Entry{JobID: jobID, Lane: journal.LaneStatus, Seq: upd.Seq, Msg: upd})
+
 	if err := send(&runnerv1.RunnerMessage{
 		Msg: &runnerv1.RunnerMessage_StatusUpdate{StatusUpdate: upd},
 	}); err != nil {
@@ -312,34 +318,42 @@ func (a *Agent) sendLogUp(up *runnerv1.LogUp) {
 }
 
 func (a *Agent) sendChunk(jobID, leaseID string, stepIndex uint32, stream executor.Stream, data []byte) {
-	io := runnerv1.LogChunk_STDOUT
+	ioKind := runnerv1.LogChunk_STDOUT
 	if stream == executor.StreamStderr {
-		io = runnerv1.LogChunk_STDERR
+		ioKind = runnerv1.LogChunk_STDERR
 	}
-	a.sendLogUp(&runnerv1.LogUp{
-		Msg: &runnerv1.LogUp_Chunk{Chunk: &runnerv1.LogChunk{
-			JobId:     jobID,
-			LeaseId:   leaseID,
-			StepIndex: stepIndex,
-			Io:        io,
-			Seq:       a.nextSeq(jobID),
-			Data:      data,
-			RunnerTs:  timestamppb.Now(),
-		}},
-	})
+	chunk := &runnerv1.LogChunk{
+		JobId:     jobID,
+		LeaseId:   leaseID,
+		StepIndex: stepIndex,
+		Io:        ioKind,
+		Seq:       a.nextSeq(jobID),
+		Data:      data,
+		RunnerTs:  timestamppb.Now(),
+	}
+	logUp := &runnerv1.LogUp{Msg: &runnerv1.LogUp_Chunk{Chunk: chunk}}
+
+	// Record before send so that a transient disconnect retains the chunk
+	// for replay on RESUME.  Trimmed by LogAck.
+	a.journal.Record(journal.Entry{JobID: jobID, Lane: journal.LaneLog, Seq: chunk.Seq, Msg: logUp})
+	a.sendLogUp(logUp)
 }
 
 func (a *Agent) sendEvent(jobID, leaseID string, stepIndex uint32, kind, payload string) {
-	a.sendLogUp(&runnerv1.LogUp{
-		Msg: &runnerv1.LogUp_Event{Event: &runnerv1.StructuredEvent{
-			JobId:     jobID,
-			LeaseId:   leaseID,
-			StepIndex: stepIndex,
-			Seq:       a.nextSeq(jobID),
-			Kind:      kind,
-			Json:      payload,
-		}},
-	})
+	event := &runnerv1.StructuredEvent{
+		JobId:     jobID,
+		LeaseId:   leaseID,
+		StepIndex: stepIndex,
+		Seq:       a.nextSeq(jobID),
+		Kind:      kind,
+		Json:      payload,
+	}
+	logUp := &runnerv1.LogUp{Msg: &runnerv1.LogUp_Event{Event: event}}
+
+	// Record before send — structured events are never dropped even in
+	// bounded-journal overflow situations (protocol §7), so we always record.
+	a.journal.Record(journal.Entry{JobID: jobID, Lane: journal.LaneLog, Seq: event.Seq, Msg: logUp})
+	a.sendLogUp(logUp)
 }
 
 // finishJob releases everything keyed on jobID once a job is done.
@@ -490,11 +504,15 @@ func (a *Agent) applyResumeVerdicts(verdicts []*runnerv1.ResumeVerdict) {
 		}
 
 		a.log.Warn("abandoning job: lease is gone", "job_id", v.GetJobId())
+		jobID := v.GetJobId()
 		a.jobsMu.Lock()
-		if job, ok := a.active[v.GetJobId()]; ok {
+		if job, ok := a.active[jobID]; ok {
 			job.cancel()
-			delete(a.active, v.GetJobId())
+			delete(a.active, jobID)
 		}
 		a.jobsMu.Unlock()
+		// No further acks will arrive for this job, so discard its journal
+		// entries directly instead of waiting for an ack that will never come.
+		a.journal.Forget(jobID)
 	}
 }
