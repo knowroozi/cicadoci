@@ -102,6 +102,7 @@ func (h *Handler) buildMux() http.Handler {
 	mux.HandleFunc("GET /api/v1/runs", h.listRuns)
 	mux.HandleFunc("GET /api/v1/runs/{id}", h.getRun)
 	mux.HandleFunc("GET /api/v1/runners", h.listRunners)
+	mux.HandleFunc("POST /api/v1/validate", h.handleValidate)
 
 	return mux
 }

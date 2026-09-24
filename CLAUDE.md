@@ -53,6 +53,9 @@ Listing something as verified when it was not actually run is the one thing that
 ## Decisions log
 
 <!-- Reverse-chron order. New entries go ABOVE the existing ones -->
+
+- 2026-09-24: **CIC-23 — `cicado validate` CLI + `POST /api/v1/validate` endpoint.** New `cmd/cicado/` binary with `validate <file>` subcommand; new `server/api/validate.go` handler. Both use the existing `server/workflow/parse` + `workflow.Validate` pipeline (no new logic, just a transport). CLI distinguishes read errors (returned as-is, exit 2) from parse/validation errors (`errValidateFailed` sentinel, exit 1). API returns `200` always on a well-formed request body, with `valid` + `errors[]` in the JSON body; `400` for empty/malformed JSON only. No DB needed for the validate route. 8 API + 10 CLI tests.
+
 - 2026-09-24: **M1 E2E gap — TestSweepRequeuesExpiredJob.** Added to
   `test/e2e/skeleton_test.go`: proves the core M1 invariant that an in-flight
   job whose runner stops is brought to a terminal state via lease-expiry +
@@ -61,6 +64,7 @@ Listing something as verified when it was not actually run is the one thing that
   future)` directly to force the requeue within one iteration. With
   `MemoryJournal` (M1) this "resume" is a re-execution from step 0; M3
   disk journals will replay unacked entries instead.
+
 - 2026-09-24: **CIC-22 \u2014 Trigger filters + if conditionals.** Added `server/workflow/trigger.go`: `On.Matches(Event)` matches push/PR/schedule events with branch/tag/path globs. `PullRequestEvent` struct added. `IfCondition` implements 3-value enum (success/failure/always). Minimal recursive glob matcher. 23 trigger + 19 validate tests. PR-review fixes: nil `event.PR` guard in `matchPullRequest`; removed dead `ensureImportUsed` comment.
 - 2026-09-24: **CIC-21 \u2014 DAG resolution + needs fan-out/fan-in.** `server/workflow/dag.go`: `BuildDAG` with Kahn's algorithm + cycle detection, `Level`/`FanOutLevel`/`FanInReady`, `PropagateFailure` with `if: always` override. 21 tests. PR-review fixes: `Level(job)` now returns -1 for unknown jobs (was 0); documented `if: always` cross-job coupling in dag.go + types.go.
 - 2026-09-24: **CIC-20 position-threading fix.** `parseDoc` returned `wf, nil` on success, discarding the `positions` map, so `validateStructural` always saw `{1,1}`. Fixed to `return wf, pe`; test now asserts real line number 7.
