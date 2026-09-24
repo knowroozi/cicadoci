@@ -14,6 +14,26 @@ package workflow
 // a new major version with a new `--schema-version` CLI flag.
 const Version = 1
 
+// IfConditionValue is the type of a Step's `if:` conditional value.
+//
+// The valid values are the fixed enum defined in workflow-v1.json: no
+// expression language, no dynamic evaluation.
+type IfConditionValue string
+
+const (
+	// IfSuccess runs the step only if all prior steps in the job succeeded.
+	// This is also the default when `if:` is omitted.
+	IfSuccess IfConditionValue = "success"
+	// IfFailure runs the step only if one or more prior steps in the job failed.
+	IfFailure IfConditionValue = "failure"
+	// IfAlways runs the step regardless of prior step outcomes.
+	// NOTE: when set on a job's FIRST step, this also acts as a cross-job
+	// bypass — PropagateFailure in dag.go will NOT skip this job even if a
+	// needs: dependency failed. See the comment in PropagateFailure for the
+	// design rationale and CIC-28's plan to decouple these mechanisms.
+	IfAlways IfConditionValue = "always"
+)
+
 // Workflow is the top-level structure of a CICaDo workflow file.
 //
 // It represents a single workflow document; a repository can host multiple
@@ -93,6 +113,11 @@ type PullRequestTrigger struct {
 	// Known values: "opened", "synchronize", "reopened".
 	// An empty slice means all types.
 	Types []string `yaml:"types,omitempty" json:"types,omitempty"`
+
+	// Paths restricts which changed paths trigger the workflow.
+	// Only relevant for pull_request events on forges that report
+	// per-PR changed paths (e.g. GitHub).
+	Paths []string `yaml:"paths,omitempty" json:"paths,omitempty"`
 }
 
 // ScheduleTrigger fires on a cron schedule.

@@ -54,6 +54,9 @@ Listing something as verified when it was not actually run is the one thing that
 
 <!-- Reverse-chron order. New entries go ABOVE the existing ones -->
 
+- 2026-09-24: **CIC-22 \u2014 Trigger filters + if conditionals.** Added `server/workflow/trigger.go`: `On.Matches(Event)` matches push/PR/schedule events with branch/tag/path globs. `PullRequestEvent` struct added. `IfCondition` implements 3-value enum (success/failure/always). Minimal recursive glob matcher. 23 trigger + 19 validate tests. PR-review fixes: nil `event.PR` guard in `matchPullRequest`; removed dead `ensureImportUsed` comment.
+- 2026-09-24: **CIC-21 \u2014 DAG resolution + needs fan-out/fan-in.** `server/workflow/dag.go`: `BuildDAG` with Kahn's algorithm + cycle detection, `Level`/`FanOutLevel`/`FanInReady`, `PropagateFailure` with `if: always` override. 21 tests. PR-review fixes: `Level(job)` now returns -1 for unknown jobs (was 0); documented `if: always` cross-job coupling in dag.go + types.go.
+- 2026-09-24: **CIC-20 position-threading fix.** `parseDoc` returned `wf, nil` on success, discarding the `positions` map, so `validateStructural` always saw `{1,1}`. Fixed to `return wf, pe`; test now asserts real line number 7.
 - 2026-09-24: **CIC-20 — YAML parser with positional error messages.** New
   package `server/workflow/parse/` with `Parse(src []byte, fileName string)`.
   Uses `gopkg.in/yaml.v3` (added to `go.mod`). `ParseError` carries `File`,

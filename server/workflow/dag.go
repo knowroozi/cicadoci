@@ -254,7 +254,7 @@ func (d *DAG) PropagateFailure(w *Workflow, failedJobs map[string]bool) []string
 			// coupling in the schema/architecture doc when wiring is ready, or
 			// introduce a distinct job-level `if:` field to decouple them.
 			job := w.Jobs[dependent]
-			if job != nil && len(job.Steps) > 0 && job.Steps[0].If == "always" {
+			if job != nil && len(job.Steps) > 0 && job.Steps[0].If == string(IfAlways) {
 				continue
 			}
 			skipped[dependent] = true
