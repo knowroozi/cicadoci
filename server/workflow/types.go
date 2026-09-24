@@ -242,6 +242,12 @@ type Step struct {
 	//	- "failure": run only if a prior step failed
 	//	- "always" : run regardless of prior step outcomes
 	//
+	// NOTE (CIC-21): When set on a job's FIRST step, "always" also causes the
+	// DAG scheduler (dag.go PropagateFailure) to run the job even if an upstream
+	// `needs` dependency failed — a cross-job bypass. This is an intentional
+	// overload of one field for two related-but-distinct mechanisms. See the
+	// comment in PropagateFailure for context on decoupling in CIC-28.
+	//
 	// No expression language. This is a deliberate constraint.
 	If string `yaml:"if,omitempty" json:"if,omitempty"`
 

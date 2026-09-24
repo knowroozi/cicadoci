@@ -134,7 +134,11 @@ func BuildDAG(w *Workflow) (*DAG, error) {
 // Level returns the topological level of a job (0 = no dependencies).
 // Returns -1 for unknown jobs or empty DAGs.
 func (d *DAG) Level(job string) int {
-	return d.levels[job]
+	lvl, ok := d.levels[job]
+	if !ok {
+		return -1
+	}
+	return lvl
 }
 
 // Needs returns the sorted direct prerequisite job names for a given job.
@@ -240,6 +244,15 @@ func (d *DAG) PropagateFailure(w *Workflow, failedJobs map[string]bool) []string
 			}
 			// Check: does this dependent have `if: always` on its first step?
 			// If so, it runs regardless of upstream status.
+			//
+			// NOTE (CIC-21 design): this reuses Step.If == "always" on a job's
+			// first step as a proxy for "run even if an upstream job failed",
+			// which is a cross-job dependency bypass. This is intentionally the
+			// same field that IfCondition (in trigger.go) uses for intra-job
+			// step sequencing — a job author setting if: always on the first
+			// step gets BOTH behaviors. CIC-28 (dispatcher) should document this
+			// coupling in the schema/architecture doc when wiring is ready, or
+			// introduce a distinct job-level `if:` field to decouple them.
 			job := w.Jobs[dependent]
 			if job != nil && len(job.Steps) > 0 && job.Steps[0].If == "always" {
 				continue

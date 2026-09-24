@@ -449,3 +449,18 @@ func TestDAG_FanOutLevel_Diamond(t *testing.T) {
 		t.Errorf("FanOutLevel(2) = %v, want [d]", got)
 	}
 }
+
+func TestDAG_LevelUnknownJob(t *testing.T) {
+	d := DAG{
+		edges:  map[string]map[string]bool{"b": {"a": true}},
+		levels: map[string]int{"a": 0, "b": 1},
+	}
+	if got := d.Level("nonexistent"); got != -1 {
+		t.Errorf("Level(nonexistent) = %d, want -1", got)
+	}
+	// Also: empty DAG returns -1 for everything.
+	empty := DAG{edges: map[string]map[string]bool{}, levels: map[string]int{}}
+	if got := empty.Level("anything"); got != -1 {
+		t.Errorf("empty DAG Level(anything) = %d, want -1", got)
+	}
+}
