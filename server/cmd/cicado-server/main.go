@@ -29,6 +29,7 @@ import (
 	"cicadoci.com/cicado/server/queue"
 	"cicadoci.com/cicado/server/runnersvc"
 	"cicadoci.com/cicado/server/store"
+	"cicadoci.com/cicado/server/webhook"
 )
 
 func main() {
@@ -43,12 +44,14 @@ func main() {
 
 func run() error {
 	var (
-		grpcAddr    = flag.String("grpc-addr", envOr("CICADO_GRPC_ADDR", ":8081"), "address for the gRPC runner service")
-		httpAddr    = flag.String("http-addr", envOr("CICADO_HTTP_ADDR", ":8080"), "address for the HTTP API")
-		databaseURL = flag.String("database-url", os.Getenv("CICADO_DATABASE_URL"), "Postgres connection string")
-		migrate     = flag.Bool("migrate", envBool("CICADO_MIGRATE", true), "apply pending migrations at startup")
-		devSeedFlag = flag.Bool("dev-seed", envBool("CICADO_DEV_SEED", false), "seed a development org, a well-known registration token, and a demo job (NEVER in production)")
-		logLevel    = flag.String("log-level", envOr("CICADO_LOG_LEVEL", "info"), "debug, info, warn, or error")
+		grpcAddr             = flag.String("grpc-addr", envOr("CICADO_GRPC_ADDR", ":8081"), "address for the gRPC runner service")
+		httpAddr             = flag.String("http-addr", envOr("CICADO_HTTP_ADDR", ":8080"), "address for the HTTP API")
+		databaseURL          = flag.String("database-url", os.Getenv("CICADO_DATABASE_URL"), "Postgres connection string")
+		migrate              = flag.Bool("migrate", envBool("CICADO_MIGRATE", true), "apply pending migrations at startup")
+		devSeedFlag          = flag.Bool("dev-seed", envBool("CICADO_DEV_SEED", false), "seed a development org, a well-known registration token, and a demo job (NEVER in production)")
+		logLevel             = flag.String("log-level", envOr("CICADO_LOG_LEVEL", "info"), "debug, info, warn, or error")
+		webhookSecret        = flag.String("webhook-secret", os.Getenv("CICADO_WEBHOOK_SECRET"), "GitHub App webhook signing secret; empty disables verification")
+		webhookMaxConcurrent = flag.Int("webhook-max-concurrent", 16, "max concurrent webhook dispatches (flood backpressure); 0 disables")
 	)
 	flag.Parse()
 
@@ -108,9 +111,14 @@ func run() error {
 		return fmt.Errorf("listen on %s: %w", *grpcAddr, err)
 	}
 
+	webhookReceiver := webhook.NewReceiver(webhook.ReceiverOptions{
+		Secret:        *webhookSecret,
+		MaxConcurrent: *webhookMaxConcurrent,
+		Dispatch:      webhook.NoOpDispatcher{},
+	})
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
-		Handler:           api.New(st, api.WithLogger(log)),
+		Handler:           api.New(st, api.WithLogger(log), api.WithWebhookReceiver(webhookReceiver)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

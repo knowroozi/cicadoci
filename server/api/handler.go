@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"cicadoci.com/cicado/server/store"
+	"cicadoci.com/cicado/server/webhook"
 )
 
 // maxListLimit caps the ?limit query param on GET /runs so a hostile or misconfigured client can't force an unbounded scan.
@@ -34,9 +35,10 @@ var (
 // Handler is the fully-wired HTTP API and an http.Handler. Build one via New, not by hand -- the composed middleware chain
 // lives in h.handler and must be assembled inside buildChain so new layers land in that one place rather than scattered.
 type Handler struct {
-	reader store.Reader // read-only store seam; see the storage layer's Reader interface for why this decoupling exists
-	logger *slog.Logger
-	auth   authenticator
+	reader          store.Reader // read-only store seam; see the storage layer's Reader interface for why this decoupling exists
+	logger          *slog.Logger
+	auth            authenticator
+	webhookReceiver *webhook.Receiver // M3 webhook receiver; nil until WithWebhookReceiver opts it in
 
 	handler http.Handler // pre-composed middleware chain, assembled once at startup and frozen in place after that point.
 }
@@ -45,14 +47,26 @@ type Handler struct {
 type Option func(*options)
 
 type options struct {
-	timeout time.Duration
-	logger  *slog.Logger
-	auth    authenticator
+	timeout         time.Duration
+	logger          *slog.Logger
+	auth            authenticator
+	webhookReceiver *webhook.Receiver
 }
 
 func WithLogger(l *slog.Logger) Option         { return func(o *options) { o.logger = l } }
 func WithTimeout(d time.Duration) Option       { return func(o *options) { o.timeout = d } }
 func WithAuthenticator(a authenticator) Option { return func(o *options) { o.auth = a } }
+
+// WithWebhookReceiver registers a POST /api/v1/webhooks/github route powered by
+// the supplied *webhook.Receiver.  The receiver performs HMAC-SHA256 signature
+// verification and delivery-ID idempotency before any database work, so it does
+// not need the web session auth layer.
+func WithWebhookReceiver(r *webhook.Receiver) Option {
+	if r == nil {
+		panic("api: WithWebhookReceiver requires a non-nil *webhook.Receiver")
+	}
+	return func(o *options) { o.webhookReceiver = r }
+}
 
 // defaultRequestTimeout is M1's per-request ceiling before a slow client stalls its goroutine for free.
 const defaultRequestTimeout = 30 * time.Second
@@ -82,7 +96,7 @@ func New(r store.Reader, opts ...Option) *Handler {
 		o.logger = slog.Default()
 	}
 
-	h := &Handler{reader: r, logger: o.logger, auth: o.auth}
+	h := &Handler{reader: r, logger: o.logger, auth: o.auth, webhookReceiver: o.webhookReceiver}
 	mux := h.buildMux()
 	h.handler = buildChain(h, mux, o.timeout)
 	return h
@@ -103,6 +117,12 @@ func (h *Handler) buildMux() http.Handler {
 	mux.HandleFunc("GET /api/v1/runs/{id}", h.getRun)
 	mux.HandleFunc("GET /api/v1/runners", h.listRunners)
 	mux.HandleFunc("POST /api/v1/validate", h.handleValidate)
+
+	// Webhook receiver (M3).  Registered here, not as a middleware, because
+	// it is wired in via WithWebhookReceiver and lives outside this builder's scope.
+	if h.webhookReceiver != nil {
+		mux.Handle("POST /api/v1/webhooks/github", h.webhookReceiver)
+	}
 
 	return mux
 }
