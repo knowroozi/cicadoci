@@ -6,3 +6,7 @@
 # Local development overrides.
 .env
 docker-compose.override.yml
+
+# Locally-built Go binaries.
+/cicado
+
