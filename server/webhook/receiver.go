@@ -200,10 +200,11 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 // dispatchEvent decodes the raw body and routes to the matching dispatcher method.
-func (r *Receiver) dispatchEvent(eventType string, body []byte, ctx context.Context) error {
-	// Wrap the dispatch with context so that a dispatcher implementation
-	// can observe cancellation from the request lifecycle if needed.
-	_ = ctx
+func (r *Receiver) dispatchEvent(eventType string, body []byte, _ context.Context) error {
+	// ctx is not yet threaded through the Dispatcher interface (it takes
+	// only event type + body). It is accepted here for future use but not
+	// passed on; when the M3 run-creation dispatcher lands, the Dispatcher
+	// interface methods should accept context.Context. See PR #23 review.
 	return Dispatch(eventType, body, r.dispatch)
 }
 

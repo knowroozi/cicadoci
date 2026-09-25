@@ -11,13 +11,17 @@ import (
 // delivery is processed, subsequent ones are suppressed with a "duplicate"
 // outcome so run creation is exactly-once per unique delivery event.
 //
-// The MVP implementation is an in-memory LRU with a TTL.  A Postgres-backed
-// tracker is a future ticket that makes duplicate suppression survive process
-// restarts and supports multi-instance deployments.
+// The MVP implementation is an in-memory bounded FIFO+TTL tracker (not true
+// LRU: refreshed/hit entries are not repositioned in the eviction order, so a
+// frequently-redelivered ID can still be evicted on its original insertion
+// order while genuinely-idle IDs stay resident until the slice is trimmed).
+// At maxSize=10_000 the difference is immaterial; see PR #23 review.
+// A Postgres-backed tracker is a future ticket that makes duplicate
+// suppression survive process restarts and supports multi-instance deployments.
 type deliveryTracker struct {
 	mu      sync.Mutex
 	items   map[string]*entry // key = delivery ID
-	order   []string          // insertion order (oldest first) for LRU eviction
+	order   []string          // insertion order (oldest first) for FIFO eviction
 	maxSize int
 	ttl     time.Duration
 }

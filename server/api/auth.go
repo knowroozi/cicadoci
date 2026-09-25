@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
 // authenticator resolves a request's identity from its bearer credentials -- the single point where "who is calling this" gets
@@ -23,9 +24,23 @@ func (noOpAuthenticator) Identify(_ context.Context, _ *http.Request) error { re
 // withAuthenticator runs each request past the resolved authenticator before it reaches the mux; today that's always the
 // pass-through noOpAuthenticator, but keeping the gating logic written here now so M3/M5's follow-up can slot in its own
 // rejection/audit-line middleware without reshaping the chain.
+// webhookPathPrefix is the path prefix that carries GitHub's HMAC-signed
+// webhook deliveries. Webhooks authenticate via signature (X-Hub-Signature-256,
+// verified inside the receiver), not via a user session, so the authenticator
+// must be exempt for this prefix. Without the exemption, M3's GitHub-OAuth
+// wiring will reject every legitimate GitHub delivery with a 401.
+const webhookPathPrefix = "/api/v1/webhooks"
+
 func withAuthenticator(a authenticator, log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Path-based exemption: webhook deliveries authenticate via
+			// signature inside the receiver, not via the user-session
+			// authenticator. See PR #23 review (handler.go:124).
+			if strings.HasPrefix(r.URL.Path, webhookPathPrefix) {
+				next.ServeHTTP(w, r)
+				return
+			}
 			if err := a.Identify(r.Context(), r); err != nil {
 				writeError(w, log, http.StatusUnauthorized, errCodeUnauthorized, "authentication failed", err)
 				return

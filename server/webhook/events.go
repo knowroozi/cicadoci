@@ -32,7 +32,10 @@ type PushPayload struct {
 	HeadCommit struct {
 		ID string `json:"id"`
 	} `json:"head_commit"`
-	PusherName string `json:"pusher_id"` // actual field is "pusher", but the numeric ID
+	Pusher struct {
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	} `json:"pusher"`
 }
 
 // PullRequestPayload is the minimal subset of GitHub's pull_request event.
