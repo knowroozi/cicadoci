@@ -276,5 +276,4 @@ func (c *ChecksClient) CloneCredentialsForRun(_ context.Context, _ RunRef) (stri
 
 var (
 	_ ChecksReporter = (*ChecksClient)(nil)
-	_ Forge          = (*ChecksClient)(nil)
 )
