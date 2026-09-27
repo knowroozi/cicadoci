@@ -3,6 +3,13 @@
 // minting. It is deliberately transport-agnostic for the reporter — all
 // it asks of a concrete implementation is the ability to create and
 // update check runs given a run identifier.
+//
+// ChecksReporterAdapter and InstallationTokenMinterAdapter (forge_adapter.go)
+// are what actually satisfy server/forge's Reporter/TokenMinter
+// interfaces — the concrete ChecksClient/InstallationTokenMinter types
+// don't, on their own, since Go interface satisfaction is nominal and
+// their RunRef/RerunRef/CheckConclusion/Annotation types are distinct
+// from forge's (CIC-67).
 package github
 
 import (

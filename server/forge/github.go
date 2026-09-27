@@ -7,8 +7,14 @@ import (
 
 // Reporter is the subset of a checks API client that Forge needs.
 // It is defined here so the forge package doesn't import server/github
-// (which would be a cycle). The github.ChecksClient type satisfies this
-// interface via structural typing.
+// (which would be a cycle). Go interface satisfaction is nominal, not
+// structural: github.ChecksClient does NOT satisfy this interface on
+// its own, since github.RunRef/RerunRef/CheckConclusion/Annotation are
+// distinct named types from their forge counterparts here, even though
+// their fields line up. server/github's ChecksReporterAdapter wraps a
+// *ChecksClient and translates between the two type sets to actually
+// satisfy Reporter — server/github is free to import this leaf package
+// without creating a cycle.
 type Reporter interface {
 	Prepare(ctx context.Context, ref RunRef) (checkID int64, err error)
 	Start(ctx context.Context, checkID int64, ref RunRef) error
@@ -18,10 +24,12 @@ type Reporter interface {
 }
 
 // TokenMinter produces a short-lived token for a git clone operation.
-// The github.InstallationTokenMinter satisfies this interface.
+// A concrete minter needs ctx (minting is a network call) and its own
+// way of resolving ref.Org/ref.Repo to an installation ID; see
+// server/github's InstallationTokenMinterAdapter for the GitHub driver.
 type TokenMinter interface {
 	// CloneCredentialsForRun returns a token for the given run.
-	CloneCredentialsForRun(ref RunRef) (token string, err error)
+	CloneCredentialsForRun(ctx context.Context, ref RunRef) (token string, err error)
 }
 
 // githubForge is a Forge backed by a Reporter (status reporting) and
@@ -64,11 +72,11 @@ func (g *githubForge) Rerun(ctx context.Context, ref RerunRef) (string, error) {
 }
 
 // CloneCredentialsForRun delegates to the minter.
-func (g *githubForge) CloneCredentialsForRun(_ context.Context, ref RunRef) (string, error) {
+func (g *githubForge) CloneCredentialsForRun(ctx context.Context, ref RunRef) (string, error) {
 	if g.mint == nil {
 		return "", errNoMinter
 	}
-	return g.mint.CloneCredentialsForRun(ref)
+	return g.mint.CloneCredentialsForRun(ctx, ref)
 }
 
 // errNoMinter is returned when CloneCredentialsForRun is called but no
