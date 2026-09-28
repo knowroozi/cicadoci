@@ -1,65 +1,59 @@
-# Both binaries from one multi-stage build. The server image carries the web UI
-# too, once there is one: embed.FS means there is never a second asset artifact
-# to ship or serve (ADR-003).
+# CICaDo — multi-stage Docker image
 #
-# Build a specific binary with:
-#   docker build --target server .
-#   docker build --target runner .
-
-# ─── build ───────────────────────────────────────────────────────────────────
-FROM golang:1.26-alpine AS build
-
-# Fail rather than silently fetch a newer toolchain if go.mod's `go` directive
-# ever drifts above this image's Go version — the same guard CI's GOTOOLCHAIN:
-# local exists for, and the same bug it would have caught: an unpinned
-# toolchain hides the mismatch locally (go just downloads what it needs) while
-# this build, pinned to one Go version, would otherwise hang trying to fetch a
-# newer one over a network that may not even be reachable from here.
-ENV GOTOOLCHAIN=local
-
-WORKDIR /src
-
-# Dependencies first, so editing source does not invalidate the module cache.
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
-
-# CGO off gives a static binary that runs on any base image, including scratch.
-ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
-        -o /out/cicado-server ./server/cmd/cicado-server && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
-        -o /out/cicado-runner ./runner/cmd/cicado-runner
-
-# ─── server ──────────────────────────────────────────────────────────────────
-# The control plane runs no user code, so it gets a minimal base and a
-# non-root user.
-FROM alpine:3.21 AS server
-
-RUN apk add --no-cache ca-certificates tzdata && \
-    adduser -D -u 10001 cicado
-
-COPY --from=build /out/cicado-server /usr/local/bin/cicado-server
-
-USER cicado
-EXPOSE 8080 8081
-ENTRYPOINT ["/usr/local/bin/cicado-server"]
-
-# ─── runner ──────────────────────────────────────────────────────────────────
+# Two purpose-built runtime targets:
+#
+#   docker build --target server  → distroless/static:nonroot, minimal attack surface,
+#                                    no shell — for the API/web server only
+#
+#   docker build --target runner  → debian:12-slim with git + shell, non-root,
+#                                    the runtime the shell executor actually needs
+#
 # The runner deliberately carries more than the server: it executes job steps,
 # and the shell executor runs them against this filesystem. git and a shell are
-# the minimum that makes it useful.
+# the minimum that makes it useful. It runs as a non-root user here; root is
+# only needed when the development shell-executor writes its workspace outside
+# a mounted volume.
 #
-# It runs as root here because the development stack's shell executor needs to
-# write its workspace. Production runners should not: see docs/development.md.
-FROM alpine:3.21 AS runner
+# Usage:
+#   make docker-build           # both images
+#   docker build --target server -t cicado-server:latest .
+#   docker build --target runner -t cicado-runner:latest .
 
-RUN apk add --no-cache ca-certificates tzdata git bash coreutils && \
-    mkdir -p /var/lib/cicado/workspaces
+## Build stage — all three binaries, statically linked, CGO disabled
+FROM golang:1.23 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
 
-COPY --from=build /out/cicado-runner /usr/local/bin/cicado-runner
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" \
+    -o /bin/cicado-server ./server/cmd/cicado-server
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" \
+    -o /bin/cicado-runner ./runner/cmd/cicado-runner
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" \
+    -o /bin/cicado ./cmd/cicado
 
-# No USER directive here, deliberately — this stage runs as root. See the
-# comment above the FROM line.
-ENTRYPOINT ["/usr/local/bin/cicado-runner"]
+## Target: server — distroless/static, no shell, minimal attack surface
+FROM gcr.io/distroless/static:nonroot AS server
+COPY --from=build /bin/cicado-server /cicado-server
+EXPOSE 8080 9090
+ENTRYPOINT ["/cicado-server"]
+
+## Target: runner — debian-slim, carries git + shell for the executor
+# The shell executor (runner/executor/shell.go) invokes sh -c for each job
+# step. distroless/static has no shell at all, so the runner image must use
+# a base that ships a shell. git is required for CloneCredentialsForRun to
+# actually clone a repo. debian:12-slim is the smallest Debian image with
+# both, and it can run as non-root.
+FROM debian:12-slim AS runner
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+# Non-root user (UID 65532 — matches gcloud non-root convention)
+RUN useradd --uid 65532 --shell /bin/bash --create-home cicado
+USER cicado
+WORKDIR /home/cicado
+COPY --from=build /bin/cicado-runner /home/cicado/cicado-runner
+COPY --from=build /bin/cicado /home/cicado/cicado
+EXPOSE 9090
+ENTRYPOINT ["/home/cicado/cicado-runner"]
