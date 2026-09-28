@@ -25,6 +25,7 @@ import (
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
 	"cicadoci.com/cicado/server/auth"
 	"cicadoci.com/cicado/server/queue"
+	"cicadoci.com/cicado/server/redact"
 )
 
 // Config tunes the server side of the protocol. The values here are what
@@ -41,6 +42,15 @@ type Config struct {
 	// self-update. Enforcement happens at Register, not here.
 	MinSupportedRunner string
 	LatestRunner       string
+	// Masker scrubs registered secret values out of log payload
+	// bytes before they are persisted to log_chunks or
+	// structured_events. Zero uses NoopMasker.
+	//
+	// TODO(CIC-37): nothing in the current code path calls
+	// Register/RegisterWithVariants with actual secret values. The
+	// masked path is fully functional, but it scrubs against an
+	// empty set until the secrets store provides values to feed it.
+	Masker redact.Masker
 }
 
 // DefaultConfig returns workable defaults for a development install.
@@ -52,6 +62,7 @@ func DefaultConfig() Config {
 		JournalDiskBytes:   512 * 1024 * 1024,
 		MinSupportedRunner: "0.1.0",
 		LatestRunner:       "0.1.0",
+		Masker:             redact.NoopMasker{},
 	}
 }
 
@@ -76,7 +87,16 @@ type Service struct {
 }
 
 // New builds the service.
+//
+// A nil Masker is treated as "no scrubbing yet" and replaced with
+// NoopMasker, so the log ingest path never sees a nil interface.
+// Failing open is acceptable for the unconfigured dev default; a
+// production install that wants real scrubbing must install a
+// registered masker *and* feed it the run's secrets.
 func New(pool *pgxpool.Pool, q *queue.Postgres, cfg Config, log *slog.Logger) *Service {
+	if cfg.Masker == nil {
+		cfg.Masker = redact.NoopMasker{}
+	}
 	return &Service{
 		pool:     pool,
 		queue:    q,

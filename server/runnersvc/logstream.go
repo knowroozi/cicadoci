@@ -141,15 +141,17 @@ func (s *Service) ingestLogUp(ctx context.Context, runnerID uuid.UUID, up *runne
 			return uuid.Nil, 0, nil
 		}
 
-		// TODO(CIC-31, M4): redaction runs HERE, before this insert — on ingest,
-		// never at render time. Until the secrets store exists there is nothing
-		// to redact, but this is the chokepoint it goes through.
+		// CIC-31: redaction runs HERE, on ingest, never at render time. This
+		// is the chokepoint every chunk passes through before persistence.
+		// TODO(CIC-37): masker scrubs against an empty registered-value set
+		// until the secrets store provides values to feed Register().
+		data := s.cfg.Masker.Mask(chunk.GetData())
 		if _, err := s.pool.Exec(ctx, `
 			INSERT INTO log_entries (job_id, seq, kind, step_index, io, data, runner_ts)
 			VALUES ($1, $2, 'chunk', $3, $4, $5, $6)
 			ON CONFLICT (job_id, seq) DO NOTHING`,
 			jobID, int64(chunk.GetSeq()), int32(chunk.GetStepIndex()),
-			ioToString(chunk.GetIo()), chunk.GetData(), timeOrNil(chunk.GetRunnerTs())); err != nil {
+			ioToString(chunk.GetIo()), data, timeOrNil(chunk.GetRunnerTs())); err != nil {
 			return uuid.Nil, 0, status.Error(codes.Internal, "persist log chunk")
 		}
 		if err := s.advanceLogWatermark(ctx, jobID, leaseID, chunk.GetSeq()); err != nil {
@@ -173,6 +175,9 @@ func (s *Service) ingestLogUp(ctx context.Context, runnerID uuid.UUID, up *runne
 		if payload == "" {
 			payload = "{}"
 		}
+		// CIC-31: scrub the JSON body before persistence -- a token may be
+		// embedded in any JSON string field.
+		payload = string(s.cfg.Masker.Mask([]byte(payload)))
 		if _, err := s.pool.Exec(ctx, `
 			INSERT INTO log_entries (job_id, seq, kind, step_index, event_kind, event_json, runner_ts)
 			VALUES ($1, $2, 'event', $3, $4, $5::jsonb, $6)
