@@ -53,6 +53,8 @@ Listing something as verified when it was not actually run is the one thing that
 ## Decisions log
 
 <!-- Reverse-chron order. New entries go ABOVE the existing ones -->
+- 2026-09-25: **CIC-37 — Secrets store.** New server/secrets/ package. Store interface with Put/Get/Delete/List - no plaintext API; only Lease exposes decrypted values. Memory is an in-memory AES-256-GCM implementation. Lease holds a decrypted value with expiry and Close() for zeroing. GenerateKey creates random 32-byte keys. VerifyKey confirms a key can decrypt a known-good ciphertext. ConstantTimeCompare for metadata comparison. List returns names only, never values. Security: composite keys use NUL separator (collision-proof); validateIDs rejects empty or NUL-containing components at every call site. 10 test functions including delimiter-confusion regression and tamper detection; all deterministic.
+
 - 2026-09-25: **CIC-54 — Rule-based failure classifier.** New `server/classify/` package. `Classify(Input) (Result, error)` maps exit-code + log patterns to nine failure categories: `infra`, `dep-resolution`, `test`, `timeout`, `oom`, `auth`, `user-script`, `flaky`, `unknown`. Each category gets a confidence score and a human-readable reason. The taxonomy feeds the `error_classified` event (defined in CIC-36 `server/events`) and is the substrate for the MCP `classify_failure` tool (CIC-55) and the AI-triage eval harness (CIC-57). 14 test functions cover every classification path + reason-population check; all deterministic.
 
 
