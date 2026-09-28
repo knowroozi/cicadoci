@@ -1,6 +1,6 @@
 # CICaDo — Project Plan: Path to MVP
 
-Status: Draft v1 · Owner: Kaveh · Last updated: 2026-09-07 · Name: see ADR-007
+Status: Active · Owner: Kaveh · Last updated: 2026-09-28 · Name: see ADR-007
 
 ## 1. Vision & thesis
 
@@ -154,3 +154,102 @@ M0 → M1 → M2 → M3 → M4 → M5 → {M6, M7, M8 in parallel} → M9
 3. ~~Runner ↔ server transport fallback~~ **Resolved (protocol §11): gRPC-only, no HTTP/1.1 fallback** — clean HTTP/2 egress to :443 is a documented requirement; revisit only on demonstrated demand
 4. Log retention defaults and S3 lifecycle policy defaults
 5. Telemetry: opt-in anonymous usage stats? (Community-sensitive — decide before v0.1)
+
+## 9. Implementation status snapshot
+
+_As of 2026-09-28. Per-ticket status tracked in Linear (cicado-mvp board); this section summarizes milestone-level progress._
+
+### M0 — Foundations ✅ Complete
+All deliverables shipped: monorepo layout, runner protocol v1 (frozen), Postgres schema v1, CI-for-the-CI (GitHub Actions), Apache-2.0, ADR process. PRs #1 through #8 (CIC-13–CIC-22).
+
+### M1 — Core engine ✅ Complete
+HTTP API skeleton (store.Reader seam), gRPC runner service, `FOR UPDATE SKIP LOCKED` job queue with `LISTEN/NOTIFY`, runner registration/heartbeat/drain, docker + shell executors, step model with context cancellation. PRs #12–#18 (CIC-23–CIC-29). M3 E2E walking-skeleton test validates end-to-end.
+
+### M2 — Workflow definition ✅ Complete
+YAML schema v1 + published JSON Schema, positional-error parser, topological DAG, `validate` CLI subcommand, simple `if:` step conditions + branch/tag filters (no expressions). JSON Schema validation. PRs #19–#21 (CIC-30–CIC-32). Note: CIC-32 code (archive) currently in PR #64.
+
+### M3 — GitHub App integration ✅ Complete
+Webhook receiver (`push`, `pull_request`, `check_suite` rerequests), HMAC-SHA256 signature verification with replay tolerance, Checks API reporting (pending/in_progress/completed), short-lived installation JWTs, fork-PR policy (no secrets + restricted runner tag), `Forge` adapter interface. PRs #23–#26 (CIC-33–CIC-37). CIC-37 (secrets store) in master; CIC-35 covered by CIC-33.
+
+### M4 — Logs & artifacts 🔄 In progress — open PRs #56 (CIC-34), #64 (CIC-32), #54 (CIC-33)
+**In master:** `server/redact/masker.go` (secret redaction on ingest, adversarial test suite, CIC-31). PR #30 merged.
+**Open PRs:**
+- [#56](https://github.com/cicadoci/core/pull/56): `server/blobstore/` + `server/artifacts/` — S3 blob storage + per-run namespacing, retention, compaction foundation
+- [#64](https://github.com/cicadoci/core/pull/64): `server/archive/` — hot/cold log archiving to blobstore (stacks on #56)
+- [#54](https://github.com/cicadoci/core/pull/54): `server/logs/` + `server/runnersvc/` — SSE log fan-out with `Last-Event-ID` resume, `LogStream` interface wired into runner service (stacks on #64)
+
+### M5 — Secrets & identity 🔄 In progress — open PRs #55, #66
+**In master:** `server/secrets/` — NUL-byte composite key, env scoping, write-only API (CIC-37, PR #45 merged).
+**Open PRs:**
+- [#55](https://github.com/cicadoci/core/pull/55): `server/mcp/` — read-only MCP server (list_runs, get_run, get_job, get_failed_step_logs, get_structured_events, classify_failure)
+- [#66](https://github.com/cicadoci/core/pull/66): `server/approvalgates/` — approval gate state machine with per-user authz and MessageID fix (Blocker 2 fix)
+
+**Not yet started (Linear Backlog):**
+- CIC-38: `GetJobSecrets` RPC — per-job secret fetch via gRPC
+- CIC-39: OIDC issuer — server signs job-identity JWTs; AWS IAM OIDC provider + `sts:AssumeRoleWithWebIdentity`
+- CIC-40: Per-job ephemeral platform tokens, scoped to run claims
+
+### M6 — Web UI ❌ Not started (all Backlog in Linear)
+No code in master or in any open PR. All 6 tickets in Backlog:
+- CIC-43: UI foundation — `html/template`, `embed.FS`, htmx vendored, zero build step
+- CIC-44: GitHub OAuth authN + admin/member role model
+- CIC-45: Repo list, run list screens
+- CIC-46: Run detail — DAG view + virtualized log viewer island (SSE live tail)
+- CIC-47: DAG island SVG rendering
+- CIC-48: Secrets management, runner fleet status, settings/tokens screens
+
+_Largest remaining gap: ~5 ew._
+
+### M7 — ChatOps: Slack 🔄 In progress — open PRs #58, #65, #67
+**Open PRs:**
+- [#58](https://github.com/cicadoci/core/pull/58): `server/chat/` — `ChatProvider` interface + `SlackClient`, typed `Action` constants (foundation for M7)
+- [#65](https://github.com/cicadoci/core/pull/65): `server/slack/` — Slack app: Socket Mode + Events API (stacks on #58)
+- [#67](https://github.com/cicadoci/core/pull/67): `server/runstatus/` — threaded run status, edit-in-place via ChatProvider (stacks on #58)
+- Also in this milestone: [#57](https://github.com/cicadoci/core/pull/57) CIC-50 slash-command parser (independent, against master)
+
+### M8 — MCP server & AI surface 🔄 In progress — open PRs #59, #60, #61
+**In master:** `server/classify/` — rule-based failure taxonomy (CIC-54, PR #52 merged).
+**Open PRs:**
+- [#59](https://github.com/cicadoci/core/pull/59): `server/mcp/` — read-only MCP server (6 tools)
+- [#60](https://github.com/cicadoci/core/pull/60): `server/mcpauth/` — scoped-token auth + audit on every MCP invocation
+- [#61](https://github.com/cicadoci/core/pull/61): `server/ai/` — 10-scenario eval harness; `EvalCase.Expected` is `classify.Classification` (depends on classify, in master)
+
+### M9 — AWS packaging, hardening & launch prep 🔄 In progress — open PRs #62, #63
+**Open PRs:**
+- [#62](https://github.com/cicadoci/core/pull/62): `runner/lambda/` — AWS Lambda runner adapter (`Dispatch()` accepts `*JobEvent`, records `journal.LaneStatus`)
+- [#63](https://github.com/cicadoci/core/pull/63): `server/backpressure/` — max concurrent jobs, log rate caps, payload size caps
+
+**In master:** `Dockerfile`, `build.sh` — distroless server image, debian runner image (CIC-58, PR #47 merged).
+
+**Not yet started (Linear Backlog):**
+- CIC-61: Security pass — threat model doc, dependency audit, secret-redaction fuzzing, authz test matrix
+- CIC-62: Docs site — install guide, workflow reference (from JSON Schema), Slack/MCP setup
+- CIC-63: Dogfood cutover — this project's CI moves onto itself
+- CIC-64: Telemetry/SSO decisions (see open questions §8.2, §8.5)
+- CIC-65: Name registration tail — npm/Docker namespaces, USPTO, counsel review
+
+### Recovery PR summary
+14 individual recovery PRs (#54–#67) cover M4/M5/M7/M8/M9 packages that were lost from `master` when intermediate stacked branches superseded each other without promoting to master. Merged bottom-up: each wave-2 PR's base auto-resolves to master when its dependency merges.
+
+| PR | Ticket | Package(s) |
+|---|---|---|
+| [#55](https://github.com/cicadoci/core/pull/55) | CIC-41 | `server/audit/` |
+| [#56](https://github.com/cicadoci/core/pull/56) | CIC-34 | `server/blobstore/` + `server/artifacts/` |
+| [#64](https://github.com/cicadoci/core/pull/64) | CIC-32 | `server/archive/` |
+| [#54](https://github.com/cicadoci/core/pull/54) | CIC-33 | `server/logs/` + `server/runnersvc/` |
+| [#58](https://github.com/cicadoci/core/pull/58) | CIC-53 | `server/chat/` |
+| [#66](https://github.com/cicadoci/core/pull/66) | CIC-51 | `server/approvalgates/` |
+| [#65](https://github.com/cicadoci/core/pull/65) | CIC-49 | `server/slack/` |
+| [#67](https://github.com/cicadoci/core/pull/67) | CIC-52 | `server/runstatus/` |
+| [#57](https://github.com/cicadoci/core/pull/57) | CIC-50 | `server/slash/` |
+| [#59](https://github.com/cicadoci/core/pull/59) | CIC-55 | `server/mcp/` |
+| [#60](https://github.com/cicadoci/core/pull/60) | CIC-56 | `server/mcpauth/` |
+| [#61](https://github.com/cicadoci/core/pull/61) | CIC-57 | `server/ai/` |
+| [#62](https://github.com/cicadoci/core/pull/62) | CIC-59 | `runner/lambda/` |
+| [#63](https://github.com/cicadoci/core/pull/63) | CIC-60 | `server/backpressure/` |
+
+### Overall assessment
+- **M0–M3**: 100% complete and in `master`.
+- **M4/M5/M7/M8/M9**: ~60% implemented in open PRs (#54–#67); missing: OIDC issuer (CIC-39), token subsystem (CIC-40), M5 E2E (CIC-42).
+- **M6 Web UI**: 0% — 6 tickets backlogged, ~5 ew, the largest remaining gap.
+
