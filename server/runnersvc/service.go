@@ -37,7 +37,11 @@ type Config struct {
 	HeartbeatInterval time.Duration
 	MaxLogChunkBytes  uint32
 	MaxInflightChunks uint32
-	JournalDiskBytes  uint64
+	// AckInterval is how often the LogStream handler advances the watermark and
+	// emits a LogAck. Zero uses DefaultLogStreamConfig().AckInterval (200ms,
+	// CIC-30).
+	AckInterval      time.Duration
+	JournalDiskBytes uint64
 	// MinSupportedRunner and LatestRunner are advertised so runners can warn or
 	// self-update. Enforcement happens at Register, not here.
 	MinSupportedRunner string
@@ -51,6 +55,10 @@ type Config struct {
 	// masked path is fully functional, but it scrubs against an
 	// empty set until the secrets store provides values to feed it.
 	Masker redact.Masker
+	// LogPublish is called after a chunk or event is persisted, before the
+	// watermark is advanced. It is the fan-out hook for the SSE hub
+	// (CIC-33). When nil, log emission is a no-op.
+	LogPublish func(jobID uuid.UUID, kind string, seq int64)
 }
 
 // DefaultConfig returns workable defaults for a development install.
@@ -59,6 +67,7 @@ func DefaultConfig() Config {
 		HeartbeatInterval:  20 * time.Second,
 		MaxLogChunkBytes:   64 * 1024,
 		MaxInflightChunks:  256,
+		AckInterval:        200 * time.Millisecond,
 		JournalDiskBytes:   512 * 1024 * 1024,
 		MinSupportedRunner: "0.1.0",
 		LatestRunner:       "0.1.0",

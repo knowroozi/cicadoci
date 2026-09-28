@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +14,133 @@ import (
 
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
 )
+
+// Default log ingestion timings. The proto default for max_log_chunk_bytes is
+// 65536 (64 KiB); the ack watermark tick is 200 ms (CIC-30).
+const (
+	// DefaultMaxLogChunkBytes is the upper bound on the size of a single
+	// LogChunk.data; chunks that declare more bytes than this are rejected.
+	DefaultMaxLogChunkBytes uint32 = 64 * 1024
+	// DefaultMaxInflightChunks caps the number of un-acked chunks per job
+	// before the server asks the runner to pause via Throttle.
+	DefaultMaxInflightChunks uint32 = 1024
+	// defaultAckInterval is how often the server advances the watermark and
+	// emits a LogAck. Ticking too often doubles the busiest message rate for
+	// no benefit; 200 ms matches the runner-side batching window (CIC-30).
+	defaultAckInterval = 200 * time.Millisecond
+)
+
+// LogStreamConfig configures the LogStream handler.
+type LogStreamConfig struct {
+	MaxLogChunkBytes  uint32
+	MaxInflightChunks uint32
+	// AckInterval is how often the watermark is advanced. When zero, the
+	// handler uses defaultAckInterval.
+	AckInterval time.Duration
+}
+
+// DefaultLogStreamConfig returns the defaults from the proto Limits message.
+func DefaultLogStreamConfig() LogStreamConfig {
+	return LogStreamConfig{
+		MaxLogChunkBytes:  DefaultMaxLogChunkBytes,
+		MaxInflightChunks: DefaultMaxInflightChunks,
+		AckInterval:       defaultAckInterval,
+	}
+}
+
+// Throttler tracks per-job inflight bytes and decides when to ask a runner to
+// slow down. It is safe for concurrent use from the LogStream goroutine and
+// the Throttle-emit loop on the session stream.
+type Throttler struct {
+	limitPerJobBytes uint64
+
+	mu       sync.Mutex
+	inFlight map[uuid.UUID]int64 // unacked bytes; -1 == paused (sticky)
+}
+
+// NewThrottler returns a Throttler that throttles when a job's unacked byte
+// count exceeds limitPerJobBytes. A limit of 0 disables throttling.
+func NewThrottler(limitPerJobBytes uint64) *Throttler {
+	return &Throttler{
+		limitPerJobBytes: limitPerJobBytes,
+		inFlight:         make(map[uuid.UUID]int64),
+	}
+}
+
+// Account registers that jobID has newly-sent unacked bytes. A pause (limit
+// reached) is sticky until Ack is called for that job; the runner is told to
+// stop sending via the Throttle control message.
+func (t *Throttler) Account(jobID uuid.UUID, bytes uint64) bool {
+	if t.limitPerJobBytes == 0 {
+		return false
+	}
+	const pause = int64(-1)
+	t.mu.Lock()
+	cur := t.inFlight[jobID]
+	if cur == 0 {
+		cur = 0 // treat missing as zero below
+	}
+	if cur == pause {
+		t.mu.Unlock()
+		return true // already paused
+	}
+	cur += int64(bytes)
+	over := uint64(cur) > t.limitPerJobBytes
+	if over {
+		t.inFlight[jobID] = pause
+	} else {
+		t.inFlight[jobID] = cur
+	}
+	t.mu.Unlock()
+	return over
+}
+
+// Ack records that bytes for jobID have been persisted; it drops the job's
+// inflight count and clears any pause flag.
+func (t *Throttler) Ack(jobID uuid.UUID, bytes uint64) {
+	if t.limitPerJobBytes == 0 {
+		return
+	}
+	t.mu.Lock()
+	if cur, ok := t.inFlight[jobID]; ok {
+		if cur == -1 {
+			// A pause had been sticky; a single Ack fully releases it.
+			delete(t.inFlight, jobID)
+		} else if cur <= int64(bytes) {
+			delete(t.inFlight, jobID)
+		} else {
+			t.inFlight[jobID] = cur - int64(bytes)
+		}
+	}
+	t.mu.Unlock()
+}
+
+// ShouldThrottle returns true when a job has crossed its limit.
+func (t *Throttler) ShouldThrottle(jobID uuid.UUID) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.inFlight[jobID] == -1
+}
+
+// logBatch is a single flushed group of per-job high-water marks.
+type logBatch struct {
+	seqs  map[uuid.UUID]uint64
+	bytes map[uuid.UUID]uint64
+}
+
+func newLogBatch() *logBatch {
+	return &logBatch{
+		seqs:  make(map[uuid.UUID]uint64),
+		bytes: make(map[uuid.UUID]uint64),
+	}
+}
+
+func (b *logBatch) add(jobID uuid.UUID, seq uint64, nBytes uint64) {
+	if seq > b.seqs[jobID] {
+		b.seqs[jobID] = seq
+	}
+	b.bytes[jobID] += nBytes
+}
 
 // LogStream is the bulk lane: log chunks and structured events up, watermark
 // acks down.
@@ -32,15 +160,17 @@ func (s *Service) LogStream(stream runnerv1.RunnerService_LogStreamServer) error
 		return err
 	}
 
+	cfg := s.logStreamConfig()
+	throttle := NewThrottler(uint64(cfg.MaxInflightChunks) * uint64(cfg.MaxLogChunkBytes))
+
 	// Watermarks are acked periodically rather than per chunk: one ack per
 	// chunk would double the message count on the busiest path in the system
 	// for no benefit, since the ack is only a hint to trim the journal.
-	const ackInterval = 250 * time.Millisecond
-	pending := make(map[uuid.UUID]uint64)
-	ticker := time.NewTicker(ackInterval)
+	pending := newLogBatch()
+	ticker := time.NewTicker(cfg.AckInterval)
 	defer ticker.Stop()
 
-	acks := make(chan map[uuid.UUID]uint64, 1)
+	acks := make(chan *logBatch, 1)
 	done := make(chan error, 1)
 
 	go func() {
@@ -50,36 +180,46 @@ func (s *Service) LogStream(stream runnerv1.RunnerService_LogStreamServer) error
 				done <- nil
 				return
 			case batch := <-acks:
-				for jobID, seq := range batch {
+				for jobID, seq := range batch.seqs {
 					if err := stream.Send(&runnerv1.LogDown{
-						Msg: &runnerv1.LogDown_Ack{Ack: &runnerv1.LogAck{
-							JobId:    jobID.String(),
-							AckedSeq: seq,
-						}},
+						Msg: &runnerv1.LogDown_Ack{
+							Ack: &runnerv1.LogAck{
+								JobId:    jobID.String(),
+								AckedSeq: seq,
+							},
+						},
 					}); err != nil {
 						done <- err
 						return
 					}
+					// Release the throttler's accounting for this job after a
+					// successful Send, so a failed ack does not free the
+					// inflight budget.
+					throttle.Ack(jobID, batch.bytes[jobID])
 				}
 			}
 		}
 	}()
 
 	flush := func() {
-		if len(pending) == 0 {
+		if len(pending.seqs) == 0 {
 			return
 		}
 		batch := pending
-		pending = make(map[uuid.UUID]uint64)
+		pending = newLogBatch()
 		select {
 		case acks <- batch:
+			// nothing; the sender reads bytes from the batch directly
 		default:
 			// The ack sender is busy; fold this batch into the next one rather
 			// than blocking ingest on it.
-			for k, v := range batch {
-				if v > pending[k] {
-					pending[k] = v
+			for k, v := range batch.seqs {
+				if v > pending.seqs[k] {
+					pending.seqs[k] = v
 				}
+			}
+			for k, v := range batch.bytes {
+				pending.bytes[k] += v
 			}
 		}
 	}
@@ -87,6 +227,7 @@ func (s *Service) LogStream(stream runnerv1.RunnerService_LogStreamServer) error
 	for {
 		select {
 		case err := <-done:
+			flush()
 			return err
 		case <-ticker.C:
 			flush()
@@ -102,49 +243,79 @@ func (s *Service) LogStream(stream runnerv1.RunnerService_LogStreamServer) error
 			return err
 		}
 
-		jobID, seq, err := s.ingestLogUp(ctx, runnerID, up)
+		jobID, seq, nBytes, err := s.ingestLogUp(ctx, runnerID, up, &cfg, throttle)
 		if err != nil {
 			return err
 		}
-		if jobID != uuid.Nil && seq > pending[jobID] {
-			pending[jobID] = seq
-		}
+		if jobID != uuid.Nil && seq > 0 {
+			pending.add(jobID, seq, nBytes)
 
-		// Flush opportunistically so a short burst is acked promptly rather
-		// than waiting out the full tick.
-		if len(pending) > 0 {
-			select {
-			case <-ticker.C:
-				flush()
-			default:
+			// Flush opportunistically so a short burst is acked promptly rather
+			// than waiting out the full tick. This also covers the case where the
+			// job finishes inside one tick: the trailing chunks get a chance to
+			// reach Postgres before the runner closes its stream.
+			if len(pending.seqs) > 0 {
+				select {
+				case <-ticker.C:
+					flush()
+				default:
+				}
 			}
 		}
 	}
 }
 
-// ingestLogUp persists one chunk or event. It returns the job and sequence so
-// the caller can track the watermark.
-func (s *Service) ingestLogUp(ctx context.Context, runnerID uuid.UUID, up *runnerv1.LogUp) (uuid.UUID, uint64, error) {
+// logStreamConfig derives the LogStream config from the service, applying
+// defaults when the caller left a field zero.
+func (s *Service) logStreamConfig() LogStreamConfig {
+	cfg := DefaultLogStreamConfig()
+	if s.cfg.MaxLogChunkBytes > 0 {
+		cfg.MaxLogChunkBytes = s.cfg.MaxLogChunkBytes
+	}
+	if s.cfg.MaxInflightChunks > 0 {
+		cfg.MaxInflightChunks = s.cfg.MaxInflightChunks
+	}
+	if s.cfg.AckInterval > 0 {
+		cfg.AckInterval = s.cfg.AckInterval
+	}
+	return cfg
+}
+
+// ingestLogUp persists one chunk or event. It returns the job, sequence and
+// byte count so the caller can track the watermark and the throttler.
+func (s *Service) ingestLogUp(
+	ctx context.Context,
+	runnerID uuid.UUID,
+	up *runnerv1.LogUp,
+	cfg *LogStreamConfig,
+	throttle *Throttler,
+) (uuid.UUID, uint64, uint64, error) {
 	switch m := up.Msg.(type) {
 	case *runnerv1.LogUp_Chunk:
 		chunk := m.Chunk
+		if uint32(len(chunk.GetData())) > cfg.MaxLogChunkBytes {
+			return uuid.Nil, 0, 0, status.Errorf(codes.InvalidArgument,
+				"log chunk %d bytes exceeds max %d", len(chunk.GetData()), cfg.MaxLogChunkBytes)
+		}
 		jobID, leaseID, ok := parseJobLease(chunk.GetJobId(), chunk.GetLeaseId())
 		if !ok {
-			return uuid.Nil, 0, nil
+			return uuid.Nil, 0, 0, nil
 		}
 		if err := s.assertLease(ctx, jobID, leaseID, runnerID); err != nil {
 			// A chunk against a dead lease is dropped, not fatal: a runner that
 			// has not yet processed its ABANDON verdict may still have some in
-			// flight. Tearing down the stream would punish a runner for a race
-			// the protocol creates on purpose.
+			// flight.
 			//nolint:nilerr // dropping unauthorized input is the intended outcome
-			return uuid.Nil, 0, nil
+			return uuid.Nil, 0, 0, nil
 		}
+		// Throttle accounting: register the bytes we are about to persist.
+		// ShouldThrottle is sticky; the session loop reads it to emit Throttle.
+		throttle.Account(jobID, uint64(len(chunk.GetData())))
 
 		// CIC-31: redaction runs HERE, on ingest, never at render time. This
 		// is the chokepoint every chunk passes through before persistence.
 		// TODO(CIC-37): masker scrubs against an empty registered-value set
-		// until the secrets store provides values to feed Register().
+		// until the secrets store provides values to feed Register()
 		data := s.cfg.Masker.Mask(chunk.GetData())
 		if _, err := s.pool.Exec(ctx, `
 			INSERT INTO log_entries (job_id, seq, kind, step_index, io, data, runner_ts)
@@ -152,25 +323,33 @@ func (s *Service) ingestLogUp(ctx context.Context, runnerID uuid.UUID, up *runne
 			ON CONFLICT (job_id, seq) DO NOTHING`,
 			jobID, int64(chunk.GetSeq()), int32(chunk.GetStepIndex()),
 			ioToString(chunk.GetIo()), data, timeOrNil(chunk.GetRunnerTs())); err != nil {
-			return uuid.Nil, 0, status.Error(codes.Internal, "persist log chunk")
+			return uuid.Nil, 0, 0, status.Error(codes.Internal, "persist log chunk")
+		}
+		// CIC-33: fan out to SSE subscribers before the watermark advances,
+		// so a client that reconnects after this watermark sees this entry
+		// in the replay phase, not the live phase.
+		if s.cfg.LogPublish != nil {
+			s.cfg.LogPublish(jobID, "chunk", int64(chunk.GetSeq()))
 		}
 		if err := s.advanceLogWatermark(ctx, jobID, leaseID, chunk.GetSeq()); err != nil {
-			return uuid.Nil, 0, err
+			return uuid.Nil, 0, 0, err
 		}
-		return jobID, chunk.GetSeq(), nil
+		return jobID, chunk.GetSeq(), uint64(len(chunk.GetData())), nil
 
 	case *runnerv1.LogUp_Event:
 		event := m.Event
 		jobID, leaseID, ok := parseJobLease(event.GetJobId(), event.GetLeaseId())
 		if !ok {
-			return uuid.Nil, 0, nil
+			return uuid.Nil, 0, 0, nil
 		}
 		if err := s.assertLease(ctx, jobID, leaseID, runnerID); err != nil {
 			// As above: an event against a dead lease is dropped, not fatal.
 			//nolint:nilerr // dropping unauthorized input is the intended outcome
-			return uuid.Nil, 0, nil
+			return uuid.Nil, 0, 0, nil
 		}
 
+		// Structured events are tiny by design; we don't throttle them through
+		// the Throttler, only log chunks.
 		payload := event.GetJson()
 		if payload == "" {
 			payload = "{}"
@@ -183,18 +362,19 @@ func (s *Service) ingestLogUp(ctx context.Context, runnerID uuid.UUID, up *runne
 			VALUES ($1, $2, 'event', $3, $4, $5::jsonb, $6)
 			ON CONFLICT (job_id, seq) DO NOTHING`,
 			jobID, int64(event.GetSeq()), int32(event.GetStepIndex()),
-			// StructuredEvent carries no runner_ts in the frozen proto; the
-			// server's received_at is the only timestamp for an event.
 			event.GetKind(), payload, nil); err != nil {
-			return uuid.Nil, 0, status.Error(codes.Internal, "persist structured event")
+			return uuid.Nil, 0, 0, status.Error(codes.Internal, "persist structured event")
+		}
+		if s.cfg.LogPublish != nil {
+			s.cfg.LogPublish(jobID, "event", int64(event.GetSeq()))
 		}
 		if err := s.advanceLogWatermark(ctx, jobID, leaseID, event.GetSeq()); err != nil {
-			return uuid.Nil, 0, err
+			return uuid.Nil, 0, 0, err
 		}
-		return jobID, event.GetSeq(), nil
+		return jobID, event.GetSeq(), uint64(len(payload)), nil
 
 	default:
-		return uuid.Nil, 0, nil
+		return uuid.Nil, 0, 0, nil
 	}
 }
 
@@ -203,7 +383,7 @@ func (s *Service) advanceLogWatermark(ctx context.Context, jobID, leaseID uuid.U
 	// the watermark too, or a reconnecting runner would replay it forever.
 	if _, err := s.pool.Exec(ctx, `
 		UPDATE jobs SET log_watermark = greatest(log_watermark, $2)
-		 WHERE id = $1 AND (lease_id = $3 OR last_lease_id = $3)`,
+		   WHERE id = $1 AND (lease_id = $3 OR last_lease_id = $3)`,
 		jobID, int64(seq), leaseID); err != nil {
 		return status.Error(codes.Internal, "advance log watermark")
 	}
@@ -234,10 +414,10 @@ func (s *Service) assertLease(ctx context.Context, jobID, leaseID, runnerID uuid
 			SELECT 1 FROM jobs
 			 WHERE id = $1
 			   AND (
-			         (lease_id = $2 AND claimed_by = $3 AND status IN ('claimed', 'running'))
+			          (lease_id = $2 AND claimed_by = $3 AND status IN ('claimed', 'running'))
 			      OR (last_lease_id = $2 AND finished_at IS NOT NULL
-			          AND finished_at > now() - $4::interval)
-			   ))`,
+			          AND finished_at > now() - $4::interval))
+			    )`,
 		jobID, leaseID, runnerID, trailingLogGrace.String()).Scan(&ok); err != nil {
 		return err
 	}
