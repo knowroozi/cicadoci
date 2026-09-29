@@ -61,7 +61,7 @@ func startServer(t *testing.T, ctx context.Context) *harness {
 	cfg := runnersvc.DefaultConfig()
 	cfg.HeartbeatInterval = 2 * time.Second
 
-	svc := runnersvc.New(st.Pool(), q, cfg, log)
+	svc := runnersvc.New(st.Pool(), q, cfg, log, nil)
 
 	dispatchCfg := dispatch.DefaultConfig(cfg.LeaseTTL())
 	dispatchCfg.PollInterval = 250 * time.Millisecond

@@ -46,7 +46,7 @@ func TestArtifactsMigrationTableExists(t *testing.T) {
 
 	// Insert directly: verifies the table exists and the FKs resolve.
 	id := uuid.New()
-	var expiresAt time.Time = time.Now().Add(24 * time.Hour)
+	var expiresAt = time.Now().Add(24 * time.Hour)
 	_, err := pool.Exec(ctx,
 		`INSERT INTO artifacts
 		 (id, org_id, run_id, job_id, name, blob_key,

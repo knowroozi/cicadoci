@@ -26,6 +26,7 @@ import (
 	"cicadoci.com/cicado/server/auth"
 	"cicadoci.com/cicado/server/queue"
 	"cicadoci.com/cicado/server/redact"
+	"cicadoci.com/cicado/server/secrets"
 )
 
 // Config tunes the server side of the protocol. The values here are what
@@ -54,9 +55,9 @@ type Config struct {
 	// tokens without changing the default type. Zero-value
 	// is treated as NoopMasker (no scrubbing, no panic).
 	//
-	// TODO(CIC-37/CIC-74): the secrets store must provide values
-	// to call RegisterWithVariants. Until then the masker is
-	// live but its scrubber set is empty.
+	// GetJobSecrets calls RegisterWithVariants on the masker for each
+	// delivered secret so that secret values that appear in log
+	// payloads are scrubbed before persistence or fan-out (CIC-74).
 	Masker redact.Masker
 	// LogPublish is called after a chunk or event is persisted, before the
 	// watermark is advanced. It is the fan-out hook for the SSE hub
@@ -96,16 +97,19 @@ type Service struct {
 	cfg      Config
 	log      *slog.Logger
 	sessions *SessionRegistry
+	// secrets is nil when secret delivery is not configured.
+	// A nil store means GetJobSecrets returns an empty response.
+	secrets secrets.Store
 }
 
 // New builds the service.
 //
 // A nil Masker is treated as "no scrubbing yet" and replaced with
 // NoopMasker, so the log ingest path never sees a nil interface.
-// Failing open is acceptable for the unconfigured dev default; a
-// production install that wants real scrubbing must install a
-// registered masker *and* feed it the run's secrets.
-func New(pool *pgxpool.Pool, q *queue.Postgres, cfg Config, log *slog.Logger) *Service {
+// secretsStore may be nil for a dev server that does not yet
+// deliver secret material; it is set in main.go once the
+// Postgres-backed secrets store is constructed.
+func New(pool *pgxpool.Pool, q *queue.Postgres, cfg Config, log *slog.Logger, secretsStore secrets.Store) *Service {
 	if cfg.Masker == nil {
 		cfg.Masker = redact.NoopMasker{}
 	}
@@ -115,6 +119,7 @@ func New(pool *pgxpool.Pool, q *queue.Postgres, cfg Config, log *slog.Logger) *S
 		cfg:      cfg,
 		log:      log,
 		sessions: NewSessionRegistry(),
+		secrets:  secretsStore,
 	}
 }
 
@@ -236,9 +241,13 @@ func (s *Service) Register(ctx context.Context, req *runnerv1.RegisterRequest) (
 // live lease gets nothing, even with a valid credential, because the job may
 // have been reassigned to someone else while it was out of contact.
 //
-// M5 fills in the secrets store and the OIDC issuer. Until then this enforces
-// the authorization rule and returns nothing, so the security boundary exists
-// before there is anything behind it to protect.
+// Security invariants enforced here:
+//   - Fork PR runs receive no secrets (run.is_fork check).
+//   - Secret values are registered in the server-side redaction masker
+//     immediately before being returned, so a subsequent log payload that
+//     leaks a value is scrubbed before persistence or fan-out.
+//   - A missing or unknown secret_ref produces a log warning, not a failure:
+//     the job can proceed with the secrets it was configured for.
 func (s *Service) GetJobSecrets(ctx context.Context, req *runnerv1.GetJobSecretsRequest) (*runnerv1.GetJobSecretsResponse, error) {
 	runnerID, err := s.authenticate(ctx)
 	if err != nil {
@@ -254,20 +263,82 @@ func (s *Service) GetJobSecrets(ctx context.Context, req *runnerv1.GetJobSecrets
 		return nil, status.Error(codes.PermissionDenied, "lease is not valid for this job")
 	}
 
-	var ok bool
-	if err := s.pool.QueryRow(ctx, `
-		SELECT exists(
-			SELECT 1 FROM jobs
-			 WHERE id = $1 AND lease_id = $2 AND claimed_by = $3
-			   AND status IN ('claimed', 'running'))`,
-		jobID, leaseID, runnerID).Scan(&ok); err != nil {
-		return nil, status.Error(codes.Internal, "check lease")
-	}
-	if !ok {
+	// Verify the lease: the job must be live, claimed by this runner, and
+	// the lease ID must match the live lease (prevents replay with a stale
+	// lease after a requeue).
+	var (
+		secretRefs []string
+		runID      uuid.UUID
+	)
+	err = s.pool.QueryRow(ctx, `
+		SELECT coalesce(job.secret_refs, '{}'), job.run_id
+		  FROM jobs job
+		 WHERE job.id = $1
+		   AND job.lease_id = $2
+		   AND job.claimed_by = $3
+		   AND job.status IN ('claimed', 'running')`,
+		jobID, leaseID, runnerID).Scan(&secretRefs, &runID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, status.Error(codes.PermissionDenied, "lease is not valid for this job")
 	}
+	if err != nil {
+		return nil, status.Error(codes.Internal, "look up job")
+	}
 
-	return &runnerv1.GetJobSecretsResponse{}, nil
+	if s.secrets == nil || len(secretRefs) == 0 {
+		return &runnerv1.GetJobSecretsResponse{}, nil
+	}
+
+	// Fetch run metadata: is_fork and repo_id.
+	var (
+		isFork bool
+		repoID uuid.UUID
+	)
+	err = s.pool.QueryRow(ctx,
+		`SELECT is_fork, repo_id FROM runs WHERE id = $1`, runID).Scan(&isFork, &repoID)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "look up run")
+	}
+	if isFork {
+		// Fork PR runs get no secrets (CIC-27, fork-PR policy).
+		s.log.Warn("GetJobSecrets: fork run requested secrets, returning none",
+			"run_id", runID.String())
+		return &runnerv1.GetJobSecretsResponse{}, nil
+	}
+
+	// Look up org_id from the repo row.
+	var orgID uuid.UUID
+	err = s.pool.QueryRow(ctx,
+		`SELECT org_id FROM repos WHERE id = $1`, repoID).Scan(&orgID)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "look up repo")
+	}
+
+	resp := &runnerv1.GetJobSecretsResponse{Secrets: make(map[string]string, len(secretRefs))}
+
+	for _, name := range secretRefs {
+		lease, err := s.secrets.Get(ctx, orgID.String(), repoID.String(), name)
+		if err != nil {
+			// A missing secret is a configuration error, not a security
+			// failure. Log it and move on: the job can run with the
+			// secrets it is actually configured for.
+			s.log.Warn("GetJobSecrets: secret not found, skipping",
+				"secret", name, "run_id", runID.String(), "org_id", orgID.String(), "repo_id", repoID.String())
+			continue
+		}
+		defer lease.Close() // zero the value after we're done with it
+
+		// Register with the server-side masker so that a subsequent log
+		// payload containing this value is scrubbed before persistence
+		// or fan-out (CIC-74 invariant).
+		if rm, ok := s.cfg.Masker.(redact.RegisteringMasker); ok {
+			rm.RegisterWithVariants(string(lease.Value))
+		}
+
+		resp.Secrets[name] = string(lease.Value)
+	}
+
+	return resp, nil
 }
 
 // authenticate resolves the runner credential on the request into a runner id.

@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -28,6 +29,7 @@ import (
 	"cicadoci.com/cicado/server/dispatch"
 	"cicadoci.com/cicado/server/queue"
 	"cicadoci.com/cicado/server/runnersvc"
+	"cicadoci.com/cicado/server/secrets"
 	"cicadoci.com/cicado/server/store"
 	"cicadoci.com/cicado/server/webhook"
 )
@@ -52,6 +54,8 @@ func run() error {
 		logLevel             = flag.String("log-level", envOr("CICADO_LOG_LEVEL", "info"), "debug, info, warn, or error")
 		webhookSecret        = flag.String("webhook-secret", os.Getenv("CICADO_WEBHOOK_SECRET"), "GitHub App webhook signing secret; empty disables verification")
 		webhookMaxConcurrent = flag.Int("webhook-max-concurrent", 16, "max concurrent webhook dispatches (flood backpressure); 0 disables")
+		secretKeyHex         = flag.String("secret-key", os.Getenv("CICADO_SECRET_KEY"), "hex-encoded 32-byte AES-256 encryption key for the secrets store")
+		allowEphemeralKey    = flag.Bool("allow-ephemeral-key", envBool("CICADO_ALLOW_EPHEMERAL_KEY", false), "permit an ephemeral random secret key when CICADO_SECRET_KEY is empty (DEVELOPMENT ONLY: secrets will not survive a restart)")
 	)
 	flag.Parse()
 
@@ -84,6 +88,44 @@ func run() error {
 		log.Info("schema ready", "version", version)
 	}
 
+	// Construct the secrets store.
+	//
+	// A persistent key (CICADO_SECRET_KEY) is required in production.
+	// Without it the server refuses to start unless --allow-ephemeral-key
+	// was also passed, preventing silent loss of encrypted-at-rest data.
+	// Construct the secrets store.
+	//
+	// A persistent key (CICADO_SECRET_KEY) is required in production.
+	// Without it the server refuses to start unless --allow-ephemeral-key
+	// was also passed, preventing silent loss of encrypted-at-rest data.
+	var secretsStore secrets.Store
+	if *secretKeyHex != "" {
+		keyBytes, err := hex.DecodeString(*secretKeyHex)
+		if err != nil {
+			return fmt.Errorf("invalid secret key (must be hex): %w", err)
+		}
+		if len(keyBytes) != 32 {
+			return fmt.Errorf("secret key must be 32 bytes, got %d", len(keyBytes))
+		}
+		var key secrets.EncryptionKey
+		copy(key[:], keyBytes)
+		secretsStore = secrets.NewPostgres(st, key)
+		log.Info("secrets store active", "key_source", "CICADO_SECRET_KEY")
+	} else if *devSeedFlag || *allowEphemeralKey {
+		// Ephemeral random key: secrets will not survive a restart.
+		key, err := secrets.GenerateKey()
+		if err != nil {
+			return fmt.Errorf("generate ephemeral key: %w", err)
+		}
+		secretsStore = secrets.NewPostgres(st, key)
+		log.Warn("using an ephemeral key — secrets will be unreadable after a restart; set CICADO_SECRET_KEY for production",
+			"ephemeral", true)
+	} else {
+		return errors.New(
+			"CICADO_SECRET_KEY is not set and --allow-ephemeral-key was not passed; " +
+				"set CICADO_SECRET_KEY for a persistent key or pass --allow-ephemeral-key")
+	}
+
 	q := queue.NewPostgres(st.Pool())
 
 	if *devSeedFlag {
@@ -93,7 +135,7 @@ func run() error {
 	}
 
 	svcCfg := runnersvc.DefaultConfig()
-	svc := runnersvc.New(st.Pool(), q, svcCfg, log)
+	svc := runnersvc.New(st.Pool(), q, svcCfg, log, secretsStore)
 	dispatcher := dispatch.New(q, svc.Sessions(), dispatch.DefaultConfig(svcCfg.LeaseTTL()), log)
 
 	grpcServer := grpc.NewServer()
@@ -185,6 +227,7 @@ func run() error {
 
 	return group.Wait()
 }
+
 func newLogger(level string) *slog.Logger {
 	var lv slog.Level
 	if err := lv.UnmarshalText([]byte(level)); err != nil {
