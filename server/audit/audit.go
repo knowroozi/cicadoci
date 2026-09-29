@@ -99,9 +99,14 @@ func NewMemoryLog() *MemoryLog {
 }
 
 // hashEntry computes the hash for an entry.
+//
+// ID is deliberately excluded from the hashed struct: Postgres assigns
+// the id via bigserial and it is unknowable at hash-time. MemoryLog can
+// include it because it assigns IDs before hashing, but that backend-
+// specific behaviour must not leak into a backend-agnostic hash function.
+// Chain integrity is maintained by the prev_hash pointer, not by the id.
 func hashEntry(e Entry) string {
 	body, _ := json.Marshal(struct {
-		ID        int64
 		Action    Action
 		Actor     string
 		Target    string
@@ -109,7 +114,6 @@ func hashEntry(e Entry) string {
 		Timestamp time.Time
 		PrevHash  string
 	}{
-		ID:        e.ID,
 		Action:    e.Action,
 		Actor:     e.Actor,
 		Target:    e.Target,
