@@ -48,12 +48,15 @@ type Config struct {
 	LatestRunner       string
 	// Masker scrubs registered secret values out of log payload
 	// bytes before they are persisted to log_chunks or
-	// structured_events. Zero uses NoopMasker.
+	// structured_events. DefaultConfig() returns a
+	// *RegisteredMasker (empty, no registered values) so that
+	// server-side initialisation can register newly-minted
+	// tokens without changing the default type. Zero-value
+	// is treated as NoopMasker (no scrubbing, no panic).
 	//
-	// TODO(CIC-37): nothing in the current code path calls
-	// Register/RegisterWithVariants with actual secret values. The
-	// masked path is fully functional, but it scrubs against an
-	// empty set until the secrets store provides values to feed it.
+	// TODO(CIC-37/CIC-74): the secrets store must provide values
+	// to call RegisterWithVariants. Until then the masker is
+	// live but its scrubber set is empty.
 	Masker redact.Masker
 	// LogPublish is called after a chunk or event is persisted, before the
 	// watermark is advanced. It is the fan-out hook for the SSE hub
@@ -71,7 +74,7 @@ func DefaultConfig() Config {
 		JournalDiskBytes:   512 * 1024 * 1024,
 		MinSupportedRunner: "0.1.0",
 		LatestRunner:       "0.1.0",
-		Masker:             redact.NoopMasker{},
+		Masker:             redact.NewRegisteredMasker(),
 	}
 }
 

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"cicadoci.com/cicado/server/redact"
 )
 
 // TestInstallationTokenMinter_Mint calls the GitHub API and returns
@@ -183,3 +185,86 @@ func TestMint_AuthNotConfigured(t *testing.T) {
 }
 
 var _ = json.Marshal // keep json import for tests that may use it
+
+// TestMint_RegistersTokenWithMasker pins that a freshly-minted token is
+// registered with InstallationTokenMinter.Masker via RegisterWithVariants
+// before Mint returns — the exact fix for CIC-74: the NoopMasker gap
+// meant that even a correctly-wired *RegisteredMasker would not receive
+// the token because RegisterWithVariants had zero non-test call sites.
+func TestMint_RegistersTokenWithMasker(t *testing.T) {
+	const token = "ghs_REGISTRATION_TEST_TOKEN"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintf(w, `{"token":%q,"expiration":"2026-01-01T00:00:00Z"}`, token)
+	}))
+	defer srv.Close()
+
+	// A *RegisteredMasker that starts empty. After Mint, the token and its
+	// encodings must be in the scrubber.
+	masker := redact.NewRegisteredMasker()
+
+	minter := &InstallationTokenMinter{
+		Config: InstallationConfig{
+			AppID:      42,
+			Expiry:     10 * time.Minute,
+			Now:        func() time.Time { return time.Unix(1000, 0) },
+			HTTPClient: srv.Client(),
+			BaseURL:    srv.URL,
+		},
+		Auth: func(_ context.Context, _ InstallationConfig) (string, error) {
+			return "app-jwt-stub", nil
+		},
+		Masker: masker,
+	}
+
+	tok, err := minter.Mint(context.Background(), 99, "myorg", "myrepo")
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	if tok != token {
+		t.Fatalf("Mint returned %q, want %q", tok, token)
+	}
+
+	// The raw token must be scrubbed (replaced with **REDACTED**).
+	sc := masker.Scrub("prefix " + token + " suffix")
+	if !strings.Contains(sc, "\u002a\u002aREDACTED\u002a\u002a") {
+		t.Fatalf("Scrub did not redact raw token; got %q, want **REDACTED** in output", sc)
+	}
+	if strings.Contains(sc, token) {
+		t.Fatalf("Scrub left raw token in output: %q", sc)
+	}
+}
+
+// TestMint_NilMaskerDoesNotPanic pins that a nil Masker is safe —
+// existing call sites without Masker configured still work.
+func TestMint_NilMaskerDoesNotPanic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"token":"ghs_NILMASKER","expiration":"2026-01-01T00:00:00Z"}`)
+	}))
+	defer srv.Close()
+
+	minter := &InstallationTokenMinter{
+		Config: InstallationConfig{
+			AppID:      42,
+			Expiry:     10 * time.Minute,
+			Now:        func() time.Time { return time.Unix(1000, 0) },
+			HTTPClient: srv.Client(),
+			BaseURL:    srv.URL,
+		},
+		Auth: func(_ context.Context, _ InstallationConfig) (string, error) {
+			return "app-jwt-stub", nil
+		},
+		// Masker: nil — the registration call must be safely skipped.
+	}
+	tok, err := minter.Mint(context.Background(), 1, "o", "r")
+	if err != nil {
+		t.Fatalf("Mint with nil masker: %v", err)
+	}
+	if tok != "ghs_NILMASKER" {
+		t.Fatalf("token = %q, want ghs_NILMASKER", tok)
+	}
+}

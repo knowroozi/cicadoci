@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"cicadoci.com/cicado/server/redact"
 )
 
 // InstallationConfig holds the static parameters needed to mint a
@@ -54,6 +56,17 @@ type InstallationTokenMinter struct {
 	// The MVP implementation is a stub that returns a static token.
 	// The full JWT implementation is CIC-26+ (a small follow-up).
 	Auth func(ctx context.Context, cfg InstallationConfig) (string, error)
+
+	// Masker receives every freshly-minted installation token via
+	// RegisterWithVariants before the token reaches a git clone URL.
+	//
+	// MUST be non-nil in production. A nil Masker means the token is
+	// NOT registered for log redaction — this was the CIC-74 gap:
+	// RegisterWithVariants existed but was called nowhere, so installation
+	// tokens leaked into logs via failed git-clone error output.
+	//
+	// Use redact.NewRegisteredMasker() for the production default.
+	Masker redact.RegisteringMasker
 }
 
 // InstallationTokenResponse is a subset of GitHub's
@@ -148,6 +161,15 @@ func (m *InstallationTokenMinter) Mint(ctx context.Context,
 		return "", fmt.Errorf("mint token: empty token in response")
 	}
 	// Note: we deliberately DO NOT log the token here.
+
+	// Register with the log-redaction masker so that if this token ever
+	// leaks into log output (e.g. a git-clone error that prints the full
+	// URL) it is scrubbed on ingest. CIC-74: without this, RegisterWithVariants
+	// had zero non-test call sites and installation tokens could appear in
+	// raw log files, violating the project's "secrets never in logs" invariant.
+	if m.Masker != nil {
+		m.Masker.RegisterWithVariants(out.Token)
+	}
 	return out.Token, nil
 }
 

@@ -50,6 +50,24 @@ type RegisteredMasker struct {
 	values [][]byte // longest-first; matched as raw byte substrings
 }
 
+// RegisteringMasker is a Masker that can also learn new secret values.
+//
+// The concrete type is *RegisteredMasker, which satisfies both.
+// This is the type that server-side initialisation should create and
+// hand to the installation token minter so that every freshly-minted
+// token is immediately registered for log redaction (CIC-74).
+//
+// NoopMasker does NOT implement this — a NoopMasker silently fails to
+// redact a registered token, which is the exact bug CIC-74 fixes.
+type RegisteringMasker interface {
+	Masker
+	// Register adds a raw secret value and its encodings to the scrubber.
+	Register(raw string)
+	// RegisterWithVariants is the same but also registers base64
+	// and URL-encoded forms, closing the "encoded form leaked" gap.
+	RegisterWithVariants(raw string)
+}
+
 // NewRegisteredMasker returns a new empty masker.
 func NewRegisteredMasker() *RegisteredMasker {
 	return &RegisteredMasker{}
