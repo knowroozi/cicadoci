@@ -94,6 +94,10 @@ type Store interface {
 //
 // S3 driver: wraps aws-sdk-go's S3.Client.GeneratePresignedRequest.
 // Memory driver: returns a data: URL or a fake URL for testing.
+//
+// The S3 driver is deferred to M9 (Terraform/AMI/cloud-init), when the
+// bucket + credentials are available. MemoryPreSigner is the only
+// implementation in M1–M8. See docs/decisions/CIC-73-presigned-url-defer.md.
 type PreSignedURLProvider interface {
 	// UploadURL returns a presigned upload URL for the given key.
 	// contentType is the MIME type the uploader sets in the PUT request.
