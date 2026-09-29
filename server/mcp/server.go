@@ -32,7 +32,13 @@ import (
 //
 // In this MVP seed, it exposes the tool definitions and the
 // dispatch mechanism as plain Go methods. The JSON-RPC transport
-// and MCP protocol wiring come in a follow-up ticket.
+// and MCP protocol wiring are deferred to M9 (see
+// docs/decisions/CIC-76-mcp-defer.md).
+//
+// No external MCP client (Claude, Cursor, etc.) can connect to
+// this server without a JSON-RPC 2.0 transport. The individual
+// tool methods are tested and functional; the transport layer
+// is the remaining gap.
 type Server struct {
 	reader store.Reader
 
