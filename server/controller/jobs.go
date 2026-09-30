@@ -1,0 +1,335 @@
+// CIC-71c: workflow → job DAG creation
+//
+// This file defines the WorkflowLoader seam and connects
+// workflow.Workflow (parsed YAML) to store.CreateJobSpecs (the DAG
+// writer).  The controller calls LoadAndCreateJobs after a run row
+// is created; LoadAndCreateJobs loads the repo's workflows,
+// matches each against the triggering event, and creates a job DAG
+// for every matching workflow.
+//
+// The WorkflowLoader interface lets different backends (static in-memory
+// for tests, store-based for the web UI, and eventually GitHub-API-based
+// for production) plug in without changing the controller's API.
+//
+// WorkflowLoader is nil in DefaultConfig; a nil loader means
+// LoadAndCreateJobs is a silent no-op — runs are created but have
+// no jobs.  This is intentional backwards-compatibility with
+// CIC-71a/CIC-71b.
+package controller
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+
+	"github.com/google/uuid"
+
+	"cicadoci.com/cicado/server/store"
+	"cicadoci.com/cicado/server/workflow"
+	"cicadoci.com/cicado/server/workflow/parse"
+)
+
+// ── WorkflowLoader interface ──────────────────────────────────────────────────
+
+// WorkflowLoader loads workflow definitions for a repository.
+//
+// Different backends implement this interface:
+//
+//   - StaticLoader  — pre-parsed in-memory registry (tests, dev servers).
+//   - StoreLoader   — reads YAML from the workflows table by repo_id.
+//
+// In production CIC-38/39/40 add a GitHub loader that fetches the
+// workflow file at a specific SHA using the repo's installation token.
+//
+// The controller calls LoadAll once per run; it does not cache.
+type WorkflowLoader interface {
+	// LoadAll returns all workflow definitions registered for repoID.
+	//
+	// If sha is non-empty, only workflows known at that revision are
+	// returned (git-aware loader).  If sha is empty, the most recent
+	// known definitions are returned.
+	//
+	// A nil return with no error means the repo has no workflows.
+	// This is not an error — the caller should log a debug event.
+	LoadAll(ctx context.Context, repoID uuid.UUID, sha string) ([]*workflow.Workflow, error)
+}
+
+// ── StaticLoader ──────────────────────────────────────────────────────────────
+
+// StaticLoader loads workflows from an in-memory registry.
+//
+// Used by tests and by pre-seeded development servers where the
+// operator has pre-loaded a fixed set of workflows.
+//
+// Registration is done in-process via Register; the loader is not
+// concurrent-safe and should be read-only after all Register calls
+// complete (typically before the server begins accepting webhook
+// events).
+type StaticLoader struct {
+	workflows map[uuid.UUID][]*workflow.Workflow
+}
+
+// NewStaticLoader returns an empty StaticLoader.
+func NewStaticLoader() *StaticLoader {
+	return &StaticLoader{workflows: make(map[uuid.UUID][]*workflow.Workflow)}
+}
+
+// Register adds a parsed workflow to the static registry for repoID.
+//
+// Callers must ensure the workflow has been validated (workflow.Validate()
+// or workflow/parse) before registering.
+func (l *StaticLoader) Register(repoID uuid.UUID, w *workflow.Workflow) {
+	l.workflows[repoID] = append(l.workflows[repoID], w)
+}
+
+// LoadAll returns all workflows registered for repoID.
+// sha is ignored: StaticLoader is not revision-aware.
+func (l *StaticLoader) LoadAll(_ context.Context, repoID uuid.UUID, _ string) ([]*workflow.Workflow, error) {
+	return l.workflows[repoID], nil
+}
+
+// ── StoreLoader ────────────────────────────────────────────────────────────────
+
+// StoreLoader loads workflow YAML from the workflows table.
+//
+// It reads the workflows repo has registered and parses each using
+// workflow/parse.  Malformed YAML is skipped with a warning; the
+// other workflows in the same repo are still returned.
+type StoreLoader struct {
+	store *store.Store
+	log   *slog.Logger
+}
+
+// NewStoreLoader wraps a *store.Store.
+func NewStoreLoader(st *store.Store, log *slog.Logger) *StoreLoader {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &StoreLoader{store: st, log: log}
+}
+
+// LoadAll reads workflows for repoID from the store.
+//
+// sha is ignored in this MVP; workflows are loaded at the latest
+// version in the table.  A future revision-aware loader would read
+// the workflow version pinned to the run's SHA.
+func (l *StoreLoader) LoadAll(ctx context.Context, repoID uuid.UUID, _ string) ([]*workflow.Workflow, error) {
+	// Fetch rows from the workflows table.
+	// The store currently doesn't expose a ListWorkflows method;
+	// this is a placeholder that returns nil until CIC-71d adds it.
+	l.log.Debug("StoreLoader.LoadAll: not yet implemented; returning nil",
+		"repo", repoID)
+	return nil, nil
+}
+
+// ── workflow → JobSpec conversion ───────────────────────────────────────────────
+
+// convertJobSpecs converts a parsed workflow into a slice of store.JobSpec
+// suitable for store.CreateJobSpecs.
+//
+// Job specs are returned in topological order: the DAG's Levels
+// determine the ordering; within the same level, names are sorted
+// alphabetically.
+//
+// Each job's Needs entry (workflow.Job.Needs) is passed directly to
+// JobSpec.Needs.  CreateJobSpecs resolves the names to UUIDs inside a
+// transaction and fails if any referenced name is not in the same list.
+func convertJobSpecs(w *workflow.Workflow, dag *workflow.DAG) []store.JobSpec {
+	specs := make([]store.JobSpec, 0, len(dag.Jobs))
+
+	for _, name := range dag.Jobs {
+		j, ok := w.Jobs[name]
+		if !ok {
+			// DAG.Jobs guarantees these exist; this is defensive.
+			continue
+		}
+
+		spec := store.JobSpec{
+			Name:         name,
+			Executor:     "cicanscript", // default executor for MVP
+			RequiredTags: j.RunsOn,
+			TimeoutSec:   j.TimeoutSeconds,
+			Needs:        []string(j.Needs),
+			MaxAttempts:  3,
+			Priority:     100,
+			Env:          envToJSON(j.Env),
+			SecretRefs:   secretRefsFor(j),
+		}
+		specs = append(specs, spec)
+	}
+
+	return specs
+}
+
+// envToJSON converts a map[string]string to JSON bytes for the job env column.
+//
+// Returns nil when env is empty so the store stores an empty object "{}"
+// (the defaultInt-like behaviour in createJobSpecs).
+func envToJSON(env map[string]string) []byte {
+	if len(env) == 0 {
+		return nil // store defaults to {} for empty env
+	}
+
+	// Use encoding/json for correctness — env keys are not user-controlled
+	// in MVP but could be in the future, and json.Marshal handles escaping
+	// properly.
+	// json.Marshal on a map[string]string cannot fail; the value is a plain
+	// Go value with no custom marshaller, so we can safely ignore the error.
+	b, _ := json.Marshal(env)
+	return b
+}
+
+// secretRefsFor extracts secret references from a job's env and steps.
+//
+// In MVP, secret refs are only set at the job level (via the approval
+// gate or a future secrets directive). Step-level secrets are resolved
+// at step-execution time by the runner, not at spec-creation time.
+//
+// Returns nil when no references are present.
+func secretRefsFor(_ *workflow.Job) []string {
+	// TODO(CIC-38/39/40): populate when per-job secret references land
+	// in the workflow schema.
+	return nil
+}
+
+// ── controller integration ──────────────────────────────────────────────────────
+
+// LoadAndCreateJobs loads all workflows for repoID, matches each against
+// the triggering event, and creates a job DAG for every matching workflow.
+//
+// Called after CreateRun returns successfully.  Failures in loading,
+// parsing, or DAG creation for individual workflows are logged but do
+// not propagate — a single broken workflow should not block other
+// workflows in the repo.
+//
+// The cfg.workflowLoader may be nil; a nil loader is a silent no-op.
+//
+// eventType: "push" or "pull_request"
+// ref:       branch name (for push) or base ref (for PR)
+// eventSHA:  commit SHA that triggered the event
+// prAction:  "opened", "synchronize" or "reopened" for PR events; "" for push
+// isFork is true when the PR event originates from a fork repo; when true
+// and c.cfg.ForkPolicy is non-nil, fork restrictions are applied.
+func (c *Controller) LoadAndCreateJobs(
+	ctx context.Context,
+	repoID uuid.UUID,
+	runID uuid.UUID,
+	eventType, ref, eventSHA, prAction string,
+	isFork bool,
+) error {
+	loader := c.cfg.WorkflowLoader
+	if loader == nil {
+		c.log.Debug("no workflow loader configured; skipping job creation",
+			"run", runID, "repo", repoID)
+		return nil
+	}
+
+	workflows, err := loader.LoadAll(ctx, repoID, eventSHA)
+	if err != nil {
+		c.log.Warn("workflow loader failed", "run", runID, "err", err)
+		return fmt.Errorf("load workflows: %w", err)
+	}
+
+	if len(workflows) == 0 {
+		c.log.Debug("no workflows found for repo; skipping job creation",
+			"run", runID, "repo", repoID)
+		return nil
+	}
+
+	// Build the event that trigger matching expects.
+	event := workflow.Event{
+		Type:  eventType,
+		Ref:   ref,
+		Paths: nil, // path filters not available from GitHub webhook payload in MVP
+	}
+	if prAction != "" {
+		event.PR = &workflow.PullRequestEvent{
+			Action: prAction,
+			// Branch is the PR's *base* ref; for a fork PR that's
+			// the branch the PR targets.
+			Branch: ref,
+		}
+	}
+
+	created := 0
+	for _, wf := range workflows {
+		// Fork PRs: enforce zero-secrets / no-identity / safe-tag policy.
+		if isFork && c.cfg.ForkPolicy != nil {
+			wf = c.cfg.ForkPolicy.Apply(wf)
+			c.log.Debug("applied fork policy to workflow", "workflow", wf.Name, "run", runID)
+		}
+		// Validate the workflow before attempting DAG creation.
+		// A workflow loaded from an unknown source may be structurally
+		// invalid; we skip it and log a warning rather than failing
+		// the entire run.
+		if verr := wf.Validate(); verr != nil {
+			c.log.Warn("workflow validation failed; skipping",
+				"workflow", wf.Name, "run", runID, "err", verr)
+			continue
+		}
+
+		if !wf.On.Matches(event) {
+			continue
+		}
+
+		dag, err := workflow.BuildDAG(wf)
+		if err != nil {
+			c.log.Warn("DAG build failed; skipping workflow",
+				"workflow", wf.Name, "run", runID, "err", err)
+			continue
+		}
+
+		specs := convertJobSpecs(wf, dag)
+		if len(specs) == 0 {
+			// Valid workflow with no jobs — skip.
+			continue
+		}
+
+		_, err = c.store.CreateJobSpecs(ctx, runID, specs)
+		if err != nil {
+			c.log.Warn("job creation failed; skipping workflow",
+				"workflow", wf.Name, "run", runID, "err", err)
+			continue
+		}
+
+		created++
+		c.log.Info("workflow jobs created",
+			"workflow", wf.Name, "run", runID, "job_count", len(specs))
+	}
+
+	if created == 0 {
+		c.log.Debug("no workflows matched the event; no jobs created",
+			"run", runID, "repo", repoID, "event_type", eventType)
+	}
+	return nil
+}
+
+// ── Controller Config extension ──────────────────────────────────────────────────
+
+// The Config struct in controller.go has WorkflowLoader *WorkflowLoader.
+// It's nil in DefaultConfig, so a controller with no loader wired is
+// backwards-compatible: runs are created, jobs are not.
+//
+// The controller's LoadAndCreateJobs method checks c.cfg.WorkflowLoader
+// before calling LoadAll.
+//
+// ── Parse helper ────────────────────────────────────────────────────────────────
+
+// ParseWorkflowBytes parses YAML bytes into a workflow.Workflow.
+//
+// It is exported so that an operator or test can register a workflow
+// with StaticLoader before starting the server.
+//
+// Returns (*workflow.Workflow, error) where err is non-nil if parsing
+// failed. The error carries positional information via *parse.ParseErrors.
+func ParseWorkflowBytes(src []byte, fileName string) (*workflow.Workflow, error) {
+	wf, perr, err := parse.Parse(src, fileName)
+	if err != nil {
+		return nil, err
+	}
+	if perr != nil {
+		return nil, perr
+	}
+	return wf, nil
+}

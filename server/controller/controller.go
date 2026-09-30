@@ -3,12 +3,16 @@
 //
 // It turns decoded GitHub webhook events into run + job creation in the
 // store, queue-enqueue via the NOTIFY trigger, and status reports to
-// the configured forge.  This is CIC-71 sub-blockers 1 and 2.
+// the configured forge.  This is CIC-71 sub-blockers 1–3.
 //
-// CIC-71 sub-blocker 2 replaces the SHA-1 pseudo-UUID org resolution
-// with store.ResolveRepo, upserting the org and repo rows on first contact.
-// The installationID parameter is passed through to the store but not yet
-// used for auth (that's CIC-38/39/40 — GitHub App installation tokens).
+// CIC-71b replaced the SHA-1 pseudo-UUID org resolution with
+// store.ResolveRepo, upserting the org and repo rows on first contact.
+// The installationID parameter is passed through to the store but not
+// yet used for auth (that's CIC-38/39/40 — GitHub App installation tokens).
+//
+// CIC-71c adds workflow loading and job DAG creation (LoadAndCreateJobs).
+// The WorkflowLoader interface decouples the controller from the storage
+// mechanism for workflow YAML; a nil loader is a silent no-op.
 package controller
 
 import (
@@ -23,6 +27,7 @@ import (
 
 	"cicadoci.com/cicado/server/backpressure"
 	"cicadoci.com/cicado/server/forge"
+	"cicadoci.com/cicado/server/policy"
 	"cicadoci.com/cicado/server/store"
 	"cicadoci.com/cicado/server/webhook"
 )
@@ -34,12 +39,30 @@ type Config struct {
 	Backpressure *backpressure.Tracker
 	// DefaultBranch is used when payload data is incomplete.
 	DefaultBranch string
+	// WorkflowLoader loads workflow definitions for a repo.
+	//
+	// When nil (DefaultConfig), LoadAndCreateJobs is a silent no-op:
+	// runs are created but no jobs are enqueued.  This is how
+	// CIC-71a/CIC-71b remain backwards-compatible.
+	WorkflowLoader WorkflowLoader
+	// ForkPolicy enforces the fork-PR security policy on workflow jobs.
+	// When prFork is true in LoadAndCreateJobs, the policy is applied to
+	// each matching workflow: secret references are scrubbed, deploy
+	// identities are cleared, and ForkSafeTag is added to each job's
+	// RunsOn.  A nil ForkPolicy means no fork restrictions.
+	ForkPolicy *policy.ForkPolicy
 }
 
 // DefaultConfig returns a Config with sensible development values.
+//
+// WorkflowLoader is nil by default; production servers wire it via
+// cicao-server main.go.
 func DefaultConfig() Config {
 	return Config{
-		Backpressure: backpressure.NewTracker(backpressure.DefaultLimits()), DefaultBranch: "main",
+		Backpressure:  backpressure.NewTracker(backpressure.DefaultLimits()),
+		DefaultBranch: "main",
+		ForkPolicy:    policy.DefaultForkPolicy(),
+		// WorkflowLoader: nil
 	}
 }
 
@@ -48,8 +71,8 @@ func DefaultConfig() Config {
 // Controller implements webhook.Dispatcher.
 //
 // It creates a run in the store when a qualifying webhook event
-// arrives, reports it to the forge, and (when a workflow is loaded,
-// CIC-71b) enqueues its top-level jobs.
+// arrives, reports it to the forge, and enqueues its top-level jobs
+// when a WorkflowLoader is configured.
 type Controller struct {
 	store *store.Store
 	forge forge.Forge
@@ -72,8 +95,6 @@ func New(st *store.Store, f forge.Forge, cfg Config, log *slog.Logger) *Controll
 // HandlePush handles GitHub push events for branch refs only.
 //
 // Tag pushes, refs/pull/*, and unmanaged repos are silently dropped.
-//
-// TODO(CIC-71c): load the workflow for this ref and create its jobs.
 func (c *Controller) HandlePush(payload webhook.PushPayload) error {
 	ref := payload.Ref
 	if !strings.HasPrefix(ref, "refs/heads/") {
@@ -126,6 +147,13 @@ func (c *Controller) HandlePush(payload webhook.PushPayload) error {
 	c.log.Info("run created", "run", runID, "number", number,
 		"event", "push", "repo", payload.Repository.FullName)
 
+	// Create job DAG from matching workflows.
+	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "push", branch, sha, "", false); err != nil {
+		c.log.Warn("job creation failed for push run", "run", runID, "err", err)
+		// Job creation failure is non-fatal: the run was created and its
+		// status can be reported separately.
+	}
+
 	// Report the new run to the forge.
 	report(ctx, c.forge, owner, repoName, sha, runID, branch, c.log)
 	return nil
@@ -137,8 +165,6 @@ func (c *Controller) HandlePush(payload webhook.PushPayload) error {
 // The run is created against the BASE repo (payload.Repository), not the
 // contributor's fork. Head.Repo/Head.SHA/Head.Ref are used only as the
 // actual clone target for the job.
-//
-// TODO(CIC-71c): load the workflow and create its jobs.
 func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error {
 	switch payload.Action {
 	case "opened", "synchronize":
@@ -173,7 +199,9 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 		defer c.cfg.Backpressure.Release(repoID.String(), orgID.String())
 	}
 
-	branch := payload.Head.Ref
+	// Base.Ref is the target branch (what the PR merges into);
+	// it is used for trigger matching and run correlation.
+	branch := payload.Base.Ref
 	prNumber := strconv.Itoa(payload.Number) // used as actor
 	runID, number, err := c.store.CreateRun(ctx, store.CreateRunOptions{
 		RepoID:        repoID,
@@ -190,13 +218,18 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 	c.log.Info("run created", "run", runID, "number", number,
 		"event", "pull_request", "pr", payload.Number, "repo", payload.Repository.FullName)
 
+	// Create job DAG from matching workflows.
+	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "pull_request", branch, payload.Head.SHA, payload.Action, payload.Fork); err != nil {
+		c.log.Warn("job creation failed for PR run", "run", runID, "err", err)
+	}
+
 	report(ctx, c.forge, owner, repoName, payload.Head.SHA, runID, branch, c.log)
 	return nil
 }
 
 // HandleCheckSuite handles check_suite "requested" events.
 //
-// TODO(CIC-71c): resolve the check suite to its run and re-enqueue.
+// TODO(CIC-71d): wire re-check of an existing run.
 func (c *Controller) HandleCheckSuite(payload webhook.CheckSuitePayload) error {
 	if payload.Action != "requested" {
 		return nil
@@ -208,7 +241,7 @@ func (c *Controller) HandleCheckSuite(payload webhook.CheckSuitePayload) error {
 
 // HandleCheckRun handles check_run "rerequested" events.
 //
-// TODO(CIC-71c): resolve the check run to its run and re-enqueue.
+// TODO(CIC-71d): wire re-check of an existing run.
 func (c *Controller) HandleCheckRun(payload webhook.CheckRunPayload) error {
 	if payload.Action != "rerequested" {
 		return nil
