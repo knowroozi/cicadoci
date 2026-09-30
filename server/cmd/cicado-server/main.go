@@ -2,6 +2,10 @@
 //
 // One binary: HTTP API, gRPC runner service, scheduler, and (from M6) the web
 // UI embedded via embed.FS. Its only stateful dependency is Postgres.
+//
+// CIC-71d wires the controller (CIC-71a/b/c) into the webhook receiver.
+// The controller is used as the webhook.Dispatcher for the receiver; a
+// NoOp forge is used until CIC-38/39/40 land the real GitHub forge.
 package main
 
 import (
@@ -26,6 +30,7 @@ import (
 
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
 	"cicadoci.com/cicado/server/api"
+	"cicadoci.com/cicado/server/controller"
 	"cicadoci.com/cicado/server/dispatch"
 	"cicadoci.com/cicado/server/queue"
 	"cicadoci.com/cicado/server/runnersvc"
@@ -138,6 +143,14 @@ func run() error {
 	svc := runnersvc.New(st.Pool(), q, svcCfg, log, secretsStore)
 	dispatcher := dispatch.New(q, svc.Sessions(), dispatch.DefaultConfig(svcCfg.LeaseTTL()), log)
 
+	// CIC-71d: wire the controller as the webhook dispatcher.
+	//
+	// NoOp forge is used until CIC-38/39/40 land the real GitHub
+	// Checks API + token-minter forge.  The controller logs a
+	// warning if Prepare/Start/Complete fails, which is acceptable
+	// for a no-op forge.
+	ctrl := controller.New(st, controller.NoOpForge{}, controller.DefaultConfig(), log)
+
 	grpcServer := grpc.NewServer()
 	runnerv1.RegisterRunnerServiceServer(grpcServer, svc)
 
@@ -156,7 +169,7 @@ func run() error {
 	webhookReceiver := webhook.NewReceiver(webhook.ReceiverOptions{
 		Secret:        *webhookSecret,
 		MaxConcurrent: *webhookMaxConcurrent,
-		Dispatch:      webhook.NoOpDispatcher{},
+		Dispatch:      ctrl,
 	})
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
