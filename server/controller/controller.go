@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"cicadoci.com/cicado/server/approvalgates"
 	"cicadoci.com/cicado/server/audit"
 	"cicadoci.com/cicado/server/backpressure"
 	"cicadoci.com/cicado/server/forge"
@@ -56,6 +57,18 @@ type Config struct {
 	// dispatch, but no audit trail is generated.  DefaultConfig
 	// provides a MemoryLog for dev servers.
 	Audit audit.Log
+
+	// ApprovalGates, when non-nil, opens a deployment-approval
+	// gate for runs that opt in via a policy.  The onResolved callback
+	// (wired by the server) advances the run.  nil is a no-op.
+	ApprovalGates *approvalgates.Manager
+
+	// AllowedApprovers is the allow-list of user IDs who may resolve
+	// an approval gate.  Passed to approvalgates.Gate.Allowed at gate
+	// creation.  An empty slice means no one is authorized — the chat
+	// buttons are inert (a future ticket should map GitHub roles to
+	// CICaDo user IDs).
+	AllowedApprovers []string
 }
 
 // DefaultConfig returns a Config with sensible development values.
@@ -243,6 +256,9 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 
 	// Audit the run creation.  Actor is the PR number as a string.
 	c.emitAudit(ctx, runID, "pull_request", prNumber, owner, repoName, branch)
+
+	// Open a deployment-approval gate if the run requires approval.
+	c.maybeOpenGate(ctx, runID, owner, repoName, payload)
 	return nil
 }
 
@@ -319,6 +335,48 @@ func report(
 		Started: &t,
 	}); err != nil {
 		log.Warn("forge.Prepare failed", "run", runID, "err", err)
+	}
+}
+
+// ── approval gates ────────────────────────────────────────────────────────────
+
+// maybeOpenGate opens a deployment-approval gate for a pull-request run if
+// the controller is configured with an approvalgates.Manager.
+//
+// The gate is opened non-fatally: if the provider does not support
+// approvals (nil ChatProvider) or if the gate creation fails, a Warn is logged
+// and the run proceeds unblocked.  This is the MVP behaviour — a policy layer
+// that determines which workflows require approval is a future ticket.
+func (c *Controller) maybeOpenGate(
+	ctx context.Context,
+	runID uuid.UUID,
+	owner, repo string,
+	payload webhook.PullRequestPayload,
+) {
+	mgr := c.cfg.ApprovalGates
+	if mgr == nil {
+		return
+	}
+	// MVP: open a gate for every PR run as a placeholder.
+	// The manager itself decides whether to block based on policy.
+	// A Gate must carry the allow-list of user IDs that may resolve it
+	// (Gate.Allowed / authorized()); an empty list = deny by default.  Warn
+	// so an operator can tell when a gate is open but inert.
+	if len(c.cfg.AllowedApprovers) == 0 {
+		c.log.Warn("approvalgates: gate opened with empty allow-list; wire Config.AllowedApprovers so a user can resolve it",
+			"run", runID)
+	}
+	g := &approvalgates.Gate{
+		RunID:   runID.String(),
+		Channel: fmt.Sprintf("%d", payload.Number),
+		Allow:   "approve",
+		Reason:  fmt.Sprintf("PR #%d on %s/%s", payload.Number, owner, repo),
+		Deny:    "deny",
+		Allowed: c.cfg.AllowedApprovers,
+	}
+	if err := mgr.Open(ctx, g); err != nil {
+		c.log.Warn("approvalgates: failed to open gate",
+			"run", runID, "err", err)
 	}
 }
 

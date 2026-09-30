@@ -56,6 +56,16 @@ var _ forge.Forge = (*stubForge)(nil)
 
 // ── helper tests ─────────────────────────────────────────────────────────────────
 
+// ── approvalgates ─────────────────────────────────────────────────────────────
+
+func TestMaybeOpenGate_NilManager(t *testing.T) {
+	// With ApprovalGates = nil, maybeOpenGate must not panic.
+	c := New(nil, nil, Config{ApprovalGates: nil}, nil)
+	c.maybeOpenGate(context.Background(), uuid.New(), "acme", "widgets",
+		webhook.PullRequestPayload{Number: 42}) // zero payload is fine
+	// No panic is the assertion.
+}
+
 // ── audit ───────────────────────────────────────────────────────────────────────
 
 func TestEmitAudit_NilAudit(t *testing.T) {
