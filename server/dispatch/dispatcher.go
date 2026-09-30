@@ -15,6 +15,7 @@ import (
 	uuid "github.com/google/uuid"
 
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
+	"cicadoci.com/cicado/server/backpressure"
 	"cicadoci.com/cicado/server/queue"
 	"cicadoci.com/cicado/server/runnersvc"
 )
@@ -44,6 +45,14 @@ type Config struct {
 	// honour before it kills in-flight work. A larger value gives a job more
 	// time to finish cleanly; a zero value means "cancel immediately."
 	CancelGraceSeconds uint32
+
+	// Backpressure, when non-nil, enforces a system-level concurrency cap
+	// in dispatchOnce.  When Acquire returns false for a claimed job,
+	// the job is requeued with UndeliveredBackoff (same as an
+	// unreachable runner).  The cap key is job.RunID as a proxy for
+	// org/repo; a future ticket that adds RepoID to ClaimedJob can
+	// use the proper per-repo key.
+	Backpressure *backpressure.Tracker
 }
 
 // DefaultConfig returns sensible defaults.
@@ -56,6 +65,8 @@ func DefaultConfig(leaseTTL time.Duration) Config {
 		UndeliveredBackoff: 2 * time.Second,
 		MaxCancelBatch:     8,
 		CancelGraceSeconds: 5,
+		// Backpressure: nil by default; caller provides a tracker from
+		// controller.DefaultConfig().Backpressure.
 	}
 }
 
@@ -220,6 +231,12 @@ func (d *Dispatcher) dispatchCancelOnce(ctx context.Context) {
 // Each server instance dispatches only to the runners connected to it. Since
 // the claim is atomic, two instances never hand out the same job, so the fleet
 // scales horizontally without any coordination between instances.
+//
+// Backpressure (CIC-71g): when Config.Backpressure is non-nil, each claimed job
+// is passed through Tracker.Acquire before it is assigned to a runner.  A rejected
+// job is requeued with UndeliveredBackoff.  The cap key is job.RunID as a proxy
+// for repoID; a future ticket (CIC-42) that adds RepoID to ClaimedJob can switch
+// to the proper per-repo key.
 func (d *Dispatcher) dispatchOnce(ctx context.Context) {
 	// One pass at a time. Overlapping passes would not be incorrect — the claim
 	// protects that — but they would spend database round trips racing to hand
@@ -249,14 +266,45 @@ func (d *Dispatcher) dispatchOnce(ctx context.Context) {
 		}
 
 		for _, job := range claimed {
+			// Backpressure check: if the system is at capacity, requeue
+			// this job and continue to the next claimed item.  The cap
+			// key is job.RunID used as a proxy for repoID.
+			if d.cfg.Backpressure != nil {
+				acquired, err := d.cfg.Backpressure.Acquire(ctx, job.RunID.String(), "")
+				if err != nil {
+					// Fail-open: an acquire error must not stall a job.
+					d.log.Warn("backpressure acquire failed",
+						"job", job.JobID, "err", err)
+				} else if !acquired {
+					// Capacity reached: requeue and skip this job.
+					sess.Release(job.JobID)
+					if _, err := d.queue.Requeue(
+						ctx, job.JobID,
+						"backpressure limit reached", d.cfg.UndeliveredBackoff); err != nil {
+						d.log.Error("backpressure requeue failed",
+							"job", job.JobID, "err", err)
+					}
+					continue
+				}
+			}
+
 			sess.TrackAssigned(job.JobID)
 			if !sess.Send(runnersvc.AssignmentFor(job)) {
 				// The runner went away, or its outbound buffer is full, between
 				// the claim and the send. Return the job immediately rather
 				// than making it wait out the lease TTL for the sweeper.
 				sess.Release(job.JobID)
-				if _, err := d.queue.Requeue(ctx, job.JobID, "runner unreachable at assignment", d.cfg.UndeliveredBackoff); err != nil {
-					d.log.Error("requeue undelivered job", "job_id", job.JobID, "error", err)
+				// The backpressure slot was consumed by Acquire; free it
+				// on the undelivered path so the counter does not leak.
+				if d.cfg.Backpressure != nil {
+					d.cfg.Backpressure.Release(job.RunID.String(), "")
+				}
+				if _, err := d.queue.Requeue(
+					ctx, job.JobID,
+					"runner unreachable at assignment",
+					d.cfg.UndeliveredBackoff); err != nil {
+					d.log.Error("requeue undelivered job",
+						"job_id", job.JobID, "error", err)
 				}
 				continue
 			}
