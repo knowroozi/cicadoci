@@ -30,6 +30,7 @@ import (
 
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
 	"cicadoci.com/cicado/server/api"
+	"cicadoci.com/cicado/server/audit"
 	"cicadoci.com/cicado/server/controller"
 	"cicadoci.com/cicado/server/dispatch"
 	"cicadoci.com/cicado/server/queue"
@@ -149,7 +150,11 @@ func run() error {
 	// Checks API + token-minter forge.  The controller logs a
 	// warning if Prepare/Start/Complete fails, which is acceptable
 	// for a no-op forge.
-	ctrl := controller.New(st, controller.NoOpForge{}, controller.DefaultConfig(), log)
+	// Wire a persistent audit log so the "every state-changing
+	// action writes an audit event" invariant produces a durable, read-later
+	// trail rather than process memory that vanishes on restart.
+	auditLog := audit.NewPostgresLog(st.Pool())
+	ctrl := controller.New(st, controller.NoOpForge{}, controller.DefaultConfig().WithAudit(auditLog), log)
 
 	grpcServer := grpc.NewServer()
 	runnerv1.RegisterRunnerServiceServer(grpcServer, svc)

@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"cicadoci.com/cicado/server/audit"
 	"cicadoci.com/cicado/server/backpressure"
 	"cicadoci.com/cicado/server/forge"
 	"cicadoci.com/cicado/server/policy"
@@ -45,12 +46,16 @@ type Config struct {
 	// runs are created but no jobs are enqueued.  This is how
 	// CIC-71a/CIC-71b remain backwards-compatible.
 	WorkflowLoader WorkflowLoader
+
 	// ForkPolicy enforces the fork-PR security policy on workflow jobs.
-	// When prFork is true in LoadAndCreateJobs, the policy is applied to
-	// each matching workflow: secret references are scrubbed, deploy
-	// identities are cleared, and ForkSafeTag is added to each job's
-	// RunsOn.  A nil ForkPolicy means no fork restrictions.
+	// A nil ForkPolicy means no restrictions.
 	ForkPolicy *policy.ForkPolicy
+
+	// Audit, when non-nil, records an audit entry when a run is
+	// created.  nil is a no-op: runs are still created, jobs still
+	// dispatch, but no audit trail is generated.  DefaultConfig
+	// provides a MemoryLog for dev servers.
+	Audit audit.Log
 }
 
 // DefaultConfig returns a Config with sensible development values.
@@ -63,7 +68,14 @@ func DefaultConfig() Config {
 		DefaultBranch: "main",
 		ForkPolicy:    policy.DefaultForkPolicy(),
 		// WorkflowLoader: nil
+		// Audit is nil by default; wire a real log via WithAudit().
 	}
+}
+
+// WithAudit sets the audit log for run-creation events.
+func (c Config) WithAudit(auditLog audit.Log) Config {
+	c.Audit = auditLog
+	return c
 }
 
 // ── Controller ────────────────────────────────────────────────────────────────
@@ -156,6 +168,10 @@ func (c *Controller) HandlePush(payload webhook.PushPayload) error {
 
 	// Report the new run to the forge.
 	report(ctx, c.forge, owner, repoName, sha, runID, branch, c.log)
+
+	// Audit the run creation.  Non-fatal: audit failure shouldn't
+	// prevent the run from executing.
+	c.emitAudit(ctx, runID, "push", payload.Pusher.Email, owner, repoName, branch)
 	return nil
 }
 
@@ -224,6 +240,9 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 	}
 
 	report(ctx, c.forge, owner, repoName, payload.Head.SHA, runID, branch, c.log)
+
+	// Audit the run creation.  Actor is the PR number as a string.
+	c.emitAudit(ctx, runID, "pull_request", prNumber, owner, repoName, branch)
 	return nil
 }
 
@@ -306,3 +325,29 @@ func report(
 // ── compile-time check ─────────────────────────────────────────────────────────
 
 var _ webhook.Dispatcher = (*Controller)(nil)
+
+// ── audit ─────────────────────────────────────────────────────────────────────
+
+// emitAudit records a "create_run" event in the audit log.
+//
+// Failures are logged but not propagated: the run was already
+// created and the job DAG is building; audit failure must not
+// block the run's execution.
+func (c *Controller) emitAudit(
+	ctx context.Context,
+	runID uuid.UUID,
+	eventType, actor, owner, repo, branch string,
+) {
+	if c.cfg.Audit == nil {
+		return
+	}
+	_, err := c.cfg.Audit.Append(ctx, audit.Entry{
+		Action: audit.ActionCreateRun,
+		Actor:  actor,
+		Target: fmt.Sprintf("run/%s", runID.String()),
+		Reason: fmt.Sprintf("%s on %s/%s branch %q", eventType, owner, repo, branch),
+	})
+	if err != nil {
+		c.log.Warn("audit append failed", "run", runID, "action", "create_run", "err", err)
+	}
+}

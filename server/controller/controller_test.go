@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"cicadoci.com/cicado/server/audit"
 	"cicadoci.com/cicado/server/backpressure"
 	"cicadoci.com/cicado/server/forge"
 	"cicadoci.com/cicado/server/store"
@@ -55,6 +56,38 @@ var _ forge.Forge = (*stubForge)(nil)
 
 // ── helper tests ─────────────────────────────────────────────────────────────────
 
+// ── audit ───────────────────────────────────────────────────────────────────────
+
+func TestEmitAudit_NilAudit(t *testing.T) {
+	// With Audit = nil, emitAudit must not panic.
+	c := New(nil, nil, Config{Audit: nil}, nil)
+	c.emitAudit(context.Background(), uuid.New(), "push", "user@x.com", "owner", "repo", "main")
+	// No panic is the assertion.
+}
+
+func TestEmitAudit_WithMemoryLog(t *testing.T) {
+	memLog := audit.NewMemoryLog()
+	c := New(nil, nil, Config{Audit: memLog}, nil)
+
+	runID := uuid.New()
+	c.emitAudit(context.Background(), runID, "push", "user@x.com", "acme", "widgets", "main")
+
+	entries, _ := memLog.List(context.Background(), 0, 10)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(entries))
+	}
+	e := entries[0]
+	if e.Action != audit.ActionCreateRun {
+		t.Errorf("action = %q, want %q", e.Action, audit.ActionCreateRun)
+	}
+	if e.Actor != "user@x.com" {
+		t.Errorf("actor = %q, want %q", e.Actor, "user@x.com")
+	}
+	if e.Target != "run/"+runID.String() {
+		t.Errorf("target = %q, want %q", e.Target, "run/"+runID.String())
+	}
+}
+
 func TestSplitRepo(t *testing.T) {
 	cases := []struct {
 		fullName string
@@ -86,6 +119,14 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.WorkflowLoader != nil {
 		t.Error("DefaultConfig: WorkflowLoader should be nil")
+	}
+	// DefaultConfig leaves Audit nil; WithAudit wires it.
+	if cfg.Audit != nil {
+		t.Error("DefaultConfig: Audit should be nil (call WithAudit to wire it)")
+	}
+	cfg = cfg.WithAudit(audit.NewMemoryLog())
+	if cfg.Audit == nil {
+		t.Error("WithAudit: Audit should be non-nil after WithAudit call")
 	}
 	allowed, err := cfg.Backpressure.Acquire(t.Context(), "repo1", "org1")
 	if err != nil {

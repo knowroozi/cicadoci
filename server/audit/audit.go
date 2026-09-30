@@ -29,6 +29,7 @@ const (
 	ActionRerun        Action = "rerun"
 	ActionDeploy       Action = "deploy"
 	ActionRollback     Action = "rollback"
+	ActionCreateRun    Action = "create_run"
 	ActionSecretPut    Action = "secret.put"
 	ActionSecretDelete Action = "secret.delete"
 )
