@@ -201,6 +201,53 @@ func collectRuns(rows pgx.Rows, cap int) ([]Run, bool, error) {
 	return runs, more, nil
 }
 
+// ── workflows read ───────────────────────────────────────────────────────────
+
+// WorkflowRow is the read projection of a workflows row.
+//
+// Definition is the jsonb column decoded by the caller (e.g.
+// StoreLoader.LoadAll in the controller package). The raw source YAML
+// is also available via Source, which the UI uses to show the exact
+// bytes a run was produced from.
+type WorkflowRow struct {
+	ID         uuid.UUID
+	RepoID     uuid.UUID
+	Name       string
+	Path       string
+	Source     string
+	Definition []byte
+	ContentSHA string
+}
+
+// ListWorkflowsForRepo returns all workflow rows for a repository,
+// ordered by path. An empty result (no rows) is not an error.
+func (s *Store) ListWorkflowsForRepo(ctx context.Context, repoID uuid.UUID) ([]WorkflowRow, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT id, repo_id, name, path, source, definition, content_sha
+FROM workflows
+WHERE repo_id = $1
+ORDER BY path`, repoID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: query workflows for repo: %w", err)
+	}
+	defer rows.Close()
+
+	var out []WorkflowRow
+	for rows.Next() {
+		var w WorkflowRow
+		if err := rows.Scan(&w.ID, &w.RepoID, &w.Name, &w.Path,
+			&w.Source, &w.Definition, &w.ContentSHA); err != nil {
+			return nil, fmt.Errorf("store: scan workflow: %w", err)
+		}
+		out = append(out, w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate workflows: %w", err)
+	}
+	return out, nil
+}
+
 // var _ guards the contract: *Store must satisfy Reader. If a new method lands
 // on Reader this fails to compile at the call site instead of at runtime.
 var _ Reader = (*Store)(nil)

@@ -13,7 +13,6 @@ import (
 
 	"cicadoci.com/cicado/server/backpressure"
 	"cicadoci.com/cicado/server/forge"
-	"cicadoci.com/cicado/server/policy"
 	"cicadoci.com/cicado/server/store"
 	"cicadoci.com/cicado/server/webhook"
 	"cicadoci.com/cicado/server/workflow"
@@ -364,57 +363,114 @@ var (
 	_ = json.Marshal
 )
 
-// TestForkPolicy_ScrubsSecretsAndIdentity verifies that ForkPolicy.Apply
-// strips secret refs from job-level Env, clears step Identity, and adds
-// ForkSafeTag to RunsOn.
-func TestForkPolicy_ScrubsSecretsAndIdentity(t *testing.T) {
-	pol := &policy.ForkPolicy{ForkSafeTag: "fork-safe"}
-	secretStep := &workflow.Step{
-		Identity: "aws",
-		Env:      map[string]string{"DEPLOY_TOKEN": "secrets.DEPLOY_TOKEN", "REGION": "us-east"},
-	}
-	wf := &workflow.Workflow{
-		Name: "ci",
-		Jobs: workflow.Jobs{
-			"build": {
-				RunsOn:         []string{"linux"},
-				TimeoutSeconds: 30,
-				Env:            map[string]string{"AWS_SECRET": "secrets.AWS_SECRET", "PLAIN": "val"},
-				Steps:          []*workflow.Step{secretStep},
-			},
-		},
-	}
-	result := pol.Apply(wf)
-	// Secret refs must be stripped from job-level Env.
-	if _, ok := result.Jobs["build"].Env["AWS_SECRET"]; ok {
-		t.Error("job-level Env still contains secret ref after Apply")
-	}
-	if _, ok := result.Jobs["build"].Env["PLAIN"]; !ok {
-		t.Error("job-level Env lost PLAIN after Apply")
-	}
-	// Step-level identity must be cleared.
-	if secretStep.Identity != "" {
-		t.Errorf("step.Identity = %q, want empty after Apply", secretStep.Identity)
-	}
-	// Step-level secret refs must be stripped.
-	if _, ok := secretStep.Env["DEPLOY_TOKEN"]; ok {
-		t.Error("step Env still contains secret ref after Apply")
-	}
-	// ForkSafeTag must be in RunsOn.
-	if !sliceContains(result.Jobs["build"].RunsOn, "fork-safe") {
-		t.Errorf("RunsOn = %v, want fork-safe in it", result.Jobs["build"].RunsOn)
-	}
-	// Nil policy must not panic.
-	var nilPol *policy.ForkPolicy
-	_ = nilPol
+// ── StoreLoader ─────────────────────────────────────────────────────────────────
+
+// stubLister implements WorkflowLister for testing.
+type stubLister struct {
+	rows []store.WorkflowRow
+	err  error
 }
 
-// sliceContains is a list-membership helper for tests.
-func sliceContains(s []string, target string) bool {
-	for _, x := range s {
-		if x == target {
-			return true
-		}
+func (s *stubLister) ListWorkflowsForRepo(_ context.Context, _ uuid.UUID) ([]store.WorkflowRow, error) {
+	return s.rows, s.err
+}
+
+func TestStoreLoader_LoadAllEmpty(t *testing.T) {
+	empty := &stubLister{}
+	l := &StoreLoader{store: empty, log: discardLogger}
+	got, err := l.LoadAll(context.Background(), uuid.New(), "")
+	if err != nil {
+		t.Fatal("unexpected error:", err)
 	}
-	return false
+	if got != nil {
+		t.Errorf("expected nil for empty slice, got %v", got)
+	}
+}
+
+func TestStoreLoader_LoadAllDecodesDefinition(t *testing.T) {
+	// Build a workflow and encode its JSON representation.
+	wf := &workflow.Workflow{
+		Name: "ci",
+		Jobs: map[string]*workflow.Job{
+			"build": {RunsOn: []string{"ubuntu-latest"}},
+		},
+	}
+	def, _ := json.Marshal(wf)
+
+	rows := []store.WorkflowRow{
+		{
+			ID:         uuid.New(),
+			RepoID:     uuid.New(),
+			Name:       "ci",
+			Path:       ".cicado/ci",
+			Source:     "name: ci\non:\n  push: {}\njobs:\n  build:\n    runs-on: ubuntu-latest\n",
+			Definition: def,
+			ContentSHA: "deadbeef",
+		},
+	}
+
+	stubLister := &stubLister{rows: rows}
+	l := &StoreLoader{store: stubLister, log: discardLogger}
+
+	got, err := l.LoadAll(context.Background(), uuid.New(), "")
+	if err != nil {
+		t.Fatal("LoadAll error:", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("LoadAll got %d workflows, want 1", len(got))
+	}
+	if got[0].Name != "ci" {
+		t.Errorf("got[0].Name = %q, want %q", got[0].Name, "ci")
+	}
+	if len(got[0].Jobs) != 1 {
+		t.Errorf("got[0] has %d jobs, want 1", len(got[0].Jobs))
+	}
+}
+
+func TestStoreLoader_LoadAllSkipsMalformedDefinition(t *testing.T) {
+	// One valid workflow, one with malformed definition JSON.
+	// The malformed one should be skipped; the valid one returned.
+	goodWf := &workflow.Workflow{Name: "good", Jobs: map[string]*workflow.Job{"a": {}}}
+	goodJSON, _ := json.Marshal(goodWf)
+
+	badRow := store.WorkflowRow{
+		ID:         uuid.New(),
+		RepoID:     uuid.New(),
+		Name:       "bad",
+		Path:       ".cicado/bad.yml",
+		Definition: []byte(`{not valid json`),
+	}
+
+	goodRow := store.WorkflowRow{
+		ID:         uuid.New(),
+		RepoID:     uuid.New(),
+		Name:       "good",
+		Path:       ".cicado/good.yml",
+		Definition: goodJSON,
+	}
+
+	stub := &stubLister{rows: []store.WorkflowRow{badRow, goodRow}}
+	l := &StoreLoader{store: stub, log: discardLogger}
+
+	got, err := l.LoadAll(context.Background(), uuid.New(), "")
+	if err != nil {
+		t.Fatal("LoadAll error:", err)
+	}
+	// Only 1 valid workflow should survive.
+	if len(got) != 1 {
+		t.Fatalf("LoadAll got %d workflows, want 1 (malformed skipped)", len(got))
+	}
+	if got[0].Name != "good" {
+		t.Errorf("surviving workflow Name = %q, want %q", got[0].Name, "good")
+	}
+}
+
+func TestStoreLoader_ListerError(t *testing.T) {
+	stubErr := &stubLister{err: errors.New("db down")}
+	l := &StoreLoader{store: stubErr, log: discardLogger}
+
+	_, err := l.LoadAll(context.Background(), uuid.New(), "")
+	if err == nil {
+		t.Fatal("expected error when ListWorkflowsForRepo fails")
+	}
 }

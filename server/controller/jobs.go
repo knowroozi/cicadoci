@@ -91,50 +91,79 @@ func (l *StaticLoader) LoadAll(_ context.Context, repoID uuid.UUID, _ string) ([
 
 // ── StoreLoader ────────────────────────────────────────────────────────────────
 
+// WorkflowLister is the narrow interface StoreLoader needs from the store.
+//
+// It decouples LoadAll from the concrete *store.Store so it can be
+// unit-tested without a real Postgres connection.
+//
+// *store.Store satisfies it via ListWorkflowsForRepo.
+type WorkflowLister interface {
+	ListWorkflowsForRepo(ctx context.Context, repoID uuid.UUID) ([]store.WorkflowRow, error)
+}
+
 // StoreLoader loads workflow YAML from the workflows table.
 //
-// It reads the workflows repo has registered and parses each using
-// workflow/parse.  Malformed YAML is skipped with a warning; the
-// other workflows in the same repo are still returned.
+// It reads the workflows repo has registered and decodes each row's
+// Definition jsonb into a *workflow.Workflow.  Malformed rows are skipped
+// with a warning; other valid workflows are still returned.
 type StoreLoader struct {
-	store *store.Store
+	store WorkflowLister
 	log   *slog.Logger
 }
 
-// NewStoreLoader wraps a *store.Store.
-func NewStoreLoader(st *store.Store, log *slog.Logger) *StoreLoader {
+// NewStoreLoader wraps a *store.Store (which satisfies WorkflowLister).
+func NewStoreLoader(st WorkflowLister, log *slog.Logger) *StoreLoader {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &StoreLoader{store: st, log: log}
 }
 
+// compile-time check: *store.Store satisfies WorkflowLister.
+var _ WorkflowLister = (*store.Store)(nil)
+
 // LoadAll reads workflows for repoID from the store.
 //
 // sha is ignored in this MVP; workflows are loaded at the latest
 // version in the table.  A future revision-aware loader would read
 // the workflow version pinned to the run's SHA.
+
+// LoadAll reads workflow rows for repoID from the store and decodes
+// each row's Definition jsonb into a *workflow.Workflow.
+//
+// sha is ignored in this MVP; the store returns the most-recent version
+// of each workflow path.  A future revision-aware loader would read the
+// workflow pinned to the run's SHA.
+//
+// Malformed rows are skipped with a warning; other valid workflows are
+// still returned.
 func (l *StoreLoader) LoadAll(ctx context.Context, repoID uuid.UUID, _ string) ([]*workflow.Workflow, error) {
-	// Fetch rows from the workflows table.
-	// The store currently doesn't expose a ListWorkflows method;
-	// this is a placeholder that returns nil until CIC-71d adds it.
-	l.log.Debug("StoreLoader.LoadAll: not yet implemented; returning nil",
-		"repo", repoID)
-	return nil, nil
+	rows, err := l.store.ListWorkflowsForRepo(ctx, repoID)
+	if err != nil {
+		return nil, fmt.Errorf("StoreLoader.LoadAll: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	var out []*workflow.Workflow
+	for _, row := range rows {
+		w := &workflow.Workflow{}
+		if len(row.Definition) > 0 {
+			if err := json.Unmarshal(row.Definition, w); err != nil {
+				l.log.Warn("StoreLoader: failed to decode workflow definition; skipping",
+					"repo", repoID, "path", row.Path, "err", err)
+				continue
+			}
+		}
+		// Fall back to the row's Name if the decode didn't populate it.
+		if w.Name == "" {
+			w.Name = row.Name
+		}
+		out = append(out, w)
+	}
+	return out, nil
 }
-
-// ── workflow → JobSpec conversion ───────────────────────────────────────────────
-
-// convertJobSpecs converts a parsed workflow into a slice of store.JobSpec
-// suitable for store.CreateJobSpecs.
-//
-// Job specs are returned in topological order: the DAG's Levels
-// determine the ordering; within the same level, names are sorted
-// alphabetically.
-//
-// Each job's Needs entry (workflow.Job.Needs) is passed directly to
-// JobSpec.Needs.  CreateJobSpecs resolves the names to UUIDs inside a
-// transaction and fails if any referenced name is not in the same list.
 func convertJobSpecs(w *workflow.Workflow, dag *workflow.DAG) []store.JobSpec {
 	specs := make([]store.JobSpec, 0, len(dag.Jobs))
 
