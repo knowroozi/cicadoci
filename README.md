@@ -4,7 +4,7 @@
 
 Two Go binaries. Postgres as the only stateful dependency. S3 for blobs. No JVM, no Redis, no Kafka, no Kubernetes prerequisite, and no in-process plugin zoo.
 
-> **Status: pre-alpha, under active development.** Milestone M0 (foundations) is in progress — the walking skeleton runs, but this is not yet usable as a CI system. See [the project plan](project-docs/01-project-plan.md) for the path to MVP.
+> **Status: pre-alpha, under active development.** Milestones M0–M3 (foundations, core engine, workflow definition, GitHub App integration) are merged to `master`; M4–M9 are in progress (logs/artifacts, secrets/identity, web UI, Slack ChatOps, MCP/AI, AWS packaging). It is not yet a complete, production-ready CI system. See [the project plan](project-docs/01-project-plan.md) for the path to MVP.
 
 ## Why another CI system
 

@@ -1,6 +1,6 @@
 # CICaDo Runner Protocol — Design v1
 
-Status: **v1 frozen** (2026-09-16, pending implementation feedback only) · Refines ADR-004 · Companion proto: [proto/runner_v1.proto](proto/runner_v1.proto)
+Status: **v1 frozen** (2026-09-16, pending implementation feedback only) · Refines ADR-004 · Companion proto: [proto/cicado/runner/v1/runner.proto](../proto/cicado/runner/v1/runner.proto)
 
 This is the hardest-to-change contract in the system. Nothing in this doc is "obvious enough to skip writing down."
 

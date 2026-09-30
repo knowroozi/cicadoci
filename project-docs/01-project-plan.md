@@ -1,6 +1,6 @@
 # CICaDo — Project Plan: Path to MVP
 
-Status: Active · Owner: Kaveh · Last updated: 2026-09-28 · Name: see ADR-007
+Status: Active · Owner: Kaveh · Last updated: 2026-09-30 · Name: see ADR-007
 
 ## 1. Vision & thesis
 
@@ -157,7 +157,9 @@ M0 → M1 → M2 → M3 → M4 → M5 → {M6, M7, M8 in parallel} → M9
 
 ## 9. Implementation status snapshot
 
-_As of 2026-09-28. Per-ticket status tracked in Linear (cicado-mvp board); this section summarizes milestone-level progress._
+_Last refreshed 2026-09-30 against `master` (`b548cd4`, CIC-71d). Per-ticket status tracked in Linear (cicado-mvp board); this section summarizes milestone-level progress.
+
+> **Read note (2026-09-30).** `gh` reporting a PR as `MERGED` does **not** by itself mean its content is on `master` during the M4–M9 recovery: bottom-up rebase promoted most of it, but a merged recovery PR can merge into its base branch without landing on the final `master` line. The authoritative check is `git ls-tree origin/master`. One such case — `server/slack/` (PR #65 / CIC-49) is `MERGED` but **not on `master`** — is flagged under M7 and in the recovery table.
 
 ### M0 — Foundations ✅ Complete
 All deliverables shipped: monorepo layout, runner protocol v1 (frozen), Postgres schema v1, CI-for-the-CI (GitHub Actions), Apache-2.0, ADR process. PRs #1 through #8 (CIC-13–CIC-22).
@@ -171,23 +173,24 @@ YAML schema v1 + published JSON Schema, positional-error parser, topological DAG
 ### M3 — GitHub App integration ✅ Complete
 Webhook receiver (`push`, `pull_request`, `check_suite` rerequests), HMAC-SHA256 signature verification with replay tolerance, Checks API reporting (pending/in_progress/completed), short-lived installation JWTs, fork-PR policy (no secrets + restricted runner tag), `Forge` adapter interface. PRs #23–#26 (CIC-33–CIC-37). CIC-37 (secrets store) in master; CIC-35 covered by CIC-33.
 
-### M4 — Logs & artifacts 🔄 In progress — open PRs #56 (CIC-34), #64 (CIC-32), #54 (CIC-33)
-**In master:** `server/redact/masker.go` (secret redaction on ingest, adversarial test suite, CIC-31). PR #30 merged.
-**Open PRs:**
-- [#56](https://github.com/cicadoci/core/pull/56): `server/blobstore/` + `server/artifacts/` — S3 blob storage + per-run namespacing, retention, compaction foundation
-- [#64](https://github.com/cicadoci/core/pull/64): `server/archive/` — hot/cold log archiving to blobstore (stacks on #56)
-- [#54](https://github.com/cicadoci/core/pull/54): `server/logs/` + `server/runnersvc/` — SSE log fan-out with `Last-Event-ID` resume, `LogStream` interface wired into runner service (stacks on #64)
+### M4 — Logs & artifacts ✅ On master (2026-09-30 recovery)
+All M4 packages are present on `master`, shipped via the merged recovery PRs:
+- `server/redact/` — secret redaction on ingest with the adversarial test suite (CIC-31, PR #30).
+- `server/blobstore/` + `server/artifacts/` — S3 blob storage, per-run namespacing, retention/compaction foundation (CIC-34, PR #56 merged).
+- `server/archive/` — hot/cold log archiving to the blobstore (CIC-32, PR #64 merged).
+- `server/logs/` + `server/runnersvc/` — SSE log fan-out with `Last-Event-ID` resume; `LogStream` interface wired into the runner service (CIC-33, PR #54 merged).
 
-### M5 — Secrets & identity 🔄 In progress — open PRs #55, #66
-**In master:** `server/secrets/` — NUL-byte composite key, env scoping, write-only API (CIC-37, PR #45 merged).
-**Open PRs:**
-- [#55](https://github.com/cicadoci/core/pull/55): `server/mcp/` — read-only MCP server (list_runs, get_run, get_job, get_failed_step_logs, get_structured_events, classify_failure)
-- [#66](https://github.com/cicadoci/core/pull/66): `server/approvalgates/` — approval gate state machine with per-user authz and MessageID fix (Blocker 2 fix)
+### M5 — Secrets & identity 🔄 In progress
+**On master:**
+- `server/secrets/` — NUL-byte composite key, env scoping, write-only API, plus the Postgres backend (CIC-37, PR #45; CIC-38 wiring).
+- `GetJobSecrets` RPC — per-job secret fetch over gRPC, wired into the runner service against the Postgres secrets store (CIC-38, PR #83 merged 2026-09-29; [decision doc](../docs/decisions/CIC-38-getjobsecrets-rpc.md)).
+- `server/approvalgates/` — approval-gate state machine with per-user authz and the MessageID fix (CIC-51, PR #66 merged).
+- Note: `server/mcp/` was previously listed under M5 in this snapshot; it is an M8 deliverable and is on master (see M8).
 
-**Not yet started (Linear Backlog):**
-- CIC-38: `GetJobSecrets` RPC — per-job secret fetch via gRPC
-- CIC-39: OIDC issuer — server signs job-identity JWTs; AWS IAM OIDC provider + `sts:AssumeRoleWithWebIdentity`
-- CIC-40: Per-job ephemeral platform tokens, scoped to run claims
+**Not yet started (Linear Backlog) — confirmed absent from `master` on 2026-09-30:**
+- CIC-39: OIDC issuer — server signs job-identity JWTs; AWS IAM OIDC provider + `sts:AssumeRoleWithWebIdentity` (no issuer package on master).
+- CIC-40: Per-job ephemeral platform tokens, scoped to run claims (no dedicated subsystem on master).
+- CIC-42: M5 E2E — deploy job assumes an AWS role via OIDC (not started).
 
 ### M6 — Web UI ❌ Not started (all Backlog in Linear)
 No code in master or in any open PR. All 6 tickets in Backlog:
@@ -200,26 +203,27 @@ No code in master or in any open PR. All 6 tickets in Backlog:
 
 _Largest remaining gap: ~5 ew._
 
-### M7 — ChatOps: Slack 🔄 In progress — open PRs #58, #65, #67
-**Open PRs:**
-- [#58](https://github.com/cicadoci/core/pull/58): `server/chat/` — `ChatProvider` interface + `SlackClient`, typed `Action` constants (foundation for M7)
-- [#65](https://github.com/cicadoci/core/pull/65): `server/slack/` — Slack app: Socket Mode + Events API (stacks on #58)
-- [#67](https://github.com/cicadoci/core/pull/67): `server/runstatus/` — threaded run status, edit-in-place via ChatProvider (stacks on #58)
-- Also in this milestone: [#57](https://github.com/cicadoci/core/pull/57) CIC-50 slash-command parser (independent, against master)
+### M7 — ChatOps: Slack 🔄 In progress
+**On master (via merged recovery PRs):**
+- `server/chat/` — `ChatProvider` interface + Slack driver (`server/chat/slack.go`), typed `Action` constants — the Slack foundation that is on master (CIC-53, PR #58 merged).
+- `server/approvalgates/` — Block Kit approval buttons with mandatory acting-user authz (CIC-51, PR #66 merged).
+- `server/runstatus/` — threaded, edit-in-place run status via `ChatProvider` (CIC-52, PR #67 merged).
+- `server/slash/` — Slack slash-command parser (`/ci status|run|rerun|logs`) (CIC-50, PR #57 merged).
 
-### M8 — MCP server & AI surface 🔄 In progress — open PRs #59, #60, #61
-**In master:** `server/classify/` — rule-based failure taxonomy (CIC-54, PR #52 merged).
-**Open PRs:**
-- [#59](https://github.com/cicadoci/core/pull/59): `server/mcp/` — read-only MCP server (6 tools)
-- [#60](https://github.com/cicadoci/core/pull/60): `server/mcpauth/` — scoped-token auth + audit on every MCP invocation
-- [#61](https://github.com/cicadoci/core/pull/61): `server/ai/` — 10-scenario eval harness; `EvalCase.Expected` is `classify.Classification` (depends on classify, in master)
+> **Flag — not on master:** PR [#65](https://github.com/cicadoci/core/pull/65) (CIC-49, `server/slack/`) is `MERGED` in `gh`, but its merge commit `33f47d6` is **not an ancestor of `master`** and `server/slack/` is absent from `master`'s tree. The standalone `server/slack/` Slack-app package did **not** promote; the Slack foundation present on master is `server/chat/slack.go` (CIC-53). Left for the owner to reconcile (PR #65 vs the CIC-49 ticket).
 
-### M9 — AWS packaging, hardening & launch prep 🔄 In progress — open PRs #62, #63
-**Open PRs:**
-- [#62](https://github.com/cicadoci/core/pull/62): `runner/lambda/` — AWS Lambda runner adapter (`Dispatch()` accepts `*JobEvent`, records `journal.LaneStatus`)
-- [#63](https://github.com/cicadoci/core/pull/63): `server/backpressure/` — max concurrent jobs, log rate caps, payload size caps
+### M8 — MCP server & AI surface ✅ On master (2026-09-30 recovery)
+All M8 packages are present on `master`:
+- `server/classify/` — rule-based failure taxonomy, nine categories (CIC-54, PR #52 merged).
+- `server/mcp/` — read-only MCP server: list_runs, get_run, get_job, get_failed_step_logs, get_structured_events, classify_failure (CIC-55, PR #59 merged). (The MCP JSON-RPC transport itself is deferred to M9 — see [CIC-76](../docs/decisions/CIC-76-mcp-defer.md).)
+- `server/mcpauth/` — scoped-token auth + per-invocation audit (CIC-56, PR #60 merged).
+- `server/ai/` — 10-scenario eval harness; `EvalCase.Expected` is `classify.Classification` (depends on classify, in master) (CIC-57, PR #61 merged).
 
-**In master:** `Dockerfile`, `build.sh` — distroless server image, debian runner image (CIC-58, PR #47 merged).
+### M9 — AWS packaging, hardening & launch prep 🔄 In progress
+**On master (via recovery PRs):**
+- `runner/lambda/` — AWS Lambda runner adapter (`Dispatch()` accepts `*JobEvent`, records `journal.LaneStatus`) (CIC-59, PR #62 merged).
+- `server/backpressure/` — max concurrent jobs, log rate caps, payload size caps (CIC-60, PR #63 merged).
+- `Dockerfile`, `build.sh` — distroless server image, debian runner image (CIC-58, PR #47 merged).
 
 **Not yet started (Linear Backlog):**
 - CIC-61: Security pass — threat model doc, dependency audit, secret-redaction fuzzing, authz test matrix
@@ -227,6 +231,12 @@ _Largest remaining gap: ~5 ew._
 - CIC-63: Dogfood cutover — this project's CI moves onto itself
 - CIC-64: Telemetry/SSO decisions (see open questions §8.2, §8.5)
 - CIC-65: Name registration tail — npm/Docker namespaces, USPTO, counsel review
+
+### Control bridge — webhook → run → job DAG (CIC-71 series, cross-cutting)
+Not one of the §4 milestones, but the integration that wires M1–M5 packages into a live path. As of 2026-09-30:
+- **On master:** `server/controller/` + `server/dispatch/` + `server/events/` + `server/policy/` — first real webhook-runs dispatcher (CIC-71a, PR #75), real org/repo resolution via the store (CIC-71b, PR #76), workflow→job-DAG creation (CIC-71c, PR #77), and the dispatcher wired into the `cicado-server` binary (CIC-71d, PR #78). Supporting hardening merged too: `0003_artifacts.sql` migration (CIC-72), masked-masking/token-registration fix (CIC-74), audit-events implementation (CIC-75).
+- **Open (in-flight, as of 2026-09-30):** CIC-71e `StoreLoader` reads workflow definitions from the DB (PR #79), CIC-71f run-creation audit events (PR #80), CIC-71g backpressure tracker in the dispatch loop (PR #81), CIC-71h approvalgates + chat wiring in the controller (PR #82). Also open: CIC-77 per-PR knowledge-graph currency (PR #84). (Deferred-but-documented: S3 `PreSignedURLProvider` → M9, CIC-73; MCP JSON-RPC transport → M9, CIC-76.)
+- Decision records: `docs/decisions/CIC-71a-controller-dispatcher.md`, `CIC-71b-real-org-lookup.md`, `CIC-71c-workflow-dag.md`, `CIC-71d-server-wiring.md`, `CIC-72-artifacts-migration.md`, `CIC-73-presigned-url-defer.md`, `CIC-74-masker-wiring.md`, `CIC-75-audit-postgres.md`, `CIC-76-mcp-defer.md`.
 
 ### Recovery PR summary
 14 individual recovery PRs (#54–#67) cover M4/M5/M7/M8/M9 packages that were lost from `master` when intermediate stacked branches superseded each other without promoting to master. Merged bottom-up: each wave-2 PR's base auto-resolves to master when its dependency merges.
@@ -248,8 +258,14 @@ _Largest remaining gap: ~5 ew._
 | [#62](https://github.com/cicadoci/core/pull/62) | CIC-59 | `runner/lambda/` |
 | [#63](https://github.com/cicadoci/core/pull/63) | CIC-60 | `server/backpressure/` |
 
-### Overall assessment
+**State (2026-09-30): all 14 recovery PRs are `MERGED` in `gh`.** Their packages are present on `master` **except** `server/slack/` (PR #65 / CIC-49): its merge commit (`33f47d6`) is not an ancestor of `master`, so that package did not promote and is not on `master` — see the M7 flag. The Slack foundation that is on master lives in `server/chat/` (CIC-53).
+
+### Overall assessment (refreshed 2026-09-30)
 - **M0–M3**: 100% complete and in `master`.
-- **M4/M5/M7/M8/M9**: ~60% implemented in open PRs (#54–#67); missing: OIDC issuer (CIC-39), token subsystem (CIC-40), M5 E2E (CIC-42).
-- **M6 Web UI**: 0% — 6 tickets backlogged, ~5 ew, the largest remaining gap.
+- **M4 / M8**: on `master` — logs/artifacts (`redact`, `blobstore`, `artifacts`, `archive`, `logs`, `runnersvc`) and MCP/AI (`classify`, `mcp`, `mcpauth`, `ai`) all merged.
+- **M5**: `server/secrets` + the `GetJobSecrets` RPC (CIC-38) + `approvalgates` on `master`; still missing the OIDC issuer (CIC-39), per-job platform tokens (CIC-40), and M5 E2E (CIC-42).
+- **M7**: `chat` / `approvalgates` / `runstatus` / `slash` on `master`; `server/slack/` (CIC-49) did **not** promote — see the flag above.
+- **M9**: `runner/lambda`, `server/backpressure`, and image packaging on `master`; security pass / docs site / dogfood cutover / telemetry-SSO / name-registration tail remain backlogged.
+- **Control bridge** (CIC-71/72–76): webhook→run→job-DAG dispatch and supporting hardening on `master`; `StoreLoader`, run-creation audit, backpressure-tracking, and approvalgates/chat wiring in the controller are still open (CIC-71e–h).
+- **M6 Web UI**: still 0% in code (`web/` is `README.md` only) — 6 tickets backlogged, ~5 ew, the largest remaining gap.
 
