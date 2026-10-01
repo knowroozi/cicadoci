@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -340,15 +342,17 @@ func TestReceiver_UknownEventType(t *testing.T) {
 	}
 }
 
-func TestReceiver_NoSignatureCheck_WhenSecretEmpty(t *testing.T) {
-	// An empty secret disables HMAC checking — useful for local dev.
+func TestReceiver_NoSignatureCheck_WhenUnauthenticated(t *testing.T) {
+	// An empty secret with AllowUnauthenticated=true disables HMAC checking — the
+	// explicit local-dev opt-in path behind --insecure-webhook.
 	body := []byte(testPushBody)
 	var pushCount int
 
 	receiver := NewReceiver(ReceiverOptions{
-		Secret:   "", // empty → no check
-		Dispatch: fakeDispatcher{pushCalls: &pushCount},
-		Tracker:  NewDeliveryTracker(0, 0),
+		Secret:               "", // empty → only checks are skipped because of the explicit opt-in
+		AllowUnauthenticated: true,
+		Dispatch:             fakeDispatcher{pushCalls: &pushCount},
+		Tracker:              NewDeliveryTracker(0, 0),
 	})
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/webhooks/github", nil)
@@ -359,7 +363,7 @@ func TestReceiver_NoSignatureCheck_WhenSecretEmpty(t *testing.T) {
 	receiver.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200 (no secret check)", rr.Code)
+		t.Errorf("status = %d, want 200 (no secret check via AllowUnauthenticated)", rr.Code)
 	}
 	if pushCount != 1 {
 		t.Errorf("HandlePush called %d times, want 1", pushCount)
@@ -601,5 +605,57 @@ func TestPayloadJSONRoutrdTrip(t *testing.T) {
 	}
 	if p.Action != "opened" || p.Number != 42 {
 		t.Errorf("unexpected pull request payload: action=%q number=%d", p.Action, p.Number)
+	}
+}
+func TestReceiver_FailsClosed_WhenSecretEmpty(t *testing.T) {
+	// Without AllowUnauthenticated, an empty-secret receiver must REJECT every
+	// delivery with 401 rather than silently accepting it unverified.
+	body := []byte(testPushBody)
+	var pushCount int
+
+	receiver := NewReceiver(ReceiverOptions{
+		Secret:   "",
+		Dispatch: fakeDispatcher{pushCalls: &pushCount},
+		Tracker:  NewDeliveryTracker(0, 0),
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
+		"/api/v1/webhooks/github", nil)
+	req.Header.Set("X-GitHub-Event", EventPush)
+	req.Header.Set("X-GitHub-Delivery", "del-no-secret")
+	req.Body = newBodyReader(body)
+
+	rr := httptest.NewRecorder()
+	receiver.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 (fail closed on empty secret)", rr.Code)
+	}
+	// The response body must not leak server configuration to the caller.
+	if strings.Contains(rr.Body.String(), "signing secret not configured") {
+		t.Errorf("response body leaked server configuration: %s", rr.Body.String())
+	}
+	if pushCount != 0 {
+		t.Errorf("HandlePush called %d times; must not dispatch unauthenticated delivery", pushCount)
+	}
+}
+
+func TestReceiver_WarnsOnUnauthenticatedConstruction(t *testing.T) {
+	// Constructing a receiver with an empty secret and AllowUnauthenticated must
+	// produce a logged warning so the operator has an unmissable signal.
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	NewReceiver(ReceiverOptions{
+		Secret:               "",
+		AllowUnauthenticated: true,
+		Dispatch:             fakeDispatcher{},
+		Tracker:              NewDeliveryTracker(0, 0),
+		Logger:               logger,
+	})
+
+	out := buf.String()
+	if !strings.Contains(out, "WITHOUT signature verification") {
+		t.Errorf("missing unauthenticated warning log line, got: %q", out)
 	}
 }

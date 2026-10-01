@@ -58,7 +58,8 @@ func run() error {
 		migrate              = flag.Bool("migrate", envBool("CICADO_MIGRATE", true), "apply pending migrations at startup")
 		devSeedFlag          = flag.Bool("dev-seed", envBool("CICADO_DEV_SEED", false), "seed a development org, a well-known registration token, and a demo job (NEVER in production)")
 		logLevel             = flag.String("log-level", envOr("CICADO_LOG_LEVEL", "info"), "debug, info, warn, or error")
-		webhookSecret        = flag.String("webhook-secret", os.Getenv("CICADO_WEBHOOK_SECRET"), "GitHub App webhook signing secret; empty disables verification")
+		webhookSecret        = flag.String("webhook-secret", os.Getenv("CICADO_WEBHOOK_SECRET"), "GitHub App webhook signing secret; empty disables verification unless --insecure-webhook is also set")
+		insecureWebhook      = flag.Bool("insecure-webhook", envBool("CICADO_INSECURE_WEBHOOK", false), "permit running with no webhook signing secret (fail-open); DEVELOPMENT ONLY — GitHub deliveries accepted without HMAC verification")
 		webhookMaxConcurrent = flag.Int("webhook-max-concurrent", 16, "max concurrent webhook dispatches (flood backpressure); 0 disables")
 		secretKeyHex         = flag.String("secret-key", os.Getenv("CICADO_SECRET_KEY"), "hex-encoded 32-byte AES-256 encryption key for the secrets store")
 		allowEphemeralKey    = flag.Bool("allow-ephemeral-key", envBool("CICADO_ALLOW_EPHEMERAL_KEY", false), "permit an ephemeral random secret key when CICADO_SECRET_KEY is empty (DEVELOPMENT ONLY: secrets will not survive a restart)")
@@ -67,6 +68,14 @@ func run() error {
 
 	log := newLogger(*logLevel)
 	slog.SetDefault(log)
+
+	// Fail closed on a missing webhook signing secret unless the operator
+	// explicitly opted in to the development-only fail-open path.  This is
+	// the operational half of CIC-80: a production server with no webhook
+	// secret must not start and accept unverified deliveries.
+	if err := webhookStartupGuard(*webhookSecret, *insecureWebhook); err != nil {
+		return err
+	}
 
 	if *databaseURL == "" {
 		return errors.New("no database configured: set CICADO_DATABASE_URL or pass -database-url")
@@ -182,9 +191,10 @@ func run() error {
 	}
 
 	webhookReceiver := webhook.NewReceiver(webhook.ReceiverOptions{
-		Secret:        *webhookSecret,
-		MaxConcurrent: *webhookMaxConcurrent,
-		Dispatch:      ctrl,
+		Secret:               *webhookSecret,
+		MaxConcurrent:        *webhookMaxConcurrent,
+		Dispatch:             ctrl,
+		AllowUnauthenticated: *insecureWebhook,
 	})
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
@@ -269,6 +279,20 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// webhookStartupGuard refuses to start when no webhook signing secret is
+// configured and the operator did not explicitly opt into the development-only
+// fail-open path. It is the pure, testable core of the CIC-80 operational
+// refusal; run() threads the flag values into it. Returns nil when a secret is
+// present or when insecureWebhook is explicitly set.
+func webhookStartupGuard(secret string, insecureWebhook bool) error {
+	if secret == "" && !insecureWebhook {
+		return errors.New("CICADO_WEBHOOK_SECRET is not set and --insecure-webhook was not passed; " +
+			"set CICADO_WEBHOOK_SECRET for signature verification, or pass --insecure-webhook " +
+			"(fail-open; for local development only)")
+	}
+	return nil
 }
 
 func envBool(key string, fallback bool) bool {

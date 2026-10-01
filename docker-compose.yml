@@ -48,6 +48,11 @@ services:
       CICADO_LOG_LEVEL: debug
       CICADO_MIGRATE: "true"
       CICADO_DEV_SEED: "true"
+      # Development only: the dev-seed produces runs without a real webhook
+      # HMAC secret, so opt into the explicitly-loud, non-secure dev path
+      # (CIC-80). Absent this flag the server refuses to start because a
+      # missing secret is no longer accepted silently.
+      CICADO_INSECURE_WEBHOOK: "true"
     ports:
       - "8080:8080"
       - "8081:8081"

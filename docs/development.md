@@ -73,6 +73,25 @@ land (CIC-13). That is deliberate: the protocol is gRPC over TLS with no
 plaintext fallback, and a misconfigured production runner should fail loudly
 rather than stream job output and credentials in the clear.
 
+## Webhook signing
+
+A production `cicado-server` always reads `CICADO_WEBHOOK_SECRET` and verifies
+`X-Hub-Signature-256` on every delivery. An empty secret refuses startup
+(unless `--insecure-webhook` is passed), so a production server can never
+silently skip signature checks. The flag is only for local `make dev` or a
+dev box where the webhook is reachable from GitHub but the signing secret has
+not been set.
+
+```sh
+# With a real secret (recommended even for local dev):
+export CICADO_WEBHOOK_SECRET=cicado_whsec_$(openssl rand -hex 32)
+./bin/cicado-server --webhook-secret "$CICADO_WEBHOOK_SECRET" ...
+
+# Without a secret (DEV ONLY: all deliveries accepted unverified):
+./bin/cicado-server --insecure-webhook ...
+```
+
+
 ## Tests
 
 | Command | What it runs |

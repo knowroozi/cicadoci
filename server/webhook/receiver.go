@@ -41,6 +41,13 @@ type ReceiverOptions struct {
 	// simultaneously.  If zero, no concurrency cap is enforced.
 	// This is the "webhook flood backpressure" hook from the ticket.
 	MaxConcurrent int
+	// AllowUnauthenticated, when true AND Secret is empty, disables signature
+	// verification behind an explicit opt-in (the local-dev path).  It must be
+	// set deliberately: a webhook receiver with no secret and AllowUnauthenticated
+	// false fails closed, rejecting every delivery rather than accepting an
+	// unverified one.  main.go gates this on an explicit --insecure-webhook flag so
+	// production servers cannot silently fall back to unauthenticated acceptance.
+	AllowUnauthenticated bool
 }
 
 // Receiver is the HTTP handler for POST /api/v1/webhooks/github.
@@ -55,11 +62,21 @@ type Receiver struct {
 	sem *semaphore.Weighted
 	// suppressed counts how many deliveries were rejected as duplicates.
 	suppressed uint64
+	// allowUnauthenticated is true when the operator opted in to running without
+	// signature verification. It is the per-request complement to the main.go
+	// startup refusal: a receiver is fail-closed on its own unless explicitly
+	// told to run open.
+	allowUnauthenticated bool
 }
 
-// NewReceiver returns a fully-wired Receiver.  secret must come from the
-// GitHub App webhook configuration; an empty secret means no signature
-// verification (useful only for local dev).
+// NewReceiver returns a fully-wired Receiver.  Secret must come from the
+// GitHub App webhook configuration.  An empty Secret with AllowUnauthenticated
+// set disables HMAC checking behind an explicit opt-in (local dev); a loud
+// warning is emitted here so the operator has a clear signal that no request
+// signature checkers are running.
+//
+// A nil logger and a nil tracker fall back to slog.Default() and a default
+// 10k-entry, 24-hour tracker respectively.
 func NewReceiver(opts ReceiverOptions) *Receiver {
 	tracker := opts.Tracker
 	if tracker == nil {
@@ -69,11 +86,23 @@ func NewReceiver(opts ReceiverOptions) *Receiver {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	// Loud, unmissable warning when a receiver is constructed without a signing
+	// secret and the operator has opted in to running open.  This is the fail-
+	// closed guard: an empty-secret receiver is dangerous in a production context,
+	// and a warning that is not easily missed helps operators who miss the
+	// startup check in main.go.
+	if opts.Secret == "" && opts.AllowUnauthenticated {
+		logger.Warn("webhook receiver running WITHOUT signature verification "+
+			"(this is safe only for local development; do not use in production)",
+			"insecure", true,
+			"context", "no webhook signing secret configured; every delivery is accepted unverified")
+	}
 	r := &Receiver{
-		secret:   opts.Secret,
-		dispatch: opts.Dispatch,
-		tracker:  tracker,
-		logger:   logger,
+		secret:               opts.Secret,
+		dispatch:             opts.Dispatch,
+		tracker:              tracker,
+		logger:               logger,
+		allowUnauthenticated: opts.AllowUnauthenticated,
 	}
 	if cap := opts.MaxConcurrent; cap > 0 {
 		r.sem = semaphore.NewWeighted(int64(cap))
@@ -108,6 +137,13 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Signature verification.
+	//
+	// A receiver with a secret verifies the HMAC.  A receiver with NO secret may
+	// only proceed when it was constructed with AllowUnauthenticated, and even
+	// then it is only appropriate for local development.  Any other combination
+	// (no secret, no opt-in) is a fail-closed case: reject every delivery with 401
+	// rather than silently accepting it.  This is the security posture CIC-80
+	// requires.
 	sig := req.Header.Get("X-Hub-Signature-256")
 	if r.secret != "" {
 		if err := Verify(r.secret, sig, body); err != nil {
@@ -121,6 +157,23 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			})
 			return
 		}
+	} else if !r.allowUnauthenticated {
+		// No signing secret and the operator did not explicitly opt in: fail closed.
+		// No signing secret and no opt-in: fail closed with a generic 503 so the
+		// unauthenticated caller cannot probe the server's configuration.  The
+		// detail is logged server-side only.
+		r.logError(http.StatusServiceUnavailable, "webhook signature verification unavailable; refusing unauthenticated delivery", nil)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			erCodeErr: map[string]string{erKeyCode: "service_unavailable", erCodeMessage: "webhook verification unavailable"},
+		})
+		return
+	}
+
+	// Per-delivery WARN when running without signature verification, so the
+	// open acceptance path stays visible in the operator's logs.
+	if r.secret == "" && r.allowUnauthenticated {
+		r.logger.Warn("webhook delivery accepted without signature verification (insecure mode)",
+			"insecure", true)
 	}
 
 	// Event type.
