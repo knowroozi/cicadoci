@@ -5,7 +5,7 @@
 //
 // CIC-71d wires the controller (CIC-71a/b/c) into the webhook receiver.
 // The controller is used as the webhook.Dispatcher for the receiver; a
-// NoOp forge is used until CIC-38/39/40 land the real GitHub forge.
+// NoOp forge is used until CIC-71 lands the real GitHub forge.
 package main
 
 import (
@@ -146,7 +146,7 @@ func run() error {
 
 	// CIC-71d: wire the controller as the webhook dispatcher.
 	//
-	// NoOp forge is used until CIC-38/39/40 land the real GitHub
+	// NoOp forge is used until CIC-71 lands the real GitHub
 	// Checks API + token-minter forge.  The controller logs a
 	// warning if Prepare/Start/Complete fails, which is acceptable
 	// for a no-op forge.
@@ -154,7 +154,17 @@ func run() error {
 	// action writes an audit event" invariant produces a durable, read-later
 	// trail rather than process memory that vanishes on restart.
 	auditLog := audit.NewPostgresLog(st.Pool())
-	ctrl := controller.New(st, controller.NoOpForge{}, controller.DefaultConfig().WithAudit(auditLog), log)
+	ctrlOpts := controller.DefaultConfig().WithAudit(auditLog)
+	// Wire the store-backed workflow loader so runs produce job DAGs.
+	// With no loader, LoadAndCreateJobs is a silent no-op and the server accepts
+	// webhooks but never creates jobs (the finding CIC-78 closed). StoreLoader
+	// reads the workflows table; the production producer that fills the table is
+	// the GitHub-raw fetch, tracked as its own follow-up producer ticket (NOT
+	// CIC-38/39/40, which are the secrets RPC / OIDC issuer / job tokens), or a
+	// dev-seed / CLI ingest in dev. A nil table simply means no jobs, which is
+	// the safe default.
+	ctrlOpts.WorkflowLoader = controller.NewStoreLoader(st, log)
+	ctrl := controller.New(st, controller.NoOpForge{}, ctrlOpts, log)
 
 	grpcServer := grpc.NewServer()
 	runnerv1.RegisterRunnerServiceServer(grpcServer, svc)

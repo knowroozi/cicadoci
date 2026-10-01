@@ -191,6 +191,16 @@ func (s *Store) CreateJobSpecs(
 		}
 		return b
 	}
+	// saFor makes a nil slice come across as an empty text[] rather than SQL NULL:
+	// the jobs table marks required_tags and secret_refs NOT NULL DEFAULT '{}', so a
+	// nil slice would violate the constraint and silently drop job creation. A job
+	// with no tags or no secret refs is exactly the empty-array case.
+	saFor := func(a []string) []string {
+		if a == nil {
+			return []string{}
+		}
+		return a
+	}
 
 	// Insert all jobs as 'pending'.
 	for i, sp := range specs {
@@ -201,9 +211,9 @@ func (s *Store) CreateJobSpecs(
                           status, available_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
                  'pending', now())`,
-			ids[i], runID, sp.Name, sp.Executor, sp.RequiredTags,
+			ids[i], runID, sp.Name, sp.Executor, saFor(sp.RequiredTags),
 			defaultInt(sp.Priority, 100), defaultInt(sp.TimeoutSec, 3600),
-			envFor(sp.Env), sp.SecretRefs,
+			envFor(sp.Env), saFor(sp.SecretRefs),
 			sp.GitCloneURL, sp.GitRef, sp.GitSha,
 			defaultInt(sp.MaxAttempts, 3),
 		)

@@ -80,7 +80,7 @@ services:
       CICADO_RUNNER_NAME: dev-runner
       CICADO_RUNNER_STATE: /var/lib/cicado/runner.json
       CICADO_WORKSPACE_ROOT: /var/lib/cicado/workspaces
-      CICADO_EXECUTORS: shell
+      CICADO_EXECUTORS: shell,cicanscript
       CICADO_LOG_LEVEL: debug
       # Development only. The protocol is gRPC over TLS with no plaintext
       # fallback; the runner refuses to start without this flag set explicitly.
