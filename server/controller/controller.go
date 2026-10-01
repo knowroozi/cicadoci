@@ -69,6 +69,13 @@ type Config struct {
 	// buttons are inert (a future ticket should map GitHub roles to
 	// CICaDo user IDs).
 	AllowedApprovers []string
+	// Producer fetches and upserts workflow YAMLs from a code host.
+	//
+	// When non-nil, HandlePush (on the default branch) calls
+	// Producer.Produce before LoadAndCreateJobs so the loader sees fresh
+	// workflows.  PR events must NOT call the producer.
+	// When nil, the controller uses whatever is already in the store.
+	Producer WorkflowProducer
 }
 
 // DefaultConfig returns a Config with sensible development values.
@@ -172,6 +179,26 @@ func (c *Controller) HandlePush(payload webhook.PushPayload) error {
 	c.log.Info("run created", "run", runID, "number", number,
 		"event", "push", "repo", payload.Repository.FullName)
 
+	// CIC-84: produce fresh workflows from the code host before loading.
+	// SECURITY: only the default branch upserts into the shared repo-wide
+	// workflow row. A feature-branch push that carries its own .github/
+	// workflows/ must not overwrite the stored definition because a
+	// on: push: branches: [main] workflow fetched from a feature branch
+	// could poison the next main push and bypass branch protection.
+	// SECURITY: only the default branch upserts into the shared
+	// repo-wide workflow row.  A missing payload.Repository.DefaultBranch
+	// (GitHub may omit it) falls back to c.cfg.DefaultBranch.
+	defaultBranch := payload.Repository.DefaultBranch
+	if defaultBranch == "" {
+		defaultBranch = c.cfg.DefaultBranch
+	}
+	if c.cfg.Producer != nil && branch == defaultBranch {
+		if err := c.cfg.Producer.Produce(ctx, owner, repoName, sha, repoID); err != nil {
+			c.log.Warn("producer: upsert failed; using existing store workflows",
+				"repo", owner+"/"+repoName, "sha", sha, "err", err)
+		}
+	}
+
 	// Create job DAG from matching workflows.
 	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "push", branch, sha, "", false); err != nil {
 		c.log.Warn("job creation failed for push run", "run", runID, "err", err)
@@ -248,6 +275,10 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 		"event", "pull_request", "pr", payload.Number, "repo", payload.Repository.FullName)
 
 	// Create job DAG from matching workflows.
+	// SECURITY (CIC-84): PR events must NOT trigger the workflow producer.
+	// The producer upserts into the repo's shared (repo_id, path) row,
+	// so a same-repo PR to main could poison subsequent push runs.
+
 	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "pull_request", branch, payload.Head.SHA, payload.Action, payload.Fork); err != nil {
 		c.log.Warn("job creation failed for PR run", "run", runID, "err", err)
 	}

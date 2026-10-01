@@ -25,9 +25,10 @@ type PushPayload struct {
 	After      string `json:"after"` // commit SHA
 	Before     string `json:"before"`
 	Repository struct {
-		Name     string `json:"name"`
-		FullName string `json:"full_name"`
-		Private  bool   `json:"private"`
+		Name          string `json:"name"`
+		FullName      string `json:"full_name"`
+		DefaultBranch string `json:"default_branch"`
+		Private       bool   `json:"private"`
 	} `json:"repository"`
 	HeadCommit struct {
 		ID string `json:"id"`
@@ -54,9 +55,10 @@ type PullRequestPayload struct {
 	} `json:"head"`
 	Fork       bool `json:"fork"`
 	Repository struct {
-		Name     string `json:"name"`
-		FullName string `json:"full_name"`
-		Private  bool   `json:"private"`
+		Name          string `json:"name"`
+		FullName      string `json:"full_name"`
+		DefaultBranch string `json:"default_branch"`
+		Private       bool   `json:"private"`
 	} `json:"repository"`
 }
 

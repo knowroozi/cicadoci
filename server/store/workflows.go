@@ -71,3 +71,11 @@ func (s *Store) UpsertWorkflow(ctx context.Context, in WorkflowInput) (uuid.UUID
 	}
 	return id, nil
 }
+
+// ── Narrow interface for the controller's producer ─────────────────────────────
+
+// WorkflowStore is the narrow interface the controller's workflow producer needs
+// from the store. *store.Store satisfies it.
+type WorkflowStore interface {
+	UpsertWorkflow(ctx context.Context, in WorkflowInput) (uuid.UUID, error)
+}
