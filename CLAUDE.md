@@ -43,12 +43,57 @@ Every PR body ends with a two-part checklist, and the split between the parts is
 
 Listing something as verified when it was not actually run is the one thing that makes the checklist worse than having none: it converts an unknown into a false assurance.
 
+Every code PR also records **graph currency**: under *Verified*, note that `/understand-diff` was run against the base (affected components + risk captured), and — before the PR lands on `master` — that the graph was refreshed with `/understand` and the refreshed `.ua/` artifacts were committed. A non-empty diff warning from `/understand-diff` is a signal to refresh the graph (see "Knowledge graph currency" below), not to skip it.
+
 ## Conventions
 
 - Estimates in docs are engineer-weeks (ew), not calendar time
 - Work is tracked in Linear (team `CIC`, project "CICaDo MVP"), milestones M0–M9
 - Update the doc in the same PR as the change it describes
 - Current milestone: **M4 — Logs & artifacts** (M0–M3 complete and merged to `master`; M4–M9 in progress)
+
+## Knowledge graph currency — update the graph after every PR
+
+The repo carries an `/understand` knowledge graph at `.ua/knowledge-graph.json`, with a
+`.ua/fingerprints.json` delta baseline and `.ua/meta.json` provenance (`gitCommitHash` +
+`lastAnalyzedAt`). It must stay in lockstep with `master`, or every downstream consumer —
+agent context, `/understand-diff`, the dashboard — silently reasons about a past revision.
+
+Two skills, two roles:
+
+- **`/understand-diff` — *determine the change*.** Against a base branch or a PR number it
+   resolves the changed files, maps them to graph nodes, finds the 1-hop *affected*
+   components and *touched layers*, and returns a risk assessment (node `complexity`,
+   cross-layer edges, blast radius). It also checks freshness: when the project's committed or
+   working-tree diff since the graph's recorded `gitCommitHash` is non-empty, it warns that the
+   graph omits those changes and points at `/understand`. It writes `.ua/diff-overlay.json` for
+   the dashboard.
+- **`/understand` — *refresh the graph*.** With `knowledge-graph.json` + `fingerprints.json`
+   present it runs *incrementally*: it detects files changed since the last recorded commit,
+   re-scans/re-extracts only those (structural vs semantic), then reassembles and validates,
+   rewriting all three artifacts. The fingerprint delta skips unchanged files, so no LLM
+   subagents are required for a normal refresh.
+
+Cadence:
+
+- **On opening or rebasing a stacked PR:** run `/understand-diff` against the base to scope
+   the change — affected components + risk — and use it to target review.
+- **Before a PR lands on `master`** (merge-land step): run `/understand` so the graph
+   reflects the new commit, and **include the refreshed `.ua/` artifacts**
+   (`knowledge-graph.json`, `fingerprints.json`, `meta.json`) in the resulting commit so
+   every future checkout has a current baseline to diff against.
+- **Staleness signal:** the graph reflects `meta.json.gitCommitHash` /
+    `project.gitCommitHash`; it is stale when
+    `git diff --name-only <graphCommit>..HEAD -- . ':!.ua'`
+    (project-scoped, **ignoring `.ua/`** so the artifacts the refresh itself
+    commits don't re-trigger staleness forever) is non-empty.  `/understand-diff`
+    prints this warning automatically — treat a warning as a "refresh the
+    graph" signal, never a reason to skip the diff.
+
+The data directory is mostly scratch: `.ua/.trash-*/` and `.ua/intermediate/` are git-ignored;
+only the three artifacts plus `.ua/config.json` and `.ua/.understandignore` are checked in.
+
+_Rationale and enforcement: `docs/decisions/CIC-104-knowledge-graph-currency.md`._
 
 ## Decisions log
 

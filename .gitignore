@@ -10,3 +10,11 @@ docker-compose.override.yml
 # Locally-built Go binaries.
 /cicado
 
+# /understand knowledge graph: keep the versioned artifacts (knowledge-graph.json,
+# fingerprints.json, meta.json, config.json, .understandignore) checked in; ignore the
+# derived/scratch material the skills regenerate every run.
+.ua/.trash-*/
+.ua/intermediate/
+.ua/tmp/
+.ua/diff-overlay.json
+

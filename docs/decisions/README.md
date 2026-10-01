@@ -49,6 +49,17 @@ When a batch of PRs merges, the owner (or maintainer) opens a small "decision lo
   from `CLAUDE.md` itself. Any PR that adds a decision **without** a corresponding
   `docs/decisions/CIC-NN-…md` file is blocked in review.
 
+## Process conventions (owner-directed, not per-ticket)
+
+Some entries codify a standing *process* obligation rather than a feature or contract
+decision. These are not tied to a Linear ticket and are registered here, distinct from the
+per-ticket `CIC-NN-*.md` files, but follow the same dated-record format.
+
+- [CIC-104 — Per-PR knowledge-graph currency](CIC-104-knowledge-graph-currency.md) (2026-09-30) —
+   keep `.ua/` (the `/understand` graph + fingerprints baseline) in lockstep with `master`:
+   `/understand-diff` to determine the change, `/understand` (incremental) to refresh it before
+   merge, and commit the refreshed artifacts. See `CLAUDE.md` → "Knowledge graph currency".
+
 ## Existing entries (pre-policy, for reference)
 
 All pre-`docs/decisions/` entries already live in `CLAUDE.md`. After the first sync commit,
