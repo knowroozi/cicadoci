@@ -1,4 +1,4 @@
-## CIC-103 — Per-PR decision log policy
+## CIC-69 — Per-PR decision log policy
 
 **Date:** 2026-09-28
 

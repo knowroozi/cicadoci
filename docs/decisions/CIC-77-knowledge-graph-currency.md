@@ -1,8 +1,8 @@
-## CIC-104 — Per-PR knowledge-graph currency convention
+## CIC-77 — Per-PR knowledge-graph currency convention
 
 **Date:** 2026-09-30
 
-**Owner-directed process convention** (parallel to CIC-103 the per-PR decision-log policy,
+**Owner-directed process convention** (parallel to CIC-69 the per-PR decision-log policy,
 not a feature ticket).
 
 **Problem:** The repo now carries a `/understand` knowledge graph at

@@ -157,11 +157,11 @@ M0 → M1 → M2 → M3 → M4 → M5 → {M6, M7, M8 in parallel} → M9
 
 ## 9. Implementation status snapshot
 
-_Last refreshed 2026-09-30 against `master` (`c8d89fc`, CIC-71h). Per-ticket status tracked in Linear (cicado-mvp board); this section summarizes milestone-level progress.
+_Last refreshed 2026-10-01 against `master` (`5d6722f`). Per-ticket status tracked in Linear (cicado-mvp board); this section summarizes milestone-level progress. The 2026-09-30 snapshot (`c8d89fc`) overstated two *wired* claims — `approvalgates` and `backpressure` — corrected 2026-10-01 (QC, ticket 3bb095): both are on `master` but inert in the shipped binary (see the QC note below).
 
 > **Read note (2026-09-30).** `gh` reporting a PR as `MERGED` does **not** by itself mean its content is on `master` during the M4–M9 recovery: bottom-up rebase promoted most of it, but a merged recovery PR can merge into its base branch without landing on the final `master` line. The authoritative check is `git ls-tree origin/master`. One such case — `server/slack/` (PR #65 / CIC-49) is `MERGED` but **not on `master`** — is flagged under M7 and in the recovery table.
 
-> **QC note (2026-09-30, from `master` @ `c8d89fc`).** Each milestone in this snapshot now reports *two* axes: **code on `master`** (merged) and **wired into the `cicado-server` binary** (active at runtime). These can differ: as of `c8d89fc` the running server serves webhooks + runner gRPC + the Postgres queue with a `NoOpForge`, so M3 check reporting/rerequest and the M4 log/artifact packages are *on `master` but not wired* (CIC-81, CIC-82), and M5 secrets cannot be delivered end-to-end yet (CIC-79). End-to-end wiring is tracked by CIC-78–CIC-83; code-comment cleanups are CIC-83. (The M7 `server/slack/` item, below, is a *merge* anomaly, distinct from this wiring gap.)
+> **QC note (2026-09-30, from `master` @ `c8d89fc`).** Each milestone in this snapshot now reports *two* axes: **code on `master`** (merged) and **wired into the `cicado-server` binary** (active at runtime). These can differ: as of `c8d89fc` the running server serves webhooks + runner gRPC + the Postgres queue with a `NoOpForge`, so M3 check reporting/rerequest and the M4 log/artifact packages are *on `master` but not wired* (CIC-81, CIC-82), and M5 secrets cannot be delivered end-to-end yet (CIC-79). End-to-end wiring is tracked by CIC-78–CIC-83; code-comment cleanups are CIC-83. (The M7 `server/slack/` item, below, is a *merge* anomaly, distinct from this wiring gap.) **Correction (2026-10-01):** two 2026-09-30 claims below were *overstated* — `approvalgates` and `backpressure` are on `master` but inert in the shipped binary (CIC-82, CIC-106).
 
 ### M0 — Foundations ✅ Complete
 All deliverables shipped: monorepo layout, runner protocol v1 (frozen), Postgres schema v1, CI-for-the-CI (GitHub Actions), Apache-2.0, ADR process. PRs #1 through #8 (CIC-13–CIC-22).
@@ -170,11 +170,11 @@ All deliverables shipped: monorepo layout, runner protocol v1 (frozen), Postgres
 HTTP API skeleton (store.Reader seam), gRPC runner service, `FOR UPDATE SKIP LOCKED` job queue with `LISTEN/NOTIFY`, runner registration/heartbeat/drain, docker + shell executors, step model with context cancellation. PRs #12–#18 (CIC-23–CIC-29). M3 E2E walking-skeleton test validates end-to-end.
 
 ### M2 — Workflow definition ✅ Complete
-YAML schema v1 + published JSON Schema, positional-error parser, topological DAG, `validate` CLI subcommand, simple `if:` step conditions + branch/tag filters (no expressions). JSON Schema validation. PRs #19–#21 (CIC-30–CIC-32). Note: CIC-32 code (archive) currently in PR #64.
+YAML schema v1 + published JSON Schema, positional-error parser, topological DAG, `validate` CLI subcommand, step-level `if:` conditions (parsed/validated but **not yet enforced at the runner**, CIC-107) + branch/tag filters. JSON Schema validation. PRs #19–#21 (CIC-30–CIC-32). Note: CIC-32 code (archive) currently in PR #64.
 
 ### M3 — GitHub App integration ✅ Code on master; runtime partial (CIC-81)
 Webhook receiver, HMAC-SHA256 signature verification with replay tolerance, short-lived installation JWTs, fork-PR policy (no secrets + restricted runner tag), `Forge` adapter interface. PRs #23–#26 (CIC-33–CIC-37). CIC-37 (secrets store) in master; CIC-35 covered by CIC-33.
-- **Wired into `cicado-server`:** webhook receipt, signature verification, and `push`/`pull_request` → run creation are served over the HTTP API.
+- **Wired into `cicado-server`:** webhook receipt, signature verification, and `push`/`pull_request` → run creation are served over the HTTP API — *with two runtime caveats*: on real GitHub payloads `pull_request` runs resolve an **empty ref/SHA and `fork=false`** (CIC-102), and workflow jobs **carry no steps yet** (CIC-104).
 - **Code on master, not wired (CIC-81):** *Checks API reporting* and *check_suite / check_run rerequests* are inert at runtime — the server starts with `controller.NoOpForge{}` (`server/cmd/cicado-server/main.go:157`) and `HandleCheckSuite`/`HandleCheckRun` early-return with a "no-op until job resolution lands" log. Reporting/rerequest wiring is CIC-81.
 
 ### M4 — Logs & artifacts ✅ Code on master; not yet wired into cicado-server (CIC-82)
@@ -208,7 +208,7 @@ No code in master or in any open PR. All 6 tickets in Backlog:
 _Largest remaining gap: ~5 ew._
 
 ### M7 — ChatOps: Slack 🔄 In progress
-**On `master` (via merged recovery PRs). Runtime status (as of `c8d89fc`):** `approvalgates` **is** wired into `cicado-server` via the controller (CIC-71h merged; `server/controller/controller.go` imports `server/approvalgates`); `chat`, `runstatus`, and `slash` are code on `master` but **not yet imported by any binary**. Per-feature wiring is tracked by CIC-78–CIC-83.
+**On `master` (via merged recovery PRs). Runtime status (as of `5d6722f`):** `approvalgates` is **code on `master` but *not wired*** — `controller.DefaultConfig()` leaves `ApprovalGates` nil, so `maybeOpenGate` (`server/controller/controller.go:350`) short-circuits and **no approval gate ever opens in the shipped binary** (the import exists, but a nil tracker is a no-op; CIC-82). `chat`, `runstatus`, and `slash` are likewise code on `master` but **not yet imported by any binary**. Per-feature wiring is tracked by CIC-78–CIC-83.
 - `server/chat/` — `ChatProvider` interface + Slack driver (`server/chat/slack.go`), typed `Action` constants — the Slack foundation that is on master (CIC-53, PR #58 merged).
 - `server/approvalgates/` — Block Kit approval buttons with mandatory acting-user authz (CIC-51, PR #66 merged).
 - `server/runstatus/` — threaded, edit-in-place run status via `ChatProvider` (CIC-52, PR #67 merged).
@@ -224,7 +224,7 @@ All M8 packages are present on `master`:
 - `server/ai/` — 10-scenario eval harness; `EvalCase.Expected` is `classify.Classification` (depends on classify, in master) (CIC-57, PR #61 merged).
 
 ### M9 — AWS packaging, hardening & launch prep 🔄 In progress
-**On `master` (via recovery PRs). Runtime status (as of `c8d89fc`):** `server/backpressure` **is** wired into the dispatch loop / controller (CIC-71g merged; imported by `server/controller`); `runner/lambda` is a separate Lambda entrypoint and `Dockerfile`/`build.sh` are packaging.
+**On `master` (via recovery PRs). Runtime status (as of `5d6722f`):** `server/backpressure` is **code on `master` in both the controller and `server/dispatch`**, but in the shipped binary only the *controller's* tracker is non-nil — `dispatch.DefaultConfig` leaves its `Backpressure` nil and `cmd/cicado-server/main.go:145` passes no tracker — so it caps **concurrent webhook handlers, not run dispatch** (CIC-106). `runner/lambda` is a separate Lambda entrypoint and `Dockerfile`/`build.sh` are packaging.
 - `runner/lambda/` — AWS Lambda runner adapter (`Dispatch()` accepts `*JobEvent`, records `journal.LaneStatus`) (CIC-59, PR #62 merged).
 - `server/backpressure/` — max concurrent jobs, log rate caps, payload size caps (CIC-60, PR #63 merged).
 - `Dockerfile`, `build.sh` — distroless server image, debian runner image (CIC-58, PR #47 merged).
@@ -239,7 +239,7 @@ All M8 packages are present on `master`:
 ### Control bridge — webhook → run → job DAG (CIC-71 series, cross-cutting)
 Not one of the §4 milestones, but the integration that wires M1–M5 packages into a live path. As of 2026-09-30:
 - **On master:** `server/controller/` + `server/dispatch/` + `server/events/` + `server/policy/` — first real webhook-runs dispatcher (CIC-71a, PR #75), real org/repo resolution via the store (CIC-71b, PR #76), workflow→job-DAG creation (CIC-71c, PR #77), and the dispatcher wired into the `cicado-server` binary (CIC-71d, PR #78). Supporting hardening merged too: `0003_artifacts.sql` migration (CIC-72), masked-masking/token-registration fix (CIC-74), audit-events implementation (CIC-75).
-- **Also on `master` (CIC-71e–h merged, as of `c8d89fc`):** CIC-71e `StoreLoader` reads workflow definitions from the DB (PR #79), CIC-71f run-creation audit events (PR #80), CIC-71g backpressure tracker in the dispatch loop (PR #81), CIC-71h approvalgates + chat wiring in the controller (PR #82).
+- **Also on `master` (CIC-71e–h merged, as of `5d6722f`):** CIC-71e `StoreLoader` reads workflow definitions from the DB (PR #79), CIC-71f run-creation audit events (PR #80), CIC-71g backpressure tracker present in controller *and* dispatch (PR #81) — but the dispatch-side tracker is nil in the shipped binary, inactive there (CIC-106); CIC-71h added the `approvalgates` field + call to the controller (PR #82) — but `ApprovalGates` is nil in `DefaultConfig`, so **no gate opens** in the shipped binary (CIC-82).
 - **Open (as of 2026-09-30):** CIC-77 per-PR knowledge-graph currency (PR #84, still open). (Deferred-but-documented: S3 `PreSignedURLProvider` → M9, CIC-73; MCP JSON-RPC transport → M9, CIC-76.)
 - Decision records: `docs/decisions/CIC-71a-controller-dispatcher.md`, `CIC-71b-real-org-lookup.md`, `CIC-71c-workflow-dag.md`, `CIC-71d-server-wiring.md`, `CIC-72-artifacts-migration.md`, `CIC-73-presigned-url-defer.md`, `CIC-74-masker-wiring.md`, `CIC-75-audit-postgres.md`, `CIC-76-mcp-defer.md`.
 
@@ -263,15 +263,15 @@ Not one of the §4 milestones, but the integration that wires M1–M5 packages i
 | [#62](https://github.com/cicadoci/core/pull/62) | CIC-59 | `runner/lambda/` |
 | [#63](https://github.com/cicadoci/core/pull/63) | CIC-60 | `server/backpressure/` |
 
-**State (2026-09-30): all 14 recovery PRs are `MERGED` in `gh`.** Their packages are present on `master` **except** `server/slack/` (PR #65 / CIC-49): its merge commit (`33f47d6`) is not an ancestor of `master`, so that package did not promote and is not on `master` — see the M7 flag. The Slack foundation that is on master lives in `server/chat/` (CIC-53). **Wiring status (CIC-78–CIC-83):** being merged (code on `master`) is not the same as being wired into `cicado-server`; as of `c8d89fc` a subset is wired (webhook→run, backpressure, approvalgates, via the controller / CIC-71 series) while the M4 log/artifact packages and M5 end-to-end secrets are still unwired.
+**State (2026-09-30): all 14 recovery PRs are `MERGED` in `gh`.** Their packages are present on `master` **except** `server/slack/` (PR #65 / CIC-49): its merge commit (`33f47d6`) is not an ancestor of `master`, so that package did not promote and is not on `master` — see the M7 flag. The Slack foundation that is on master lives in `server/chat/` (CIC-53). **Wiring status (CIC-78–CIC-83):** being merged (code on `master`) is not the same as being wired into `cicado-server`; as of `5d6722f` the wired subset is webhook→run creation, run-creation audit events, and the controller's webhook-handler backpressure cap; **`approvalgates` and the dispatch-loop backpressure tracker are on `master` but inert in the shipped binary** (`ApprovalGates` nil in `DefaultConfig`, CIC-82; dispatch `Backpressure` nil, CIC-106), as are the M4 log/artifact packages and M5 end-to-end secrets.
 
-### Overall assessment (refreshed 2026-09-30, master @ `c8d89fc`)
+### Overall assessment (refreshed 2026-10-01, master @ `5d6722f`; 2026-09-30 `c8d89fc` snapshot corrected re approvalgates/backpressure)
 **Two axes — *code on master* vs *wired into cicado-server* — are tracked separately throughout this snapshot:**
-- **M0–M3**: 100% on `master`. M3 check reporting + rerequest are **code-on-master but inert at runtime** (`NoOpForge`; CIC-81); webhook receipt + run creation are wired.
+- **M0–M3**: 100% on `master`. M3 check reporting + rerequest are **code-on-master but inert at runtime** (`NoOpForge`; CIC-81). Webhook receipt + run creation are wired, but with runtime caveats: `pull_request` runs resolve **empty ref/SHA and `fork=false`** on real GitHub payloads (CIC-102), workflow jobs **carry no steps yet** (CIC-104), and step-level `if:` conditions are **parsed but not enforced** at the runner (CIC-107).
 - **M4 / M8**: code on `master` (logs/artifacts + MCP/AI, all merged) but **not yet wired** into binaries — M4 SSE/artifact packages are unimported, and M8 has no served surface (transport deferred to M9, CIC-76).
 - **M5**: `server/secrets` + `GetJobSecrets` RPC (CIC-38) + `approvalgates` on `master`; the RPC is registered but **no job can receive secrets end-to-end yet** (CIC-79). Still missing the OIDC issuer (CIC-39), per-job platform tokens (CIC-40), and M5 E2E (CIC-42).
-- **M7**: `approvalgates` is **wired** into the controller (CIC-71h); `chat`/`runstatus`/`slash` are on `master` but not yet wired; `server/slack/` (CIC-49) did **not** promote — see the flag above.
-- **M9**: `server/backpressure` is **wired** into the dispatch loop (CIC-71g); `runner/lambda` (separate Lambda entrypoint) and image packaging are on `master`; security pass / docs site / dogfood cutover / telemetry-SSO / name-registration tail remain backlogged.
-- **Control bridge** (CIC-71/72–76): the full CIC-71 series (71a–h) is **on `master`** as of `c8d89fc`; wiring is still progressing via CIC-78–CIC-83. CIC-77 (knowledge-graph currency, PR #84) is still open.
+- **M7**: `approvalgates` is on `master` but **not wired** into the shipped binary (`ApprovalGates` nil in `DefaultConfig` → no gate opens; CIC-82); `chat`/`runstatus`/`slash` are on `master` but not yet wired; `server/slack/` (CIC-49) did **not** promote — see the flag above.
+- **M9**: `server/backpressure` is code-on-master in controller + dispatch, but in the shipped binary only the controller's cap is active — it caps **concurrent webhook handlers, not run dispatch** (dispatch tracker nil; CIC-106); `runner/lambda` (separate Lambda entrypoint) and image packaging are on `master`; security pass / docs site / dogfood cutover / telemetry-SSO / name-registration tail remain backlogged.
+- **Control bridge** (CIC-71/72–76): the full CIC-71 series (71a–h) is **on `master`** as of `5d6722f`; wiring is still progressing via CIC-78–CIC-83. CIC-77 (knowledge-graph currency, PR #84) is still open.
 - **M6 Web UI**: still 0% in code (`web/` is `README.md` only) — 6 tickets backlogged, ~5 ew, the largest remaining gap.
 

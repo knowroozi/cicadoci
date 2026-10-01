@@ -93,7 +93,7 @@ Cadence:
 The data directory is mostly scratch: `.ua/.trash-*/` and `.ua/intermediate/` are git-ignored;
 only the three artifacts plus `.ua/config.json` and `.ua/.understandignore` are checked in.
 
-_Rationale and enforcement: `docs/decisions/CIC-104-knowledge-graph-currency.md`._
+_Rationale and enforcement: `docs/decisions/CIC-77-knowledge-graph-currency.md`._
 
 ## Decisions log
 
