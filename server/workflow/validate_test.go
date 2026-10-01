@@ -115,11 +115,29 @@ func TestValidate_InvalidIf(t *testing.T) {
 }
 
 func TestValidate_ValidIfValues(t *testing.T) {
-	for _, v := range []string{"success", "failure", "always", ""} {
+	// Only 'success' and '' (default) are valid for step.if in the current
+	// runner; 'failure' and 'always' are rejected by the validator.
+	for _, v := range []string{"success", ""} {
 		w := validWorkflow()
 		w.Jobs["build"].Steps = []*Step{{Name: "ok", Run: "echo hi", If: v}}
 		if err := Validate(w); err != nil {
 			t.Errorf("if=%q: unexpected error: %v", v, err)
+		}
+	}
+}
+
+// TestValidate_StepIfFailureNotSupported verifies that 'if: failure' and
+// 'if: always' are rejected on EVERY step (including step 0).
+// The runner is not yet wired to honour step-level if: conditions
+// (CIC-118); the validator fails loudly until then.
+func TestValidate_StepIfFailureNotSupported(t *testing.T) {
+	for _, v := range []string{"failure", "always"} {
+		w := validWorkflow()
+		// Single step at index 0 with the unsupported condition.
+		w.Jobs["build"].Steps = []*Step{{Name: "only", Run: "echo hi", If: v}}
+		err := Validate(w)
+		if err == nil {
+			t.Errorf("if=%q on step 0: expected error (not yet supported), got nil", v)
 		}
 	}
 }

@@ -50,7 +50,9 @@ Every code PR also records **graph currency**: under *Verified*, note that `/und
 - Estimates in docs are engineer-weeks (ew), not calendar time
 - Work is tracked in Linear (team `CIC`, project "CICaDo MVP"), milestones M0–M9
 - Update the doc in the same PR as the change it describes
-- Current milestone: **M4 — Logs & artifacts** (M0–M3 complete and merged to `master`; M4–M9 in progress)
+- Current milestone: **M5 — Runner & CI** (M0–M3 complete and merged to `master`; M4 core+tail merged; M4 in progress; M5–M9 next)
+- 2026-10-01 status: 10 open PRs (#91–#103) are being reviewed; blockers being worked through in priority order.
+  Do NOT start M5-tail, M6, or M9 until review blockers are closed (per god 69aa4e).
 
 ## Knowledge graph currency — update the graph after every PR
 
