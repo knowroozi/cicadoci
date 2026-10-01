@@ -94,8 +94,10 @@ jobs:
       - run: aws s3 sync ./dist s3://my-bucket
         image: amazon/aws-cli
         identity: aws            # ← OIDC role assumption, no keys
-        env: { AWS_ROLE_ARN: secrets.DEPLOY_ROLE }
+        env: { AWS_ROLE_ARN: secrets.DEPLOY_ROLE }    # ← planned; secrets.X interpolation not implemented yet (CIC-79)
 ```
+
+_Note: the `secrets.DEPLOY_ROLE` interpolation above is **planned syntax** (CIC-79) — it is not implemented yet, so `AWS_ROLE_ARN` would not resolve today._
 
 Deliberate constraints: no loops, no expressions beyond status/branch conditionals, no templating language. Logic goes in scripts/containers (Jenkins Groovy lesson). Reuse arrives post-MVP as versioned packages, not YAML anchors.
 
