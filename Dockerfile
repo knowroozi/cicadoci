@@ -20,7 +20,11 @@
 #   docker build --target runner -t cicado-runner:latest .
 
 ## Build stage — all three binaries, statically linked, CGO disabled
-FROM golang:1.23 AS build
+# go.mod requires go >= 1.26.0 (the `go` directive) with GOTOOLCHAIN=local, so
+# the build toolchain MUST be >= 1.26; a 1.23 image fails `go mod download`
+# (CIC-134: the only failing CI job was 'Docker images'). 1.26 matches the
+# repo's .github/workflows/ci.yml GO_VERSION.
+FROM golang:1.26 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
