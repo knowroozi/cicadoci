@@ -52,6 +52,8 @@ enforced by `SubjectFor`, not by convention. This matters because a
 mis-formatted subject would let one job's token impersonate another's; the
 grammar is validated at construction, not at use.
 
+**Known issue (CIC-122):** the `job:<run>:<job>` subject grammar above conflicts with `project-docs/02-architecture.md` §7, whose trust condition states `sub` = `org/repo/branch/env`. Tracked in CIC-122; the decision text is unaltered pending resolution.
+
 ## Security rationale
 
 Every decision here was made with a specific attack in mind.
