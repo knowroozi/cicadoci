@@ -44,6 +44,7 @@ const (
 	ConclusionSkipped        CheckConclusion = "skipped"
 	ConclusionNeutral        CheckConclusion = "neutral"
 	ConclusionActionRequired CheckConclusion = "action_required"
+	ConclusionCancelled      CheckConclusion = "cancelled"
 )
 
 // Annotation is a single GitHub Checks API annotation attached to a

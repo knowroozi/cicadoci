@@ -8,6 +8,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -416,4 +417,99 @@ func (s *Store) ResolveRepo(
 	}
 
 	return orgID, repoID, nil
+}
+
+// ── forge check reporting (CIC-81) ───────────────────────────────────────────
+
+// SetPreparedCheckID records the forge check ID returned by forge.Prepare on
+// the run, so the run-terminal hook can complete the same check.
+func (s *Store) SetPreparedCheckID(ctx context.Context, runID uuid.UUID, checkID int64) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE runs SET prepared_check_id = $2 WHERE id = $1`, runID, checkID)
+	if err != nil {
+		return fmt.Errorf("store: set prepared check id: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// RunCheckRef is what forge.Complete needs to address a run's check: the
+// repo's owner and name, the run's commit and ref, and the check ID that
+// forge.Prepare returned. CheckID is not Valid when no check was prepared.
+type RunCheckRef struct {
+	Owner   string
+	Repo    string
+	SHA     string
+	Ref     string
+	CheckID sql.NullInt64
+}
+
+// GetRunCheckRef returns the forge addressing data for runID, or ErrNotFound.
+func (s *Store) GetRunCheckRef(ctx context.Context, runID uuid.UUID) (RunCheckRef, error) {
+	var r RunCheckRef
+	err := s.pool.QueryRow(ctx, `
+SELECT re.owner, re.name, coalesce(ru.sha, ''), coalesce(ru.ref, ''), ru.prepared_check_id
+  FROM runs ru
+  JOIN repos re ON re.id = ru.repo_id
+ WHERE ru.id = $1`, runID).Scan(&r.Owner, &r.Repo, &r.SHA, &r.Ref, &r.CheckID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RunCheckRef{}, ErrNotFound
+	}
+	if err != nil {
+		return RunCheckRef{}, fmt.Errorf("store: get run check ref: %w", err)
+	}
+	return r, nil
+}
+
+// RerunSource is the run a forge re-run request replays: the most recent run
+// of a repo at a commit. CloneURL and CheckoutRef come from that run's jobs
+// and are empty when it created none.
+type RerunSource struct {
+	RunID       uuid.UUID
+	Event       string
+	Ref         string
+	IsFork      bool
+	CloneURL    string
+	CheckoutRef string
+}
+
+// FindRerunSource returns the most recent run of repoID at sha. ok is false
+// when there is no such run.
+//
+// A re-run replays this run's event, ref and fork flag: check_suite and
+// check_run are not workflow trigger types, and the payloads carry no fork
+// signal, so the original run is the only trustworthy source for either.
+func (s *Store) FindRerunSource(ctx context.Context, repoID uuid.UUID, sha string) (src RerunSource, ok bool, err error) {
+	err = s.pool.QueryRow(ctx, `
+SELECT r.id, r.event, coalesce(r.ref, ''), r.is_fork,
+       coalesce(j.git_clone_url, ''), coalesce(j.git_ref, '')
+  FROM runs r
+  LEFT JOIN LATERAL (
+        SELECT git_clone_url, git_ref FROM jobs
+         WHERE run_id = r.id
+         ORDER BY created_at
+         LIMIT 1) j ON true
+ WHERE r.repo_id = $1 AND r.sha = $2
+ ORDER BY r.created_at DESC, r.number DESC
+ LIMIT 1`, repoID, sha).Scan(&src.RunID, &src.Event, &src.Ref, &src.IsFork, &src.CloneURL, &src.CheckoutRef)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RerunSource{}, false, nil
+	}
+	if err != nil {
+		return RerunSource{}, false, fmt.Errorf("store: find rerun source: %w", err)
+	}
+	return src, true, nil
+}
+
+// CountRunJobs returns how many jobs runID has. A run with none never reaches
+// the run-terminal hook, so the controller finishes it at once: completes its
+// check (CIC-81) and releases its backpressure slot (CIC-106).
+func (s *Store) CountRunJobs(ctx context.Context, runID uuid.UUID) (int, error) {
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE run_id = $1`, runID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count run jobs: %w", err)
+	}
+	return n, nil
 }

@@ -4,8 +4,9 @@
 // UI embedded via embed.FS. Its only stateful dependency is Postgres.
 //
 // CIC-71d wires the controller (CIC-71a/b/c) into the webhook receiver.
-// The controller is used as the webhook.Dispatcher for the receiver; a
-// NoOp forge is used until CIC-71 lands the real GitHub forge.
+// The controller is used as the webhook.Dispatcher for the receiver.
+// CIC-81: with --github-app-token set, the GitHub forge reports each run as
+// a check on the commit; without it, a NoOp forge reports nothing.
 package main
 
 import (
@@ -34,6 +35,8 @@ import (
 	"cicadoci.com/cicado/server/audit"
 	"cicadoci.com/cicado/server/controller"
 	"cicadoci.com/cicado/server/dispatch"
+	"cicadoci.com/cicado/server/forge"
+	githubpkg "cicadoci.com/cicado/server/github"
 	"cicadoci.com/cicado/server/queue"
 	"cicadoci.com/cicado/server/runnersvc"
 	"cicadoci.com/cicado/server/secrets"
@@ -65,6 +68,7 @@ func run() error {
 		secretKeyHex         = flag.String("secret-key", os.Getenv("CICADO_SECRET_KEY"), "hex-encoded 32-byte AES-256 encryption key for the secrets store")
 		allowEphemeralKey    = flag.Bool("allow-ephemeral-key", envBool("CICADO_ALLOW_EPHEMERAL_KEY", false), "permit an ephemeral random secret key when CICADO_SECRET_KEY is empty (DEVELOPMENT ONLY: secrets will not survive a restart)")
 		githubWorkflowToken  = flag.String("github-workflow-token", os.Getenv("CICADO_GITHUB_WORKFLOW_TOKEN"), "long-lived fine-grained GitHub personal access token (Contents: read) used to fetch the repo's workflow files on a default-branch push; NOT a GitHub App installation token, which expires after 1 h (prefer the env var: a flag value shows in ps); empty keeps the producer off and relies on the store/dev-seed path")
+		githubAppToken       = flag.String("github-app-token", os.Getenv("CICADO_GITHUB_APP_TOKEN"), "GitHub token used to report runs as checks (Checks API); empty reports nothing. A GitHub App installation token expires after 1 hour, so a static one suits short-lived dev servers only; minting per call is CIC-146. The Checks API accepts only App installation tokens, not PATs")
 	)
 	flag.Parse()
 
@@ -157,18 +161,41 @@ func run() error {
 	// (runner report, sweeper dead letter, or cancel scan alike). It must be
 	// set here, before runnersvc.New copies svcCfg. forge.Complete and the
 	// backpressure release attach to this hook rather than adding their own.
+	//
+	// CIC-81: it completes the run's forge check. ctrl is built further down;
+	// the hook only fires once the servers below are running, by which time
+	// ctrl is set. The queue calls the hook on the goroutine that finished the
+	// run and it must not block, so the forge round trip runs on its own
+	// goroutine, bounded by a timeout.
+	//
+	// CIC-106: it also returns the run's backpressure slot, which the
+	// controller holds from the webhook until the run is terminal. That is a
+	// map update under a mutex, so it runs inline.
+	var ctrl *controller.Controller
 	svcCfg.OnRunTerminal = func(runID uuid.UUID, state string) {
 		log.Info("run finished", "run_id", runID, "state", state)
+		ctrl.ReleaseRun(runID)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := ctrl.RunCompleted(ctx, runID, state); err != nil {
+				log.Warn("forge check completion failed", "run_id", runID, "state", state, "error", err)
+			}
+		}()
 	}
 	svc := runnersvc.New(st.Pool(), q, svcCfg, log, secretsStore)
+	// The dispatcher gets no backpressure tracker (CIC-106). Run-level
+	// backpressure is the controller's: it holds one slot per run until the
+	// run is terminal. A dispatcher tracker would Acquire per job and never
+	// release on completion, stalling job 5+ of every run.
 	dispatcher := dispatch.New(q, svc.Sessions(), dispatch.DefaultConfig(svcCfg.LeaseTTL()), log)
 
 	// CIC-71d: wire the controller as the webhook dispatcher.
 	//
-	// NoOp forge is used until CIC-71 lands the real GitHub
-	// Checks API + token-minter forge.  The controller logs a
-	// warning if Prepare/Start/Complete fails, which is acceptable
-	// for a no-op forge.
+	// CIC-81: newForge picks the GitHub Checks forge when a token is
+	// configured and the NoOp forge otherwise. The controller logs a
+	// warning if Prepare/Complete fails; a run never fails on account of
+	// its check.
 	// Wire a persistent audit log so the "every state-changing
 	// action writes an audit event" invariant produces a durable, read-later
 	// trail rather than process memory that vanishes on restart.
@@ -203,7 +230,7 @@ func run() error {
 			"source", "github", "token_source", "CICADO_GITHUB_WORKFLOW_TOKEN")
 	}
 
-	ctrl := controller.New(st, controller.NoOpForge{}, ctrlOpts, log)
+	ctrl = controller.New(st, newForge(*githubAppToken, log), ctrlOpts, log)
 
 	grpcServer := grpc.NewServer()
 	runnerv1.RegisterRunnerServiceServer(grpcServer, svc)
@@ -346,4 +373,16 @@ func newWorkflowProducer(token string, st store.WorkflowStore, log *slog.Logger,
 		return nil
 	}
 	return controller.NewGitHubWorkflowProducer(token, st, log, httpClient)
+}
+
+// newForge returns the forge the controller reports runs to: the GitHub
+// Checks API when token is set, otherwise a NoOp forge (CIC-81). No token
+// minter is wired yet, so the GitHub forge cannot mint clone credentials
+// (CIC-146).
+func newForge(token string, log *slog.Logger) forge.Forge {
+	if token == "" {
+		log.Warn("no --github-app-token: runs will not be reported to GitHub as checks")
+		return controller.NoOpForge{}
+	}
+	return forge.NewGitHubForge(githubpkg.NewChecksReporterAdapter(githubpkg.NewChecksClient(token, nil)), nil)
 }

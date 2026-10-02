@@ -65,8 +65,10 @@ func DefaultConfig(leaseTTL time.Duration) Config {
 		UndeliveredBackoff: 2 * time.Second,
 		MaxCancelBatch:     8,
 		CancelGraceSeconds: 5,
-		// Backpressure: nil by default; caller provides a tracker from
-		// controller.DefaultConfig().Backpressure.
+		// Backpressure: nil by default. Do not pass the controller's
+		// tracker: it holds one slot per run until the run is terminal
+		// (CIC-106), while this would Acquire per job and never release
+		// on completion.
 	}
 }
 

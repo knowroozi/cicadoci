@@ -70,6 +70,7 @@ const (
 	ConclusionSkipped        Conclusion = "skipped"
 	ConclusionNeutral        Conclusion = "neutral"
 	ConclusionActionRequired Conclusion = "action_required"
+	ConclusionCancelled      Conclusion = "cancelled"
 )
 
 // Annotation is a single annotation attached to a check.

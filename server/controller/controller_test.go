@@ -25,10 +25,18 @@ import (
 // discardLogger is a slog.Logger that discards all output.
 var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-// stubForge records Prepare calls; all other methods are stubs.
+// stubForge records Prepare and Complete calls; all other methods are stubs.
 type stubForge struct {
 	prepareCalls int
 	prepareErr   error
+	completes    []completeCall
+}
+
+// completeCall is one recorded stubForge.Complete call.
+type completeCall struct {
+	checkID    int64
+	ref        forge.RunRef
+	conclusion forge.Conclusion
 }
 
 func (s *stubForge) Name() string { return "stub" }
@@ -40,8 +48,9 @@ func (s *stubForge) Prepare(_ context.Context, _ forge.RunRef) (int64, error) {
 
 func (s *stubForge) Start(_ context.Context, _ int64, _ forge.RunRef) error { return nil }
 
-func (s *stubForge) Complete(_ context.Context, _ int64, _ forge.RunRef,
-	_ forge.Conclusion, _ []forge.Annotation) error {
+func (s *stubForge) Complete(_ context.Context, checkID int64, ref forge.RunRef,
+	conclusion forge.Conclusion, _ []forge.Annotation) error {
+	s.completes = append(s.completes, completeCall{checkID, ref, conclusion})
 	return nil
 }
 

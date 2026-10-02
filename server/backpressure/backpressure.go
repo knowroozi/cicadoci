@@ -37,7 +37,12 @@ type Tracker struct {
 	repoCount map[string]*atomic.Int32
 	orgCount  map[string]*atomic.Int32
 	total     atomic.Int32
+	// runs maps a run ID to the slot it holds (CIC-106). Guarded by mu.
+	runs map[string]slot
 }
+
+// slot is the repo/org pair whose counters a run's Acquire incremented.
+type slot struct{ repoID, orgID string }
 
 // NewTracker creates a tracker with the given limits.
 func NewTracker(limits Limits) *Tracker {
@@ -48,6 +53,7 @@ func NewTracker(limits Limits) *Tracker {
 		limits:    limits,
 		repoCount: make(map[string]*atomic.Int32),
 		orgCount:  make(map[string]*atomic.Int32),
+		runs:      make(map[string]slot),
 	}
 }
 
@@ -110,6 +116,37 @@ func (t *Tracker) Acquire(ctx context.Context, repoID, orgID string) (bool, erro
 func (t *Tracker) Release(repoID, orgID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.releaseLocked(repoID, orgID)
+}
+
+// Register records that runID holds the slot an Acquire(repoID, orgID) took,
+// so ReleaseByRunID can return it when the run finishes (CIC-106). Register
+// it before the run's jobs are enqueued: a run that finishes before it is
+// registered would otherwise keep its slot forever.
+func (t *Tracker) Register(runID, repoID, orgID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.runs[runID] = slot{repoID: repoID, orgID: orgID}
+}
+
+// ReleaseByRunID releases the slot registered for runID and forgets the
+// registration. It reports whether a slot was released. Calling it again,
+// or for a run that was never registered, is a no-op, so every path that
+// ends a run may call it without risking a double release.
+func (t *Tracker) ReleaseByRunID(runID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	s, ok := t.runs[runID]
+	if !ok {
+		return false
+	}
+	delete(t.runs, runID)
+	t.releaseLocked(s.repoID, s.orgID)
+	return true
+}
+
+// releaseLocked decrements the counters for one slot. t.mu must be held.
+func (t *Tracker) releaseLocked(repoID, orgID string) {
 	if c, ok := t.repoCount[repoID]; ok {
 		if v := c.Add(-1); v < 0 {
 			c.Add(1) // floor at zero

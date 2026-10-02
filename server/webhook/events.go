@@ -116,7 +116,7 @@ func (p PullRequestPayload) IsFork() bool {
 }
 
 type CheckSuitePayload struct {
-	Action     string `json:"action"` // "requested"
+	Action     string `json:"action"` // "requested", "rerequested"
 	CheckSuite struct {
 		ID         int64  `json:"id"`
 		HeadSHA    string `json:"head_sha"`
@@ -124,6 +124,9 @@ type CheckSuitePayload struct {
 			FullName string `json:"full_name"`
 		} `json:"repository"`
 	} `json:"check_suite"`
+	// Repository is the top-level "repository" object, which is where
+	// GitHub puts the repo on check_suite deliveries (CIC-81).
+	Repository Repo `json:"repository"`
 }
 
 // CheckRunPayload is the minimal subset of GitHub's check_run event
@@ -139,6 +142,9 @@ type CheckRunPayload struct {
 			FullName string `json:"full_name"`
 		} `json:"repository"`
 	} `json:"check_run"`
+	// Repository is the top-level "repository" object, which is where
+	// GitHub puts the repo on check_run deliveries (CIC-81).
+	Repository Repo `json:"repository"`
 }
 
 // ── dispatch ───────────────────────────────────────────────────────

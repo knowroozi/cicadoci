@@ -3,6 +3,7 @@ package backpressure
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -169,5 +170,73 @@ func TestLogFanOut_ReleaseDoesNotGoNegative(t *testing.T) {
 	l.Release()
 	if got := l.Active(); got != 0 {
 		t.Fatalf("expected 0 after double release, got %d", got)
+	}
+}
+
+// CIC-106: a run's slot is released once, by run ID, however many paths try.
+func TestRegisterReleaseByRunID(t *testing.T) {
+	tk := NewTracker(Limits{PerRepo: 1, PerOrg: 1, System: 1})
+	ctx := context.Background()
+
+	if ok, _ := tk.Acquire(ctx, "repo", "org"); !ok {
+		t.Fatal("first Acquire refused")
+	}
+	tk.Register("run-1", "repo", "org")
+	if ok, _ := tk.Acquire(ctx, "repo", "org"); ok {
+		t.Fatal("Acquire allowed while run-1 holds the only slot")
+	}
+
+	if !tk.ReleaseByRunID("run-1") {
+		t.Fatal("ReleaseByRunID(run-1) = false, want true")
+	}
+	if tk.ReleaseByRunID("run-1") {
+		t.Error("second ReleaseByRunID(run-1) = true, want a no-op")
+	}
+	if tk.ReleaseByRunID("never-registered") {
+		t.Error("ReleaseByRunID(unknown) = true, want a no-op")
+	}
+	if got := tk.Count("repo"); got != 0 {
+		t.Errorf("repo count = %d after release, want 0", got)
+	}
+	if ok, _ := tk.Acquire(ctx, "repo", "org"); !ok {
+		t.Error("Acquire refused after the run released its slot")
+	}
+}
+
+// Register/ReleaseByRunID race Acquire on the same maps; run under -race.
+// Every acquired slot is registered and released exactly once (some
+// releases twice), so every counter must end at zero.
+func TestRegisterReleaseByRunIDConcurrent(t *testing.T) {
+	tk := NewTracker(Limits{PerRepo: 1000, PerOrg: 1000, System: 1000})
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				repo := fmt.Sprintf("repo-%d", i%5)
+				run := fmt.Sprintf("run-%d-%d", g, i)
+				ok, err := tk.Acquire(ctx, repo, "org")
+				if err != nil || !ok {
+					t.Errorf("Acquire(%s): ok=%v err=%v", repo, ok, err)
+					return
+				}
+				tk.Register(run, repo, "org")
+				tk.ReleaseByRunID(run)
+				tk.ReleaseByRunID(run) // a second path ending the same run
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	if got := tk.TotalCount(); got != 0 {
+		t.Errorf("total = %d, want 0", got)
+	}
+	for i := 0; i < 5; i++ {
+		if got := tk.Count(fmt.Sprintf("repo-%d", i)); got != 0 {
+			t.Errorf("repo-%d count = %d, want 0", i, got)
+		}
 	}
 }
