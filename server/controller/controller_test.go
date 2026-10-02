@@ -193,7 +193,7 @@ func TestConvertJobSpecs_Linear(t *testing.T) {
 		t.Fatal("BuildDAG:", err)
 	}
 
-	specs := convertJobSpecs(wf, dag)
+	specs := convertJobSpecs(wf, dag, false)
 	if len(specs) != 2 {
 		t.Fatalf("got %d specs, want 2", len(specs))
 	}
@@ -236,7 +236,7 @@ func TestConvertJobSpecs_Diamond(t *testing.T) {
 		t.Fatal("BuildDAG:", err)
 	}
 
-	specs := convertJobSpecs(wf, dag)
+	specs := convertJobSpecs(wf, dag, false)
 	if len(specs) != 4 {
 		t.Fatalf("got %d specs, want 4", len(specs))
 	}
@@ -267,7 +267,7 @@ func TestConvertJobSpecs_WithEnv(t *testing.T) {
 		t.Fatal("BuildDAG:", err)
 	}
 
-	specs := convertJobSpecs(wf, dag)
+	specs := convertJobSpecs(wf, dag, false)
 	if len(specs) != 1 {
 		t.Fatalf("got %d specs, want 1", len(specs))
 	}

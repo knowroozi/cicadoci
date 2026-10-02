@@ -6,7 +6,10 @@
 // contributor cannot override it by writing a permissive workflow.
 package policy
 
-import "cicadoci.com/cicado/server/workflow"
+import (
+	"cicadoci.com/cicado/internal/secretexpr"
+	"cicadoci.com/cicado/server/workflow"
+)
 
 // ForkPolicy is the security posture applied to runs that originate
 // from a fork pull request. It is enforced at dispatch time, not in
@@ -53,23 +56,20 @@ func (p *ForkPolicy) Apply(wf *workflow.Workflow) *workflow.Workflow {
 	return wf
 }
 
-// scrubSecrets returns a copy of env with all values that look like
-// secret references removed.
+// scrubSecrets returns a copy of env with all values that are secret
+// references removed. It uses secretexpr.IsRef, the single-source-of-truth
+// predicate that also drives the server-side ref extraction, so the fork
+// policy and the server controller agree on what a secret reference is,
+// including the GitHub-style template form `${{ secrets.NAME }}` and
+// leading/trailing whitespace (which IsRef's extract trims).
 func scrubSecrets(env map[string]string) map[string]string {
 	out := make(map[string]string, len(env))
 	for k, v := range env {
-		if !looksLikeSecretRef(v) {
+		if !secretexpr.IsRef(v) {
 			out[k] = v
 		}
 	}
 	return out
-}
-
-// looksLikeSecretRef returns true when the string looks like a secret
-// reference: it starts with "secrets." (CICaDo's convention).
-func looksLikeSecretRef(v string) bool {
-	const prefix = "secrets."
-	return len(v) >= len(prefix) && v[:len(prefix)] == prefix
 }
 
 // containsStr returns true if tags contains target.

@@ -312,10 +312,16 @@ func (s *Service) ingestLogUp(
 		// ShouldThrottle is sticky; the session loop reads it to emit Throttle.
 		throttle.Account(jobID, uint64(len(chunk.GetData())))
 
-		// CIC-31: redaction runs HERE, on ingest, never at render time. This
-		// is the chokepoint every chunk passes through before persistence.
-		// TODO(CIC-37): masker scrubs against an empty registered-value set
-		// until the secrets store provides values to feed Register()
+		// CIC-31: redaction runs HERE, on ingest, never at render time.
+		// Since CIC-79, the masker's registered-value set is populated when a
+		// runner claims a job whose secret_refs list is non-empty: the server
+		// registers each delivered value with the service-wide masker before
+		// returning it to the runner. The full lifecycle of masker values
+		// (unregister on job completion or lease expiry) is a follow-up ticket
+		// (CIC-119): registered values stay live in the masker for the
+		// process lifetime even after a job completes or its lease
+		// expires.  This is a minor secret-retention issue; the
+		// process-level risk is low for a single-tenant deploy.
 		data := s.cfg.Masker.Mask(chunk.GetData())
 		if _, err := s.pool.Exec(ctx, `
 			INSERT INTO log_entries (job_id, seq, kind, step_index, io, data, runner_ts)

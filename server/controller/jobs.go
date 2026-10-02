@@ -25,9 +25,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"cicadoci.com/cicado/internal/secretexpr"
 	"cicadoci.com/cicado/server/store"
 	"cicadoci.com/cicado/server/workflow"
 	"cicadoci.com/cicado/server/workflow/parse"
+
+	"sort"
 )
 
 // ── WorkflowLoader interface ──────────────────────────────────────────────────
@@ -164,7 +167,20 @@ func (l *StoreLoader) LoadAll(ctx context.Context, repoID uuid.UUID, _ string) (
 	}
 	return out, nil
 }
-func convertJobSpecs(w *workflow.Workflow, dag *workflow.DAG) []store.JobSpec {
+
+// ── workflow → JobSpec conversion ───────────────────────────────────────────────
+
+// convertJobSpecs converts a parsed workflow into a slice of store.JobSpec
+// suitable for store.CreateJobSpecs.
+//
+// Job specs are returned in topological order: the DAG's Levels
+// determine the ordering; within the same level, names are sorted
+// alphabetically.
+//
+// Each job's Needs entry (workflow.Job.Needs) is passed directly to
+// JobSpec.Needs.  CreateJobSpecs resolves the names to UUIDs inside a
+// transaction and fails if any referenced name is not in the same list.
+func convertJobSpecs(w *workflow.Workflow, dag *workflow.DAG, isFork bool) []store.JobSpec {
 	specs := make([]store.JobSpec, 0, len(dag.Jobs))
 
 	for _, name := range dag.Jobs {
@@ -183,7 +199,7 @@ func convertJobSpecs(w *workflow.Workflow, dag *workflow.DAG) []store.JobSpec {
 			MaxAttempts:  3,
 			Priority:     100,
 			Env:          envToJSON(j.Env),
-			SecretRefs:   secretRefsFor(j),
+			SecretRefs:   secretRefsFor(j, isFork),
 		}
 		specs = append(specs, spec)
 	}
@@ -209,17 +225,36 @@ func envToJSON(env map[string]string) []byte {
 	return b
 }
 
-// secretRefsFor extracts secret references from a job's env and steps.
-//
-// In MVP, secret refs are only set at the job level (via the approval
-// gate or a future secrets directive). Step-level secrets are resolved
-// at step-execution time by the runner, not at spec-creation time.
-//
-// Returns nil when no references are present.
-func secretRefsFor(_ *workflow.Job) []string {
-	// TODO(CIC-38/39/40): populate when per-job secret references land
-	// in the workflow schema.
-	return nil
+// secretRefsFor returns the distinct, sorted list of secret NAMES a job
+// references, extracted from the job-level env AND every step's env. Each
+// step's env is evaluated independently so two steps that happen to use the
+// same key with different secret refs both contribute their name.  Secret
+// VALUES are never stored here; only the NAME list is, persisted in
+// `secret_refs` and authorized by GetJobSecrets against the live lease.
+// A fork-PR job (isFork=true) returns nil unconditionally, regardless of the
+// workflow text — the defense-in-depth backstop on top of ForkPolicy.Apply.
+func secretRefsFor(j *workflow.Job, isFork bool) []string {
+	if isFork {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	for _, n := range secretexpr.Refs(j.Env) {
+		seen[n] = struct{}{}
+	}
+	for _, step := range j.Steps {
+		for _, n := range secretexpr.Refs(step.Env) {
+			seen[n] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ── controller integration ──────────────────────────────────────────────────────
@@ -309,7 +344,7 @@ func (c *Controller) LoadAndCreateJobs(
 			continue
 		}
 
-		specs := convertJobSpecs(wf, dag)
+		specs := convertJobSpecs(wf, dag, isFork)
 		if len(specs) == 0 {
 			// Valid workflow with no jobs — skip.
 			continue

@@ -131,3 +131,59 @@ func TestForkPolicy_StripsDeployIdentity(t *testing.T) {
 		}
 	}
 }
+
+// TestForkPolicy_StripsTemplateFormSecret is the regression for Dwight's #91
+// security blocker 1: the fork policy used to only strip values that start
+// exactly with "secrets." — a fork workflow could smuggle a real secret
+// through with the template form ("${{ secrets.DEPLOY }}") or a leading
+// space (" secrets.DEPLOY"). After the fix, scrubSecrets uses
+// secretexpr.IsRef, which recognises both forms plus leading whitespace.
+func TestForkPolicy_StripsTemplateFormSecret(t *testing.T) {
+	wf := &workflow.Workflow{
+		Name: "test",
+		Jobs: map[string]*workflow.Job{
+			"build": {
+				RunsOn: []string{"linux"},
+				Env: map[string]string{
+					"A": "secrets.DEPLOY",               // bare
+					"B": "${{ secrets.DEPLOY }}",        // template
+					"C": "  secrets.DEPLOY",             // leading whitespace
+					"D": "NOT_A_SECRET",                 // not a ref
+					"E": "prefix secrets.SUFFIX suffix", // embedded fragment
+				},
+				Steps: []*workflow.Step{
+					{
+						Name: "step",
+						Env: map[string]string{
+							"F": "${{ secrets.GITHUB_TOKEN }}", // template in step
+							"Z": "plain-value",
+						},
+						Run: "echo",
+					},
+				},
+			},
+		},
+	}
+	p := DefaultForkPolicy()
+	p.Apply(wf)
+
+	// All A, B, C (job level) and F (step level) must be gone.
+	for _, key := range []string{"A", "B", "C", "Z"} {
+		if _, ok := wf.Jobs["build"].Env[key]; ok {
+			t.Errorf("job Env key %q survived scrub, want removed", key)
+		}
+	}
+	if _, ok := wf.Jobs["build"].Env["D"]; !ok {
+		t.Error("D (non-secret) was incorrectly removed")
+	}
+	if _, ok := wf.Jobs["build"].Env["E"]; !ok {
+		t.Error("E (embedded fragment, not a ref) was incorrectly removed")
+	}
+	s := wf.Jobs["build"].Steps[0]
+	if _, ok := s.Env["F"]; ok {
+		t.Error("step Env key F (template form secret) survived scrub")
+	}
+	if _, ok := s.Env["Z"]; !ok {
+		t.Error("step Env key Z (non-secret) was incorrectly removed")
+	}
+}

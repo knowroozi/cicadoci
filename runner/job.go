@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"cicadoci.com/cicado/internal/secretexpr"
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
 	"cicadoci.com/cicado/runner/executor"
 	"cicadoci.com/cicado/runner/journal"
@@ -31,7 +33,6 @@ func runtimeArch() string { return runtime.GOARCH }
 func (a *Agent) startJob(jobParent context.Context, assignment *runnerv1.JobAssignment, send func(*runnerv1.RunnerMessage) error) {
 	jobID := assignment.GetJobId()
 	leaseID := assignment.GetLeaseId()
-
 	a.jobsMu.Lock()
 	// A draining runner takes on no new work: a job rejected here is requeued by
 	// the server and another runner — or this one once restarted — runs it.
@@ -63,7 +64,6 @@ func (a *Agent) startJob(jobParent context.Context, assignment *runnerv1.JobAssi
 		_ = send(ackMessage(jobID, leaseID, runnerv1.JobAck_REJECTED, "capacity"))
 		return
 	}
-
 	spec := assignment.GetSpec()
 	if spec.GetExecutor() != "" && !a.supportsExecutor(spec.GetExecutor()) {
 		a.jobsMu.Unlock()
@@ -86,11 +86,9 @@ func (a *Agent) startJob(jobParent context.Context, assignment *runnerv1.JobAssi
 	a.drainWG.Add(1)
 	a.active[jobID] = &activeJob{leaseID: leaseID, cancel: cancel}
 	a.jobsMu.Unlock()
-
 	if err := send(ackMessage(jobID, leaseID, runnerv1.JobAck_ACCEPTED, "")); err != nil {
 		a.log.Error("send job ack", "job_id", jobID, "error", err)
 	}
-
 	go func() {
 		// Order matters for a drain: return the job's context to cancel first, only
 		// then release the drain WaitGroup, and bookkeep last — a draining caller
@@ -102,7 +100,6 @@ func (a *Agent) startJob(jobParent context.Context, assignment *runnerv1.JobAssi
 		a.executeJob(jobCtx, assignment, send)
 	}()
 }
-
 func (a *Agent) supportsExecutor(name string) bool {
 	for _, e := range a.cfg.Executors {
 		if e == name {
@@ -117,11 +114,9 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 	jobID := assignment.GetJobId()
 	leaseID := assignment.GetLeaseId()
 	spec := assignment.GetSpec()
-
 	a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{
 		State: runnerv1.StatusUpdate_PREPARING,
 	})
-
 	exec, err := executor.NewExecutor(spec.GetExecutor())
 	if err != nil {
 		a.log.Error("unknown executor", "job_id", jobID, "executor", spec.GetExecutor(), "error", err)
@@ -140,6 +135,23 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 		Env:           spec.GetEnv(),
 	}
 
+	// Fetch SECRET VALUES against the live lease (CIC-79). The server grants
+	// only the references secret_refs authorizes and registers the values in
+	// its redaction masker; the runner holds them in memory and never writes
+	// them to disk or the log stream. A job that references no secrets gets an
+	// empty map. A transport / auth failure is an infrastructure failure.
+	secrets, err := fetchJobSecrets(ctx, a.secrets, jobID, leaseID)
+	if err != nil {
+		a.log.Error("fetch job secrets", "job_id", jobID, "error", err)
+		a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{
+			State:      runnerv1.StatusUpdate_FAILED,
+			ExitCode:   -1,
+			ErrorClass: infraErrorClass,
+			Detail:     err.Error(),
+		})
+		return
+	}
+	job.Secrets = secrets
 	if err := exec.Prepare(ctx, job); err != nil {
 		a.log.Error("prepare job", "job_id", jobID, "error", err)
 		a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{
@@ -159,31 +171,45 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 			a.log.Warn("cleanup workspace", "job_id", jobID, "error", err)
 		}
 	}()
-
 	for _, step := range spec.GetSteps() {
 		stepIndex := step.GetIndex()
-
 		a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{
 			State:     runnerv1.StatusUpdate_RUNNING_STEP,
 			StepIndex: stepIndex,
 		})
 		a.sendEvent(jobID, leaseID, stepIndex, "step_started",
 			fmt.Sprintf(`{"name":%q,"image":%q}`, step.GetName(), step.GetImage()))
-
 		sink := executor.OutputSinkFunc(func(stream executor.Stream, data []byte) {
 			a.sendChunk(jobID, leaseID, stepIndex, stream, data)
 		})
 
+		// Build the step env by resolving secret references against the lease-scoped
+		// values fetched by GetJobSecrets. Plain env values pass through untouched.
+		stepEnv := secretexpr.Resolve(mergeEnv(spec.GetEnv(), step.GetEnv()), secrets)
+		// (should-fix #3, Dwight #91): a missing/unavailable secret must surface as a
+		// clear error, not a confusing downstream auth failure at step runtime.
+		if missing := unresolvedSecrets(stepEnv); len(missing) > 0 {
+			msg := fmt.Sprintf("step %d: secret(s) referenced but unavailable: %s", stepIndex, strings.Join(missing, ", "))
+			a.log.Warn("unresolved secret in step env",
+				"job_id", jobID, "step", stepIndex, "missing", missing)
+			a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{
+				State:      runnerv1.StatusUpdate_FAILED,
+				StepIndex:  stepIndex,
+				ExitCode:   1,
+				ErrorClass: "secret_unavailable",
+				Detail:     msg,
+			})
+			return
+		}
 		result, err := exec.RunStep(ctx, executor.Step{
 			Index:          int32(stepIndex),
 			Name:           step.GetName(),
 			Image:          step.GetImage(),
 			Command:        step.GetCommand(),
-			Env:            mergeEnv(spec.GetEnv(), step.GetEnv()),
+			Env:            stepEnv,
 			Timeout:        time.Duration(step.GetTimeoutSeconds()) * time.Second,
 			NetworkEnabled: step.GetNetworkEnabled(),
 		}, sink)
-
 		switch {
 		case err != nil:
 			// The step could not be run at all: infrastructure, not the job's fault.
@@ -197,14 +223,12 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 				Detail:     err.Error(),
 			})
 			return
-
 		case ctx.Err() != nil:
 			a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{
 				State:     runnerv1.StatusUpdate_CANCELLED,
 				StepIndex: stepIndex,
 			})
 			return
-
 		case result.ExitCode != 0:
 			errorClass := "user_script"
 			if result.TimedOut {
@@ -220,19 +244,16 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 				ErrorClass: errorClass,
 			})
 			return
-
 		default:
 			a.sendEvent(jobID, leaseID, stepIndex, "step_finished",
 				fmt.Sprintf(`{"exit_code":0,"duration_ms":%d}`, result.Duration.Milliseconds()))
 		}
 	}
-
 	a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{
 		State:    runnerv1.StatusUpdate_SUCCEEDED,
 		ExitCode: 0,
 	})
 }
-
 func mergeEnv(jobEnv, stepEnv map[string]string) map[string]string {
 	merged := make(map[string]string, len(jobEnv)+len(stepEnv))
 	for k, v := range jobEnv {
@@ -243,7 +264,6 @@ func mergeEnv(jobEnv, stepEnv map[string]string) map[string]string {
 	}
 	return merged
 }
-
 func ackMessage(jobID, leaseID string, result runnerv1.JobAck_Result, reason string) *runnerv1.RunnerMessage {
 	return &runnerv1.RunnerMessage{
 		Msg: &runnerv1.RunnerMessage_JobAck{JobAck: &runnerv1.JobAck{
@@ -271,7 +291,6 @@ func (a *Agent) sendStatus(send func(*runnerv1.RunnerMessage) error, jobID, leas
 	// message for replay on RESUME.  The journal is trimmed by StatusAck as the
 	// server acknowledges each one.
 	a.journal.Record(journal.Entry{JobID: jobID, Lane: journal.LaneStatus, Seq: upd.Seq, Msg: upd})
-
 	if err := send(&runnerv1.RunnerMessage{
 		Msg: &runnerv1.RunnerMessage_StatusUpdate{StatusUpdate: upd},
 	}); err != nil {
@@ -290,7 +309,6 @@ func (a *Agent) nextSeq(jobID string) uint64 {
 	a.seqMu.Unlock()
 	return counter.Add(1)
 }
-
 func (a *Agent) setLogStream(stream runnerv1.RunnerService_LogStreamClient) {
 	a.logMu.Lock()
 	defer a.logMu.Unlock()
@@ -316,7 +334,6 @@ func (a *Agent) sendLogUp(up *runnerv1.LogUp) {
 		a.log.Debug("send on log stream", "error", err)
 	}
 }
-
 func (a *Agent) sendChunk(jobID, leaseID string, stepIndex uint32, stream executor.Stream, data []byte) {
 	ioKind := runnerv1.LogChunk_STDOUT
 	if stream == executor.StreamStderr {
@@ -338,7 +355,6 @@ func (a *Agent) sendChunk(jobID, leaseID string, stepIndex uint32, stream execut
 	a.journal.Record(journal.Entry{JobID: jobID, Lane: journal.LaneLog, Seq: chunk.Seq, Msg: logUp})
 	a.sendLogUp(logUp)
 }
-
 func (a *Agent) sendEvent(jobID, leaseID string, stepIndex uint32, kind, payload string) {
 	event := &runnerv1.StructuredEvent{
 		JobId:     jobID,
@@ -366,12 +382,10 @@ func (a *Agent) finishJob(jobID string) {
 	a.jobsMu.Lock()
 	delete(a.active, jobID)
 	a.jobsMu.Unlock()
-
 	a.seqMu.Lock()
 	delete(a.seq, jobID)
 	a.seqMu.Unlock()
 }
-
 func (a *Agent) activeJobIDs() []string {
 	a.jobsMu.Lock()
 	defer a.jobsMu.Unlock()
@@ -401,13 +415,11 @@ func (a *Agent) drain(grace time.Duration) {
 	a.jobsMu.Lock()
 	a.draining.Store(true)
 	a.jobsMu.Unlock()
-
 	done := make(chan struct{})
 	go func() {
 		a.drainWG.Wait()
 		close(done)
 	}()
-
 	if grace <= 0 {
 		if a.jobCancel != nil {
 			a.jobCancel()
@@ -415,7 +427,6 @@ func (a *Agent) drain(grace time.Duration) {
 		<-done
 		return
 	}
-
 	select {
 	case <-done:
 		return // every in-flight job finished within the grace window
@@ -435,14 +446,12 @@ func (a *Agent) drain(grace time.Duration) {
 // cancelJob kills local execution of a job the server has taken back.
 func (a *Agent) cancelJob(cancel *runnerv1.CancelJob) {
 	jobID := cancel.GetJobId()
-
 	a.jobsMu.Lock()
 	job, ok := a.active[jobID]
 	a.jobsMu.Unlock()
 	if !ok {
 		return
 	}
-
 	a.log.Info("cancelling job", "job_id", jobID, "reason", cancel.GetReason())
 	if grace := cancel.GetGraceSeconds(); grace > 0 {
 		time.AfterFunc(time.Duration(grace)*time.Second, job.cancel)
@@ -466,7 +475,6 @@ func (a *Agent) cancelJob(cancel *runnerv1.CancelJob) {
 func (a *Agent) resumeStates() []*runnerv1.ResumeState {
 	a.jobsMu.Lock()
 	defer a.jobsMu.Unlock()
-
 	states := make([]*runnerv1.ResumeState, 0, len(a.active))
 	for jobID, job := range a.active {
 		states = append(states, &runnerv1.ResumeState{
@@ -478,7 +486,6 @@ func (a *Agent) resumeStates() []*runnerv1.ResumeState {
 	}
 	return states
 }
-
 func (a *Agent) currentSeq(jobID string) uint64 {
 	a.seqMu.Lock()
 	defer a.seqMu.Unlock()
@@ -502,7 +509,6 @@ func (a *Agent) applyResumeVerdicts(verdicts []*runnerv1.ResumeVerdict) {
 				"status_watermark", v.GetStatusWatermark())
 			continue
 		}
-
 		a.log.Warn("abandoning job: lease is gone", "job_id", v.GetJobId())
 		jobID := v.GetJobId()
 		a.jobsMu.Lock()

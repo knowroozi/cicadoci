@@ -66,7 +66,13 @@ type Agent struct {
 	cfg    Config
 	conn   *grpc.ClientConn
 	client runnerv1.RunnerServiceClient
-	log    *slog.Logger
+	// secrets is the narrow lease-scoped GetJobSecrets client used to fetch
+	// secret VALUES for a job at execute time (CIC-79). nil when the agent was
+	// constructed without a live gRPC connection (e.g. unit tests); when nil,
+	// executeJob delivers an empty secret set instead of panicking on a broken
+	// client.
+	secrets secretsClient
+	log     *slog.Logger
 
 	// seq is the per-job sequence allocator for the log stream. Chunks and
 	// events share one space per the protocol, so one counter serves both.
@@ -145,14 +151,28 @@ func New(cfg Config, conn *grpc.ClientConn) *Agent {
 		cfg.Capacity = 1
 	}
 	return &Agent{
-		cfg:     cfg,
-		conn:    conn,
-		client:  runnerv1.NewRunnerServiceClient(conn),
+		cfg:    cfg,
+		conn:   conn,
+		client: runnerv1.NewRunnerServiceClient(conn),
+		// fetchJobSecrets degrades to an empty set on a nil client, so we only
+		// wire the secrets client when a live connection exists. Production
+		// always has one; unit-test agents (conn==nil) leave it nil on purpose.
+		secrets: maybeSecretsClient(conn),
 		log:     log,
 		seq:     make(map[string]*atomic.Uint64),
 		active:  make(map[string]*activeJob),
 		journal: journal.NewMemoryJournal(),
 	}
+}
+
+// maybeSecretsClient returns the lease-scoped GetJobSecrets client when a live
+// gRPC connection is present, and nil otherwise. executeJob treats a nil client
+// as "no secrets" so agent unit tests that bypass the connection still build.
+func maybeSecretsClient(conn *grpc.ClientConn) secretsClient {
+	if conn == nil {
+		return nil
+	}
+	return runnerv1.NewRunnerServiceClient(conn)
 }
 
 // authContext attaches the runner credential to outgoing calls.
