@@ -180,7 +180,11 @@ func (l *StoreLoader) LoadAll(ctx context.Context, repoID uuid.UUID, _ string) (
 // Each job's Needs entry (workflow.Job.Needs) is passed directly to
 // JobSpec.Needs.  CreateJobSpecs resolves the names to UUIDs inside a
 // transaction and fails if any referenced name is not in the same list.
-func convertJobSpecs(w *workflow.Workflow, dag *workflow.DAG, isFork bool) []store.JobSpec {
+//
+// gitCloneURL, gitRef, gitSha are the checkout coordinates for the runner.
+// isFork is true for fork PRs and gates secret access via secretRefsFor.
+func convertJobSpecs(w *workflow.Workflow, dag *workflow.DAG, gitCloneURL, gitRef, gitSha string, isFork bool) []store.JobSpec {
+
 	specs := make([]store.JobSpec, 0, len(dag.Jobs))
 
 	for _, name := range dag.Jobs {
@@ -192,7 +196,7 @@ func convertJobSpecs(w *workflow.Workflow, dag *workflow.DAG, isFork bool) []sto
 
 		spec := store.JobSpec{
 			Name:         name,
-			Executor:     "cicanscript", // default executor for MVP
+			Executor:     "cicanscript", // TODO(CIC-132): select executor from workflow step spec, not hard-coded
 			RequiredTags: j.RunsOn,
 			TimeoutSec:   j.TimeoutSeconds,
 			Needs:        []string(j.Needs),
@@ -200,6 +204,10 @@ func convertJobSpecs(w *workflow.Workflow, dag *workflow.DAG, isFork bool) []sto
 			Priority:     100,
 			Env:          envToJSON(j.Env),
 			SecretRefs:   secretRefsFor(j, isFork),
+			GitCloneURL:  gitCloneURL,
+			GitRef:       gitRef,
+			GitSha:       gitSha,
+			Steps:        convertSteps(j.Steps),
 		}
 		specs = append(specs, spec)
 	}
@@ -257,6 +265,37 @@ func secretRefsFor(j *workflow.Job, isFork bool) []string {
 	return out
 }
 
+// convertSteps maps workflow.Step → store.StepSpec for each step in the job.
+func convertSteps(steps []*workflow.Step) []store.StepSpec {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]store.StepSpec, len(steps))
+	for i, s := range steps {
+		name := s.Name
+		if name == "" {
+			name = s.Uses
+		}
+		if name == "" && s.Run != "" {
+			// Use first word of Run as step name.
+			name = s.Run
+		}
+		var cmd []string
+		if s.Run != "" {
+			cmd = []string{s.Run}
+		}
+		envJSON, _ := json.Marshal(s.Env) // nil or empty → {}
+		out[i] = store.StepSpec{
+			Name:           name,
+			Image:          s.Image,
+			Command:        cmd,
+			Env:            envJSON,
+			TimeoutSeconds: s.TimeoutSeconds,
+		}
+	}
+	return out
+}
+
 // ── controller integration ──────────────────────────────────────────────────────
 
 // LoadAndCreateJobs loads all workflows for repoID, matches each against
@@ -281,7 +320,13 @@ func (c *Controller) LoadAndCreateJobs(
 	runID uuid.UUID,
 	eventType, ref, eventSHA, prAction string,
 	isFork bool,
+	gitCheckoutURL, gitCheckoutRef string,
 ) error {
+	// gitCheckoutURL is the clone URL for the checkout ref;
+	// gitCheckoutRef is the actual git ref to check out
+	// (e.g. "refs/pull/N/head" for PRs, "refs/heads/main" for pushes).
+	// The trigger-matching ref (the 'ref' param) is separate and
+	// comes from the base branch for PRs.
 	loader := c.cfg.WorkflowLoader
 	if loader == nil {
 		c.log.Debug("no workflow loader configured; skipping job creation",
@@ -344,7 +389,7 @@ func (c *Controller) LoadAndCreateJobs(
 			continue
 		}
 
-		specs := convertJobSpecs(wf, dag, isFork)
+		specs := convertJobSpecs(wf, dag, gitCheckoutURL, gitCheckoutRef, eventSHA, isFork)
 		if len(specs) == 0 {
 			// Valid workflow with no jobs — skip.
 			continue

@@ -520,3 +520,48 @@ func TestRequeueBackoffDelaysClaim(t *testing.T) {
 		t.Fatalf("claimed %d jobs during backoff, want 0", len(claimed))
 	}
 }
+
+// TestClaim_ReturnsStoredSteps verifies that Claim loads the persisted steps
+// and returns them in the ClaimedJob.
+// TestClaim_ReturnsStoredSteps verifies that Claim loads persisted steps
+// from the steps table and returns them in the ClaimedJob.
+func TestClaim_ReturnsStoredSteps(t *testing.T) {
+	st := testdb.New(t)
+	ctx := context.Background()
+	q := queue.NewPostgres(st.Pool())
+
+	runID := seedOrgRepoRun(t, st.Pool())
+	// Seed a job with 3 steps.
+	// seedJob defaults to executor "shell" which matches seedRunner's executors.
+	jobID := seedJob(t, st.Pool(), runID,
+		withSteps(3),
+	)
+	runnerID := seedRunner(t, st.Pool(), []string{"linux", "shell"})
+
+	// Claim should return the job with its 3 steps.
+	claimed, err := q.Claim(ctx, queue.ClaimRequest{
+		RunnerID:  runnerID,
+		Labels:    []string{"linux", "shell"},
+		Executors: []string{"shell"},
+		LeaseTTL:  testLeaseTTL,
+		Limit:     1,
+	})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("expected 1 claimed job, got %d", len(claimed))
+	}
+	j := claimed[0]
+	if j.JobID != jobID {
+		t.Fatalf("claimed job %s, want %s", j.JobID, jobID)
+	}
+	if len(j.Steps) != 3 {
+		t.Fatalf("expected 3 steps, got %d: %+v", len(j.Steps), j.Steps)
+	}
+	for i, s := range j.Steps {
+		if s.Index != int32(i) {
+			t.Errorf("step %d: index=%d, want %d", i, s.Index, i)
+		}
+	}
+}

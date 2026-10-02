@@ -200,7 +200,10 @@ func (c *Controller) HandlePush(payload webhook.PushPayload) error {
 	}
 
 	// Create job DAG from matching workflows.
-	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "push", branch, sha, "", false); err != nil {
+	pushCloneURL := "https://github.com/" + payload.Repository.FullName + ".git"
+	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "push", branch, sha,
+		"" /* prAction */, false, /* isFork */
+		pushCloneURL, "refs/heads/"+branch); err != nil {
 		c.log.Warn("job creation failed for push run", "run", runID, "err", err)
 		// Job creation failure is non-fatal: the run was created and its
 		// status can be reported separately.
@@ -280,7 +283,19 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 	// SECURITY (CIC-84): PR events must NOT trigger the workflow producer.
 	// The producer upserts into the repo's shared (repo_id, path) row,
 	// so a same-repo PR to main could poison subsequent push runs.
-	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "pull_request", branch, payload.PullRequest.Head.SHA, payload.Action, isFork); err != nil {
+	//
+	// refs/pull/<N>/head only exists on the base repo, so use the base
+	// repo's clone URL (payload.Repository.CloneURL, falling back to
+	// github.com/<org>/<repo>.git when empty).  Trigger matching on
+	// 'branch' (base ref) is separate and handled by LoadAndCreateJobs
+	// internally.
+	baseCloneURL := payload.Repository.CloneURL
+	if baseCloneURL == "" {
+		baseCloneURL = "https://github.com/" + payload.Repository.FullName + ".git"
+	}
+	checkoutRef := fmt.Sprintf("refs/pull/%d/head", payload.PullRequest.Number)
+	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "pull_request", branch, payload.PullRequest.Head.SHA, payload.Action, isFork,
+		baseCloneURL, checkoutRef); err != nil {
 		c.log.Warn("job creation failed for PR run", "run", runID, "err", err)
 	}
 

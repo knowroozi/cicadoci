@@ -50,6 +50,9 @@ type PushPayload struct {
 type Repo struct {
 	FullName string `json:"full_name"`
 	Fork     bool   `json:"fork"`
+	// CloneURL is the repository's HTTPS clone URL (CIC-104). For the
+	// base repository it is the checkout source for refs/pull/<N>/head.
+	CloneURL string `json:"clone_url"`
 }
 
 // PullRequestHead represents GitHub's pull_request.head sub-object.

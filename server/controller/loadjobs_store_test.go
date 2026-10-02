@@ -69,7 +69,8 @@ func TestLoadAndCreateJobsViaStoreLoader(t *testing.T) {
 		t.Fatalf("create run: %v", err)
 	}
 
-	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "push", "refs/heads/master", "deadbeef", "", false); err != nil {
+	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "push", "refs/heads/master", "deadbeef", "", false,
+		"https://github.com/org/repo.git", "refs/heads/master"); err != nil {
 		t.Fatalf("LoadAndCreateJobs: %v", err)
 	}
 
@@ -79,5 +80,102 @@ func TestLoadAndCreateJobsViaStoreLoader(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("jobs created for run = %d, want 1 (the loader found the workflow and built its DAG)", count)
+	}
+}
+
+// TestLoadAndCreateJobs_PersistsSteps verifies that multi-step job specs
+// are persisted to the steps table and can be read back.
+func TestLoadAndCreateJobs_PersistsSteps(t *testing.T) {
+	st := testdb.New(t)
+	ctx := context.Background()
+
+	orgID, err := st.UpsertOrg(ctx, "acme", "Acme")
+	if err != nil {
+		t.Fatalf("upsert org: %v", err)
+	}
+	repoID, err := st.FindOrCreateRepo(ctx, orgID, "github", "acme", "core", "master")
+	if err != nil {
+		t.Fatalf("find or create repo: %v", err)
+	}
+
+	src := []byte("name: ci\non:\n  push: {}\n" +
+		"jobs:\n" +
+		"  build:\n" +
+		"    runs-on: [default]\n" +
+		"    steps:\n" +
+		"        - name: install\n" +
+		"          run: apt-get install -y gcc\n" +
+		"        - name: compile\n" +
+		"          run: make build\n" +
+		"        - name: test\n" +
+		"          run: make test\n")
+	wf, err := ParseWorkflowBytes(src, "ci.yaml")
+	if err != nil {
+		t.Fatalf("parse workflow: %v", err)
+	}
+	def, err := json.Marshal(wf)
+	if err != nil {
+		t.Fatalf("marshal workflow: %v", err)
+	}
+	if _, err := st.UpsertWorkflow(ctx, store.WorkflowInput{
+		RepoID:     repoID,
+		Name:       wf.Name,
+		Path:       ".github/workflows/ci.yaml",
+		Source:     string(src),
+		Definition: def,
+		ContentSHA: "cishas",
+	}); err != nil {
+		t.Fatalf("upsert workflow: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.WorkflowLoader = NewStoreLoader(st, discardLogger)
+	c := New(st, NoOpForge{}, cfg, discardLogger)
+
+	runID, _, err := st.CreateRun(ctx, store.CreateRunOptions{
+		RepoID:        repoID,
+		Event:         "push",
+		Ref:           "refs/heads/master",
+		Sha:           "cishas",
+		Actor:         "42",
+		TriggerSource: store.TriggerForge,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "push", "refs/heads/master", "cishas", "", false, "", ""); err != nil {
+		t.Fatalf("LoadAndCreateJobs: %v", err)
+	}
+
+	// Read back all steps for the run's job.
+	rows, err := st.Pool().Query(ctx,
+		`SELECT s.name FROM steps s JOIN jobs j ON j.id = s.job_id WHERE j.run_id = $1 ORDER BY s.step_index`,
+		runID)
+	if err != nil {
+		t.Fatalf("query steps: %v", err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan step: %v", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows err: %v", err)
+	}
+
+	want := []string{"install", "compile", "test"}
+	if len(names) != len(want) {
+		t.Fatalf("got %d steps, want %d: %v", len(names), len(want), names)
+	}
+	for i, w := range want {
+		if names[i] != w {
+			t.Errorf("step %d name: got %q, want %q", i, names[i], w)
+		}
 	}
 }

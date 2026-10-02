@@ -144,6 +144,16 @@ type JobSpec struct {
 	GitRef       string
 	GitSha       string
 	MaxAttempts  int // 3 default
+	Steps        []StepSpec
+}
+
+// StepSpec is a single step to create in the steps table.
+type StepSpec struct {
+	Name           string
+	Image          string
+	Command        []string
+	Env            []byte // JSON object, nil or empty → {}
+	TimeoutSeconds int    // 0 means no timeout
 }
 
 // CreateJobSpecs atomically creates a job set and its DAG edges.
@@ -221,9 +231,34 @@ func (s *Store) CreateJobSpecs(
 			_ = tx.Rollback(ctx)
 			return nil, fmt.Errorf("create job %q: %w", sp.Name, err)
 		}
+
+		// Insert steps for this job (if any).
+		for si, st := range sp.Steps {
+			envBytes := st.Env
+			if len(envBytes) == 0 {
+				envBytes = []byte("{}")
+			}
+			cmd := st.Command
+			if cmd == nil {
+				cmd = []string{}
+			}
+			sql := `
+			INSERT INTO steps
+				(id, job_id, step_index, name, image, command, env,
+				 timeout_seconds, network_enabled, status)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')`
+			_, err := tx.Exec(ctx, sql,
+				uuid.New(), ids[i], int32(si), st.Name, st.Image,
+				cmd, envBytes, int32(st.TimeoutSeconds), false)
+			if err != nil {
+				_ = tx.Rollback(ctx)
+				return nil, fmt.Errorf("create step %d of job %q: %w", si, sp.Name, err)
+			}
+		}
 	}
 
 	// Write DAG edges and flip top-level jobs to 'queued'.
+
 	for i, sp := range specs {
 		if len(sp.Needs) > 0 {
 			for _, refName := range sp.Needs {
