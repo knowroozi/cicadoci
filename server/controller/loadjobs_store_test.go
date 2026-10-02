@@ -49,7 +49,7 @@ func TestLoadAndCreateJobsViaStoreLoader(t *testing.T) {
 	if _, err := st.UpsertWorkflow(ctx, store.WorkflowInput{
 		RepoID:     repoID,
 		Name:       wf.Name,
-		Path:       ".github/workflows/ci.yaml",
+		Path:       ".cicado/workflows/ci.yaml",
 		Source:     string(src),
 		Definition: def,
 		ContentSHA: "deadbeef",
@@ -125,7 +125,7 @@ func TestLoadAndCreateJobs_PersistsSteps(t *testing.T) {
 	if _, err := st.UpsertWorkflow(ctx, store.WorkflowInput{
 		RepoID:     repoID,
 		Name:       wf.Name,
-		Path:       ".github/workflows/ci.yaml",
+		Path:       ".cicado/workflows/ci.yaml",
 		Source:     string(src),
 		Definition: def,
 		ContentSHA: "cishas",
@@ -316,7 +316,7 @@ func TestLoadAndCreateJobs_MatchedButFailedFinalisesFailed(t *testing.T) {
 	if _, err := st.UpsertWorkflow(ctx, store.WorkflowInput{
 		RepoID:     repoID,
 		Name:       wf.Name,
-		Path:       ".github/workflows/bad-dag.yaml",
+		Path:       ".cicado/workflows/bad-dag.yaml",
 		Source:     string(src),
 		Definition: def,
 		ContentSHA: "bad-dag-sha",
@@ -426,7 +426,7 @@ func TestLoadAndCreateJobs_ZeroMatchFinalisesSucceeded(t *testing.T) {
 	if _, err := st.UpsertWorkflow(ctx, store.WorkflowInput{
 		RepoID:     repoID,
 		Name:       wf.Name,
-		Path:       ".github/workflows/release.yaml",
+		Path:       ".cicado/workflows/release.yaml",
 		Source:     string(src),
 		Definition: def,
 		ContentSHA: "zero-match-sha",

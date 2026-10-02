@@ -89,6 +89,10 @@ the doc name.
 
 ### Fetch path — deferred to CIC-121
 
+> **Resolved by CIC-121:** the fetcher now reads `.cicado/workflows/`
+> (`github.WorkflowDir`) and the `TODO(CIC-121)` in `main.go` is gone. The
+> paragraph below is kept as the record of the decision at CIC-120 time.
+
 The producer fetches `.github/workflows/` (the #95 default, hardcoded in
 `server/github/workflows.go`). The aspirational `.cicado/workflows/`
 convention is a separate decision (CIC-121) and touches already-merged

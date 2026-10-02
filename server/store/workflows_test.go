@@ -29,7 +29,7 @@ func TestUpsertWorkflowRoundTrip(t *testing.T) {
 		t.Fatalf("find or create repo: %v", err)
 	}
 
-	path := ".github/workflows/ci.yaml"
+	path := ".cicado/workflows/ci.yaml"
 	def, _ := json.Marshal(&workflow.Workflow{Name: "ci", Jobs: map[string]*workflow.Job{
 		"build": {RunsOn: []string{"shell"}},
 	}})
@@ -159,18 +159,18 @@ func TestDeleteWorkflowsNotIn(t *testing.T) {
 		return out
 	}
 
-	put(repoA, ".github/workflows/ci.yaml")
-	put(repoA, ".github/workflows/old-deploy.yml")
-	put(repoB, ".github/workflows/old-deploy.yml") // same path, other repo
+	put(repoA, ".cicado/workflows/ci.yaml")
+	put(repoA, ".cicado/workflows/old-deploy.yml")
+	put(repoB, ".cicado/workflows/old-deploy.yml") // same path, other repo
 
-	n, err := st.DeleteWorkflowsNotIn(ctx, repoA, []string{".github/workflows/ci.yaml"})
+	n, err := st.DeleteWorkflowsNotIn(ctx, repoA, []string{".cicado/workflows/ci.yaml"})
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if n != 1 {
 		t.Errorf("deleted = %d, want 1", n)
 	}
-	if got := paths(repoA); len(got) != 1 || got[0] != ".github/workflows/ci.yaml" {
+	if got := paths(repoA); len(got) != 1 || got[0] != ".cicado/workflows/ci.yaml" {
 		t.Errorf("repo a paths = %v, want [ci.yaml]", got)
 	}
 	if got := paths(repoB); len(got) != 1 {

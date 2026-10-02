@@ -44,7 +44,7 @@ type WorkflowProducer interface {
 // GitHubWorkflowProducer is the GitHub-backed WorkflowProducer.
 //
 // It uses a github.WorkflowFetcher with a Bearer token to fetch
-// .github/workflows/*.yaml at the given ref, parses each file with
+// .cicado/workflows/*.yaml at the given ref, parses each file with
 // server/workflow/parse, and upserts the JSON-encoded workflow.
 type GitHubWorkflowProducer struct {
 	fetcher      *github.WorkflowFetcher
@@ -80,7 +80,7 @@ func NewGitHubWorkflowProducer(
 
 // Produce fetches, parses, and upserts workflow YAML for the given repo.
 //
-// A 404 at .github/workflows/ returns nil and changes nothing (no prune).
+// A 404 at .cicado/workflows/ returns nil and changes nothing (no prune).
 // A parse error on one file is logged but does not abort the others.
 // ref should be the SHA from the push event.  Empty ref => "main".
 func (p *GitHubWorkflowProducer) Produce(
@@ -186,7 +186,7 @@ func (p *GitHubWorkflowProducer) Produce(
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // workflowNameFromPath extracts a short name from a GitHub workflow path.
-// ".github/workflows/ci.yaml" → "ci", ".github/workflows/deploy.yml" → "deploy".
+// ".cicado/workflows/ci.yaml" → "ci", ".cicado/workflows/deploy.yml" → "deploy".
 func workflowNameFromPath(path string) string {
 	name := path
 	for i := len(name) - 1; i >= 0; i-- {

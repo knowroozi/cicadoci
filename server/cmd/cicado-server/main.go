@@ -222,8 +222,6 @@ func run() error {
 	// TODO(CIC-146): the token is one static, long-lived fine-grained PAT.
 	// Mint GitHub App installation tokens per call and decode installation.id
 	// from the webhook instead.
-	// TODO(CIC-121): the fetch path is .github/workflows (the #95 default); the
-	// .cicado/workflows convention is decided in CIC-121.
 	if p := newWorkflowProducer(*githubWorkflowToken, st, log, &http.Client{Timeout: 20 * time.Second}); p != nil {
 		ctrlOpts.Producer = p
 		log.Info("workflow producer active",

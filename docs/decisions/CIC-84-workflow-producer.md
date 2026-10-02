@@ -9,7 +9,13 @@ loader has something to read.
 
 Without CIC‑84, the only path for workflows to reach the table is the
 dev‑seed (hardcoded demo workflow). Production has no way to register
-workflows from the repository's actual `.github/workflows/` files.
+workflows from the repository's actual workflow files.
+
+> **Path update (CIC-121, 2026-10-02):** the fetcher originally read
+> `.github/workflows/`. That folder belongs to GitHub Actions, which runs every
+> YAML file in it, so the path is now `.cicado/workflows/*.yml|*.yaml`
+> (`github.WorkflowDir`). See `CIC-121-cicado-workflow-path.md`. Paths below
+> are updated to match.
 
 ## Design
 
@@ -17,10 +23,10 @@ Two components:
 
 ### 1. `server/github/workflows.go` — GitHub contents fetcher
 
-A small leaf package that fetches `.github/workflows/*.yaml` from GitHub's
+A small leaf package that fetches `.cicado/workflows/*.y{a}ml` from GitHub's
 REST API:
 
-* `GET /repos/{owner}/{repo}/contents/.github/workflows?ref={sha}` — list the
+* `GET /repos/{owner}/{repo}/contents/.cicado/workflows?ref={sha}` — list the
   directory
 * For each file: read the `content` base64 field from the listing entry
 * Parse YAML files; skip non‑YAML and sub‑directories
@@ -63,7 +69,7 @@ push immediately makes its workflows available.
 
 ## Scope
 
-* Fetches `.github/workflows/` at the triggering SHA (not at branch HEAD,
+* Fetches `.cicado/workflows/` at the triggering SHA (not at branch HEAD,
   so the run's workflows match what was pushed).
 * Uses the GitHub Installation access token via `Bearer` header.
 * When no `--github-app-token` is configured, the producer is not created

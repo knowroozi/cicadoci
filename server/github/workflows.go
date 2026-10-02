@@ -1,7 +1,8 @@
 // Package github adds the GitHub-specific forge plumbing used by CICaDo's
 // webhook and check-reporting paths.  This file is CIC-84: a workflow-file
-// fetcher that reads `.github/workflows/*.y*ml` from a GitHub repo at a
-// specific commit SHA, enabling production workflow producers.
+// fetcher that reads `.cicado/workflows/*.y*ml` (WorkflowDir, CIC-121) from
+// a GitHub repo at a specific commit SHA, enabling production workflow
+// producers.
 package github
 
 import (
@@ -15,9 +16,16 @@ import (
 	"strings"
 )
 
+// WorkflowDir is the repo-relative directory CICaDo reads workflow files
+// from (CIC-121).  It is deliberately not .github/workflows: GitHub Actions
+// runs every YAML file there, so a CICaDo workflow in that folder would also
+// start a failing Actions run, and a repo's existing Actions files would be
+// fed to the CICaDo parser.
+const WorkflowDir = ".cicado/workflows"
+
 // WorkflowFile is a single workflow file fetched from a GitHub repo.
 type WorkflowFile struct {
-	// Path is the repo-relative path, e.g. ".github/workflows/ci.yml".
+	// Path is the repo-relative path, e.g. ".cicado/workflows/ci.yml".
 	Path string
 	// Content is the decoded YAML source.
 	Content []byte
@@ -74,15 +82,15 @@ type githubContentsFileResponse struct {
 }
 
 // FetchWorkflowFiles fetches all workflow YAML files in
-// .github/workflows at the given ref (SHA or branch) from a GitHub repo,
+// .cicado/workflows at the given ref (SHA or branch) from a GitHub repo,
 // returning decoded content for each.
 //
 // It runs two HTTP requests per file: first a directory listing to get
 // the file paths, then a per-file GET to retrieve each file's base64
 // content.  This is necessary because the directory-listing endpoint
-// (GET /repos/.../contents/.github/workflows) does not include the
+// (GET /repos/.../contents/.cicado/workflows) does not include the
 // "content" field — that only appears in the per-file endpoint
-// (GET /repos/.../contents/.github/workflows/ci.yaml).
+// (GET /repos/.../contents/.cicado/workflows/ci.yaml).
 //
 // A 404 on the directory listing returns ErrWorkflowDirNotFound: GitHub
 // answers 404 both when the directory is absent and when the token cannot
@@ -95,11 +103,11 @@ type githubContentsFileResponse struct {
 func (f *WorkflowFetcher) FetchWorkflowFiles(
 	ctx context.Context, owner, repo, ref string,
 ) ([]WorkflowFile, error) {
-	// Phase 1: list the .github/workflows directory.
+	// Phase 1: list the .cicado/workflows directory.
 	dirURL := fmt.Sprintf(
-		"%s/repos/%s/%s/contents/.github/workflows?ref=%s",
+		"%s/repos/%s/%s/contents/%s?ref=%s",
 		f.BaseURL, url.PathEscape(owner), url.PathEscape(repo),
-		url.QueryEscape(ref),
+		WorkflowDir, url.QueryEscape(ref),
 	)
 	listing, err := f.getList(ctx, dirURL)
 	if err != nil {
@@ -207,9 +215,9 @@ func (f *WorkflowFetcher) authHeaders(req *http.Request) {
 }
 
 // ErrWorkflowDirNotFound is returned by FetchWorkflowFiles when the
-// .github/workflows listing is a 404. It is ambiguous: the directory may be
+// .cicado/workflows listing is a 404. It is ambiguous: the directory may be
 // absent, or the repo, ref or token's access may be missing.
-var ErrWorkflowDirNotFound = errors.New("github: .github/workflows not found or not readable")
+var ErrWorkflowDirNotFound = errors.New("github: .cicado/workflows not found or not readable")
 
 var errNotFound = fmt.Errorf("not found")
 

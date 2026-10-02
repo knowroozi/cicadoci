@@ -26,20 +26,20 @@ func TestFetchWorkflowFiles_FindsYAML(t *testing.T) {
 			t.Errorf("missing or wrong auth header: %q", r.Header.Get("Authorization"))
 		}
 		switch {
-		case strings.Contains(r.URL.Path, "/contents/.github/workflows/"):
+		case strings.Contains(r.URL.Path, "/contents/.cicado/workflows/"):
 			// Per-file request — look at the path tail to know which file
 			// was requested.
 			if strings.HasSuffix(r.URL.Path, "/ci.yaml") {
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"name":"ci.yaml","path":".github/workflows/ci.yaml","type":"file","content":"` + ciB64 + `","sha":"abc"}`))
+				_, _ = w.Write([]byte(`{"name":"ci.yaml","path":".cicado/workflows/ci.yaml","type":"file","content":"` + ciB64 + `","sha":"abc"}`))
 				return
 			}
-		case strings.Contains(r.URL.Path, "/contents/.github/workflows"):
+		case strings.Contains(r.URL.Path, "/contents/.cicado/workflows"):
 			// Directory listing — no content field.
 			w.Header().Set("Content-Type", "application/json")
-			listing := `[{"name":"ci.yaml","path":".github/workflows/ci.yaml","type":"file","sha":"abc"},` +
-				`{"name":"README.md","path":".github/workflows/README.md","type":"file","sha":"def"},` +
-				`{"name":"subdir","path":".github/workflows/subdir","type":"dir"}]`
+			listing := `[{"name":"ci.yaml","path":".cicado/workflows/ci.yaml","type":"file","sha":"abc"},` +
+				`{"name":"README.md","path":".cicado/workflows/README.md","type":"file","sha":"def"},` +
+				`{"name":"subdir","path":".cicado/workflows/subdir","type":"dir"}]`
 			_, _ = w.Write([]byte(listing))
 		}
 	}))
@@ -55,8 +55,8 @@ func TestFetchWorkflowFiles_FindsYAML(t *testing.T) {
 	if len(files) != 1 {
 		t.Fatalf("expected 1 file, got %d", len(files))
 	}
-	if files[0].Path != ".github/workflows/ci.yaml" {
-		t.Errorf("path = %q, want .github/workflows/ci.yaml", files[0].Path)
+	if files[0].Path != ".cicado/workflows/ci.yaml" {
+		t.Errorf("path = %q, want .cicado/workflows/ci.yaml", files[0].Path)
 	}
 	if !strings.Contains(string(files[0].Content), "CI") {
 		t.Errorf("content = %q, want to contain CI", string(files[0].Content))
@@ -86,10 +86,10 @@ func TestFetchWorkflowFiles_NoWorkflows(t *testing.T) {
 func TestFetchWorkflowFiles_FileRemoved404(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/.github/workflows"):
+		case strings.HasSuffix(r.URL.Path, "/.cicado/workflows"):
 			// Listing succeeds.
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`[{"name":"ci.yaml","path":".github/workflows/ci.yaml","type":"file","sha":"abc"}]`))
+			_, _ = w.Write([]byte(`[{"name":"ci.yaml","path":".cicado/workflows/ci.yaml","type":"file","sha":"abc"}]`))
 		case strings.Contains(r.URL.Path, "/ci.yaml"):
 			// Per-file fetch: 404 (file removed between listing and fetch).
 			w.WriteHeader(http.StatusNotFound)
@@ -122,5 +122,37 @@ func TestFetchWorkflowFiles_BadRef500(t *testing.T) {
 	_, err := fetcher.FetchWorkflowFiles(context.Background(), "org", "repo", "abc123")
 	if err == nil {
 		t.Fatal("expected error for 500 response, got nil")
+	}
+}
+
+// TestFetchWorkflowFiles_ReadsCICaDoDirNotActions pins the CIC-121
+// convention: the listing goes to .cicado/workflows, and nothing under
+// .github/workflows (GitHub Actions' folder) is ever requested.
+func TestFetchWorkflowFiles_ReadsCICaDoDirNotActions(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	fetcher := github.NewWorkflowFetcher("token", srv.Client())
+	fetcher.BaseURL = srv.URL
+
+	if _, err := fetcher.FetchWorkflowFiles(context.Background(), "org", "repo", "abc123"); err != nil {
+		t.Fatalf("FetchWorkflowFiles: %v", err)
+	}
+	want := "/repos/org/repo/contents/" + github.WorkflowDir
+	if len(paths) != 1 || paths[0] != want {
+		t.Fatalf("requested paths = %v, want [%s]", paths, want)
+	}
+	if github.WorkflowDir != ".cicado/workflows" {
+		t.Fatalf("WorkflowDir = %q, want .cicado/workflows", github.WorkflowDir)
+	}
+	for _, p := range paths {
+		if strings.Contains(p, ".github/workflows") {
+			t.Fatalf("fetcher requested GitHub Actions path %q", p)
+		}
 	}
 }

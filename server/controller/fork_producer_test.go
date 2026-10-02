@@ -7,7 +7,7 @@
 //   - A fork PR must NEVER invoke the producer (attacker-controlled head SHA
 //     would poison the shared workflow row).
 //   - A feature-branch push must NEVER invoke the producer (a feature branch
-//     carrying its own .github/workflows/ must not overwrite the shared row).
+//     carrying its own .cicado/workflows/ must not overwrite the shared row).
 //   - A push to the default branch DOES invoke the producer.
 //
 // NOTE: the PullRequestPayload struct is currently flat (Fork, Base, Head,

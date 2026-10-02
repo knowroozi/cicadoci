@@ -169,7 +169,7 @@ func seedDemoJob(ctx context.Context, st *store.Store, q *queue.Postgres, repoID
 }
 
 // demoWorkflowPath is the repo path the dev-seed registers a sample workflow under.
-const demoWorkflowPath = ".github/workflows/demo.yaml"
+const demoWorkflowPath = ".cicado/workflows/demo.yaml"
 
 // demoWorkflowSource is a trivial push-triggered workflow used by -dev-seed. It
 // exists so the store-backed StoreLoader wired in CIC-78 has something to load:
