@@ -661,3 +661,39 @@ func TestReceiver_WarnsOnUnauthenticatedConstruction(t *testing.T) {
 		t.Errorf("missing unauthenticated warning log line, got: %q", out)
 	}
 }
+
+// TestDispatch_InstallationEvents verifies that GitHub App lifecycle events
+// (installation, installation_repositories) return nil (acknowledged, not
+// re-delivered by GitHub).
+func TestDispatch_InstallationEvents(t *testing.T) {
+	t.Parallel()
+
+	var d Dispatcher = fakeDispatcher{}
+	for _, et := range []string{"installation", "installation_repositories"} {
+		t.Run(et, func(t *testing.T) {
+			err := Dispatch(et, []byte(`{"id":1}`), d)
+			if err != nil {
+				t.Fatalf("Dispatch(%q) returned err: %v; want nil (ignored)", et, err)
+			}
+		})
+	}
+}
+
+// TestDispatch_Ping returns nil for ping.
+func TestDispatch_Ping(t *testing.T) {
+	t.Parallel()
+	err := Dispatch("ping", []byte(`{}`), fakeDispatcher{})
+	if err != nil {
+		t.Fatalf("Dispatch(ping) returned err: %v; want nil", err)
+	}
+}
+
+// TestDispatch_UnknownEventType returns the sentinel for an unrecognized
+// event type.
+func TestDispatch_UnknownEventType(t *testing.T) {
+	t.Parallel()
+	err := Dispatch("some_new_event", []byte(`{}`), fakeDispatcher{})
+	if !IsUnknownEventType(err) {
+		t.Fatalf("Dispatch returned %v; want unknown event type error", err)
+	}
+}

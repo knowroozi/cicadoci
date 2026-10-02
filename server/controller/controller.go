@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 	"time"
 
@@ -144,9 +143,9 @@ func (c *Controller) HandlePush(payload webhook.PushPayload) error {
 	ctx := context.Background()
 	orgID, repoID, err := c.resolveRepo(ctx, owner, repoName)
 	if err != nil {
-		c.log.Warn("controller push: store lookup failed, skipping",
+		c.log.Warn("controller push: store lookup failed",
 			"repo", payload.Repository.FullName, "err", err)
-		return nil
+		return fmt.Errorf("controller push: resolve repo: %w", err)
 	}
 
 	if c.cfg.Backpressure != nil {
@@ -154,7 +153,7 @@ func (c *Controller) HandlePush(payload webhook.PushPayload) error {
 		if err != nil || !ok {
 			c.log.Debug("backpressure: skipping push",
 				"repo", payload.Repository.FullName, "ok", ok, "err", err)
-			return nil
+			return fmt.Errorf("controller push: backpressure")
 		}
 		defer c.cfg.Backpressure.Release(repoID.String(), orgID.String())
 	}
@@ -243,9 +242,9 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 	ctx := context.Background()
 	orgID, repoID, err := c.resolveRepo(ctx, owner, repoName)
 	if err != nil {
-		c.log.Warn("controller pr: store lookup failed, skipping",
+		c.log.Warn("controller pr: store lookup failed",
 			"repo", payload.Repository.FullName, "err", err)
-		return nil
+		return fmt.Errorf("controller pr: resolve repo: %w", err)
 	}
 
 	if c.cfg.Backpressure != nil {
@@ -253,7 +252,7 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 		if err != nil || !ok {
 			c.log.Debug("backpressure: skipping pr",
 				"repo", payload.Repository.FullName, "ok", ok, "err", err)
-			return nil
+			return fmt.Errorf("controller pr: backpressure")
 		}
 		defer c.cfg.Backpressure.Release(repoID.String(), orgID.String())
 	}
@@ -263,13 +262,20 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 	// isFork delegates to PullRequestPayload.IsFork() — fail-closed.
 	isFork := payload.IsFork()
 	branch := payload.PullRequest.Base.Ref
-	prNumber := strconv.Itoa(payload.PullRequest.Number) // used as actor
+	// Audit actor: prefer the PR author's GitHub login; fall back to the
+	// PR number when sender.Login is empty (e.g. bot token).  sender is
+	// always present in real payloads; the fallback is for API-token
+	// integrations that may have no user account.
+	actor := payload.Sender.Login
+	if actor == "" {
+		actor = fmt.Sprintf("pr-%d", payload.PullRequest.Number)
+	}
 	runID, number, err := c.store.CreateRun(ctx, store.CreateRunOptions{
 		RepoID:        repoID,
 		Event:         "pull_request",
 		Ref:           branch,
 		Sha:           payload.PullRequest.Head.SHA,
-		Actor:         prNumber,
+		Actor:         actor,
 		TriggerSource: store.TriggerForge,
 		IsFork:        isFork,
 	})
@@ -301,8 +307,8 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 
 	report(ctx, c.forge, owner, repoName, payload.PullRequest.Head.SHA, runID, branch, c.log)
 
-	// Audit the run creation.  Actor is the PR number as a string.
-	c.emitAudit(ctx, runID, "pull_request", prNumber, owner, repoName, branch)
+	// Audit the run creation with the PR author's login as the actor.
+	c.emitAudit(ctx, runID, "pull_request", actor, owner, repoName, branch)
 
 	// Open a deployment-approval gate if the run requires approval.
 	c.maybeOpenGate(ctx, runID, owner, repoName, payload)

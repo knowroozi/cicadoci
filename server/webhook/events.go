@@ -10,6 +10,7 @@ import (
 // These are the GitHub webhook event names CICaDo consumes.  The event name
 // comes from the X-GitHub-Event header.
 const (
+	EventPing        = "ping"
 	EventPush        = "push"
 	EventPullRequest = "pull_request"
 	EventCheckSuite  = "check_suite"
@@ -82,6 +83,11 @@ type PullRequestPayload struct {
 	Action      string      `json:"action"`
 	PullRequest PullRequest `json:"pull_request"`
 	Repository  Repo        `json:"repository"`
+	// Sender is the GitHub actor for this event.  GitHub places this at
+	// the top level as "sender". Used as the audit actor for PR runs.
+	Sender struct {
+		Login string `json:"login"`
+	} `json:"sender"`
 }
 
 // IsFork returns true when the pull request should be treated as a fork PR.
@@ -205,6 +211,15 @@ func Dispatch(eventType string, raw []byte, d Dispatcher) error {
 			return err
 		}
 		return d.HandleCheckRun(p)
+
+	case EventPing:
+		// ping is a GitHub webhook health-check; return successfully.
+		return nil
+
+	// GitHub App lifecycle events: acknowledge and ignore; installation
+	// setup is out of scope for this ticket.
+	case "installation", "installation_repositories":
+		return nil
 
 	default:
 		return errUnknownEventType

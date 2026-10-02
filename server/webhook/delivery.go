@@ -50,33 +50,54 @@ func NewDeliveryTracker(maxSize int, ttl time.Duration) *deliveryTracker {
 // seen returns true if the delivery ID has been recorded within the TTL
 // window, and records it if new.  It is safe for concurrent use.
 //
+// DEPRECATED: Use check() + record() to avoid recording failed dispatches.
+//
 // The atomic counter records how many deliveries were suppressed (returned
 // true) for observability.
 func (t *deliveryTracker) seen(id string, now time.Time, suppressed *uint64) bool {
+	if t.check(id, now, suppressed) {
+		return true
+	}
+	t.record(id, now)
+	return false
+}
+
+// check returns true if the delivery ID was recorded within the TTL window
+// without inserting a new entry.  Safe for concurrent use.
+func (t *deliveryTracker) check(id string, now time.Time, suppressed *uint64) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	e, ok := t.items[id]
 	if ok {
-		// TTL check: entries older than ttl are treated as unseen.
 		if now.Sub(e.seenAt) < t.ttl {
 			if suppressed != nil {
 				atomic.AddUint64(suppressed, 1)
 			}
 			return true
 		}
-		// Expired: replace with fresh entry.
-		e.seenAt = now
-	} else {
-		// New entry: insert and evict if over capacity.
-		t.items[id] = &entry{seenAt: now}
-		t.order = append(t.order, id)
-		if len(t.order) > t.maxSize {
-			// Evict the oldest.
-			oldest := t.order[0]
-			t.order = t.order[1:]
-			delete(t.items, oldest)
-		}
+		// Expired: treat as unseen; do NOT refresh the timer, or an
+		// attacker redelivering an old ID can keep the slot alive indefinitely.
 	}
 	return false
+}
+
+// record inserts the delivery ID into the tracker after a successful
+// dispatch.  Safe for concurrent use.
+func (t *deliveryTracker) record(id string, now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if _, ok := t.items[id]; ok {
+		// Already present; refresh the timestamp.
+		t.items[id] = &entry{seenAt: now}
+		return
+	}
+	t.items[id] = &entry{seenAt: now}
+	t.order = append(t.order, id)
+	if len(t.order) > t.maxSize {
+		oldest := t.order[0]
+		t.order = t.order[1:]
+		delete(t.items, oldest)
+	}
 }

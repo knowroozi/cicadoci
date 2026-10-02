@@ -652,3 +652,56 @@ func TestForkPRStoredAsFork_HeadNull(t *testing.T) {
 		t.Error("CreateRun with IsFork=true (null head): is_fork stored as false")
 	}
 }
+
+// TestBackpressureErrorPropagation verifies that the backpressure tracker
+// returns Acquire=false (no error) when the PerOrg cap is reached, which
+// the controller turns into a 500 so GitHub redelivers.
+func TestBackpressureErrorPropagation(t *testing.T) {
+	ctx := t.Context()
+	tracker := backpressure.NewTracker(backpressure.Limits{PerRepo: 1, PerOrg: 1})
+	// Acquire the one slot for "org-1".
+	ok, err := tracker.Acquire(ctx, "repo-1", "org-1")
+	if err != nil || !ok {
+		t.Fatalf("first acquire should succeed: ok=%v err=%v", ok, err)
+	}
+	// A second acquisition should fail (cap reached, no error).
+	ok, err = tracker.Acquire(ctx, "repo-2", "org-1")
+	if err != nil {
+		t.Fatalf("second acquire should not error, only fail: %v", err)
+	}
+	if ok {
+		t.Fatal("second acquire should fail (PerOrg cap)")
+	}
+	// After release, acquisition should succeed again.
+	tracker.Release("repo-1", "org-1")
+	ok, err = tracker.Acquire(ctx, "repo-3", "org-1")
+	if err != nil || !ok {
+		t.Fatalf("acquire after release should succeed: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestHandlePush_InvalidRepoName verifies that HandlePush returns an error
+// when the repository full_name cannot be split into owner/repo.
+func TestHandlePush_InvalidRepoName(t *testing.T) {
+	c := New(nil, NoOpForge{}, DefaultConfig(), discardLogger)
+	// No store needed splitRepo fails before reaching resolveRepo.
+	err := c.HandlePush(webhook.PushPayload{
+		Ref: "refs/heads/main",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid repo full_name, got nil")
+	}
+}
+
+// TestHandlePullRequest_InvalidRepoName verifies that HandlePullRequest
+// returns an error when the repository full_name is empty.
+func TestHandlePullRequest_InvalidRepoName(t *testing.T) {
+	c := New(nil, NoOpForge{}, DefaultConfig(), discardLogger)
+	err := c.HandlePullRequest(webhook.PullRequestPayload{
+		Action:      "opened",
+		PullRequest: webhook.PullRequest{Number: 1},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty repo full_name, got nil")
+	}
+}

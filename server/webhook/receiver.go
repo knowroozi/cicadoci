@@ -204,7 +204,7 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	deliveryID := req.Header.Get("X-GitHub-Delivery")
 	if deliveryID != "" {
 		now := time.Now()
-		if r.tracker.seen(deliveryID, now, &r.suppressed) {
+		if r.tracker.check(deliveryID, now, &r.suppressed) {
 			r.logger.Info("duplicate delivery suppressed",
 				"delivery_id", deliveryID,
 				"event_type", eventType)
@@ -242,6 +242,12 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Record the delivery ID only after successful dispatch
+	// so a transient store error on first delivery does not
+	// suppress GitHub's retry with the same ID.
+	if deliveryID != "" {
+		r.tracker.record(deliveryID, time.Now())
+	}
 	// Success.
 	r.logger.Info("webhook delivered",
 		"delivery_id", deliveryID,
