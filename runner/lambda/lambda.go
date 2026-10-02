@@ -74,7 +74,13 @@ type JobResponse struct {
 
 	// StepLogs contains per-step log output (CloudWatch).
 	StepLogs map[string]string
+
+	// Message is a human-readable reason when Success is false.
+	Message string
 }
+
+// NotImplementedMessage is the failure reason the stub Dispatch reports.
+const NotImplementedMessage = "lambda executor is not implemented: the job was not run (CIC-137)"
 
 // Dispatch is the core Lambda invocation logic.
 //
@@ -82,8 +88,9 @@ type JobResponse struct {
 // Step Functions input, executes the job, and returns a
 // JobResponse. The caller handles timeout and retry.
 //
-// For the MVP this is a logging + journal stub; the actual gRPC
-// queue connect + job fetch will be wired in a follow-up ticket.
+// For the MVP this is a logging + journal stub that fails closed: it
+// never runs the job, so it reports failure rather than success. The
+// actual gRPC queue connect + job fetch + execute is CIC-137.
 func (h *Handler) Dispatch(ctx context.Context, evt *JobEvent) (*JobResponse, error) {
 	h.log.Info("lambda: dispatching job",
 		"run_id", evt.RunID,
@@ -100,12 +107,21 @@ func (h *Handler) Dispatch(ctx context.Context, evt *JobEvent) (*JobResponse, er
 		Msg:   evt,
 	})
 
-	// MVP: return a placeholder success.
-	// TODO: wire to gRPC queue connect + job fetch + execute.
+	// TODO(CIC-137): the full Lambda dispatch path (connect to the gRPC
+	// queue, fetch the job, execute the steps, return a result) is not yet
+	// wired; it needs a public RPC surface on the queue. Until then the stub
+	// fails closed: reporting success here would mark every job as passed
+	// without running anything.
 	_ = h.exec
 	_ = ctx
+	h.log.Warn("lambda: executor not implemented; failing job",
+		"run_id", evt.RunID,
+		"job_id", evt.JobID,
+	)
 	return &JobResponse{
-		Success:  true,
-		ExitCode: 0,
+		Success:      false,
+		ExitCode:     1,
+		FailureClass: "infra",
+		Message:      NotImplementedMessage,
 	}, nil
 }

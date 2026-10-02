@@ -246,7 +246,7 @@ type Step struct {
 	// Known values in M1:
 	//
 	//	- "" or "none": no cloud identity (default)
-	//	- "aws": OIDC → AssumeRoleWithWebIdentity using env.AWSTOKEN_ROLE_ARN
+	//	- "aws": OIDC → AssumeRoleWithWebIdentity using a provider-specific OIDC role ARN
 	//
 	// The runner uses this to determine which OIDC role to assume at step
 	// start; the actual credential exchange is M5 work.

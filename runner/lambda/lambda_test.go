@@ -26,8 +26,18 @@ func TestDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.ExitCode != 0 {
-		t.Fatalf("expected exit code 0, got %d", resp.ExitCode)
+	// The stub never runs the job, so it must fail closed (CIC-137).
+	if resp.Success {
+		t.Fatal("stub Dispatch reported success without running the job")
+	}
+	if resp.ExitCode == 0 {
+		t.Fatal("expected a non-zero exit code from the stub")
+	}
+	if resp.FailureClass != "infra" {
+		t.Fatalf("expected failure class infra, got %q", resp.FailureClass)
+	}
+	if resp.Message != NotImplementedMessage {
+		t.Fatalf("expected not-implemented message, got %q", resp.Message)
 	}
 }
 

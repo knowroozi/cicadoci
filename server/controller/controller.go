@@ -8,7 +8,8 @@
 // CIC-71b replaced the SHA-1 pseudo-UUID org resolution with
 // store.ResolveRepo, upserting the org and repo rows on first contact.
 // The installationID parameter is passed through to the store but not
-// yet used for auth (that's CIC-38/39/40 — GitHub App installation tokens).
+// yet used for auth (CIC-81 wires the GitHub forge; per-job installation
+// tokens are CIC-26).
 //
 // CIC-71c adds workflow loading and job DAG creation (LoadAndCreateJobs).
 // The WorkflowLoader interface decouples the controller from the storage
@@ -317,7 +318,7 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 
 // HandleCheckSuite handles check_suite "requested" events.
 //
-// TODO(CIC-71d): wire re-check of an existing run.
+// No-op: check re-checks log and return; no run is created.
 func (c *Controller) HandleCheckSuite(payload webhook.CheckSuitePayload) error {
 	if payload.Action != "requested" {
 		return nil
@@ -329,7 +330,7 @@ func (c *Controller) HandleCheckSuite(payload webhook.CheckSuitePayload) error {
 
 // HandleCheckRun handles check_run "rerequested" events.
 //
-// TODO(CIC-71d): wire re-check of an existing run.
+// No-op: check re-checks log and return; no run is created.
 func (c *Controller) HandleCheckRun(payload webhook.CheckRunPayload) error {
 	if payload.Action != "rerequested" {
 		return nil
@@ -358,7 +359,7 @@ func (c *Controller) resolveRepo(ctx context.Context, owner, repoName string) (
 	err error,
 ) {
 	// installationID is empty for now; it will be populated when the
-	// webhook receiver provides the App installation ID (CIC-38/39/40).
+	// webhook receiver provides the App installation ID (CIC-81).
 	return c.store.ResolveRepo(ctx, owner, repoName, c.cfg.DefaultBranch, "")
 }
 

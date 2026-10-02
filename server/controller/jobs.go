@@ -42,8 +42,8 @@ import (
 //   - StaticLoader  — pre-parsed in-memory registry (tests, dev servers).
 //   - StoreLoader   — reads YAML from the workflows table by repo_id.
 //
-// In production CIC-38/39/40 add a GitHub loader that fetches the
-// workflow file at a specific SHA using the repo's installation token.
+// In production the CIC-84 producer fetches the workflow files at the
+// event SHA and upserts them, and StoreLoader reads them back.
 //
 // The controller calls LoadAll once per run; it does not cache.
 type WorkflowLoader interface {

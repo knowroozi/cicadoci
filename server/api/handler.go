@@ -216,14 +216,14 @@ func withRequestTimeout(d time.Duration) func(http.Handler) http.Handler {
 	}
 }
 
-// withLogging emits one structured log line per request after the inner handler has settled its status; see TODO(M3/M5) inline for latency metrics follow-up.
+// withLogging emits one structured log line per request after the inner handler has settled its status; see the TODO inline for the latency-metrics follow-up (CIC-136).
 func withLogging(next http.Handler, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK} // pre-seed OK; a layer that never calls WriteHeader still ends 200 by convention.
 
 		next.ServeHTTP(rec, r)
 
-		// TODO(M3/M5): swap the plain access-log line for a real latency histogram metric as per docs's observability section.
+		// TODO(CIC-136): swap the plain access-log line for a real latency histogram metric as per docs's observability section.
 		log.Info("http request", "method", r.Method, "path", r.URL.Path, "status", rec.status)
 	})
 }

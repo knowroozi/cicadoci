@@ -8,7 +8,7 @@
 // The controller's report() function already tolerates a NoOp forge:
 // Prepare returns 0/nil and nothing is logged.
 //
-// CIC-38/39/40 add the real githubForge with a ChecksReporter and
+// CIC-81 adds the real githubForge with a ChecksReporter and
 // TokenMinter.  At that point NoOpForge is no longer needed in main.go.
 package controller
 
