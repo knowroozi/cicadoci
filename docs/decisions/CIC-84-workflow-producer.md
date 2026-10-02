@@ -110,3 +110,7 @@ CIC‑84 adds:
 
 Affected components: `controller`, `github`, `store`.
 Risk: MEDIUM (new fetch path; no change to existing security invariants).
+## Status (as of `d689e40`, 2026-10-02; QC docs-sync)
+- **Wired into `cicado-server`** — CIC-120 (PR #106) sets `ctrlOpts.Producer` to `NewGitHubWorkflowProducer(...)` when `CICADO_GITHUB_WORKFLOW_TOKEN` is set; otherwise the producer is `nil` and the dev-seed path is used.
+- **Workflow path**: `.cicado/workflows/*.y*ml` (CIC-121, PR #107) — deliberately *not* the GitHub Actions directory, which would itself run every YAML placed there. No fallback.
+- **Per-call installation tokens** deferred to CIC-146: until then the producer (and the GitHub Checks forge) ride the single operator-supplied `CICADO_GITHUB_*_TOKEN` PAT, not a per-job installation access token.
