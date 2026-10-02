@@ -256,23 +256,6 @@ func (s *Store) CreateJobSpecs(
 	return ids, nil
 }
 
-// CompleteJob writes a terminal status to a job.
-func (s *Store) CompleteJob(ctx context.Context, jobID uuid.UUID, status string, exitCode int) error {
-	const q = `
-        UPDATE jobs
-        SET status      = $2,
-            exit_code   = $3,
-            finished_at = now()
-        WHERE id = $1
-        RETURNING id`
-	var got uuid.UUID
-	err := s.pool.QueryRow(ctx, q, jobID, status, exitCode).Scan(&got)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("job %s not found", jobID)
-	}
-	return err
-}
-
 // ── helpers ────────────────────────────────────────────────────────────────────
 
 func defaultInt(v, dflt int) int {

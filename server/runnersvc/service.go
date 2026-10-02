@@ -63,6 +63,17 @@ type Config struct {
 	// watermark is advanced. It is the fan-out hook for the SSE hub
 	// (CIC-33). When nil, log emission is a no-op.
 	LogPublish func(jobID uuid.UUID, kind string, seq int64)
+	// OnRunTerminal is called exactly once per run, after the transaction
+	// that moved the run's last job to a terminal state has committed. state
+	// is the run's final status: "succeeded", "failed" or "cancelled". New
+	// installs it on the queue, which is where every terminal job transition
+	// happens (runner report, sweeper dead letter, cancel scan), so it fires
+	// for all of them. It runs on the caller's goroutine and must not block.
+	//
+	// This is the single run-level hook: forge check completion and the
+	// backpressure release attach here. When nil, runs are still finalised
+	// in the database; nothing else is notified.
+	OnRunTerminal func(runID uuid.UUID, state string)
 }
 
 // DefaultConfig returns workable defaults for a development install.
@@ -112,6 +123,9 @@ type Service struct {
 func New(pool *pgxpool.Pool, q *queue.Postgres, cfg Config, log *slog.Logger, secretsStore secrets.Store) *Service {
 	if cfg.Masker == nil {
 		cfg.Masker = redact.NoopMasker{}
+	}
+	if cfg.OnRunTerminal != nil {
+		q.SetRunTerminalHook(cfg.OnRunTerminal)
 	}
 	return &Service{
 		pool:     pool,

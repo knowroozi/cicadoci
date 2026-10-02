@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,6 +43,9 @@ var ErrNotRequeueable = errors.New("queue: job is not requeueable")
 // Postgres is the Postgres-backed Queue.
 type Postgres struct {
 	pool *pgxpool.Pool
+	// onRunTerminal is read on every job completion and written once at
+	// startup; atomic so the race detector agrees.
+	onRunTerminal atomic.Pointer[RunTerminalHook]
 }
 
 // NewPostgres builds a Queue over an existing pool.
@@ -144,7 +148,20 @@ RETURNING id, run_id, lease_id, lease_expires_at, name, executor, env,
           secret_refs, timeout_seconds, attempts,
           coalesce(git_clone_url, ''), coalesce(git_ref, ''), coalesce(git_sha, '')`
 
-// Claim leases up to req.Limit eligible jobs to a runner.
+// startRunsSQL moves the runs of freshly claimed jobs from pending to running
+// (CIC-103). The run rows are locked in id order first so two claims that
+// touch the same runs cannot deadlock on each other. The status guard leaves a
+// run that is already running, or already finalised, alone.
+const startRunsSQL = `
+UPDATE runs
+   SET status = 'running', started_at = coalesce(started_at, now())
+ WHERE id IN (SELECT id FROM runs
+               WHERE id = ANY($1::uuid[]) AND status = 'pending'
+               ORDER BY id
+                 FOR UPDATE)`
+
+// Claim leases up to req.Limit eligible jobs to a runner. The claim and the
+// pending -> running move of each claimed job's run commit together.
 func (q *Postgres) Claim(ctx context.Context, req ClaimRequest) ([]ClaimedJob, error) {
 	if req.Limit <= 0 {
 		return nil, nil
@@ -163,7 +180,13 @@ func (q *Postgres) Claim(ctx context.Context, req ClaimRequest) ([]ClaimedJob, e
 		executors = []string{}
 	}
 
-	rows, err := q.pool.Query(ctx, claimSQL,
+	tx, err := q.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("queue: claim: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx, claimSQL,
 		req.RunnerID, req.LeaseTTL.Seconds(), labels, executors, req.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("queue: claim: %w", err)
@@ -188,6 +211,20 @@ func (q *Postgres) Claim(ctx context.Context, req ClaimRequest) ([]ClaimedJob, e
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("queue: claim rows: %w", err)
+	}
+	rows.Close()
+
+	if len(claimed) > 0 {
+		runIDs := make([]uuid.UUID, len(claimed))
+		for i, j := range claimed {
+			runIDs[i] = j.RunID
+		}
+		if _, err := tx.Exec(ctx, startRunsSQL, runIDs); err != nil {
+			return nil, fmt.Errorf("queue: claim: start runs: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("queue: claim: commit: %w", err)
 	}
 
 	// Steps are fetched per job rather than joined into the claim, so the claim
@@ -305,6 +342,9 @@ func (q *Postgres) MarkRunning(ctx context.Context, jobID, leaseID uuid.UUID) er
 // guard: a runner that comes back from a long partition holding a lease the
 // server has since revoked cannot overwrite the result of whoever re-ran the
 // job in the meantime.
+//
+// The same transaction advances the job's DAG and, when this was the run's
+// last job, finalises the run (see advanceRun).
 func (q *Postgres) Complete(ctx context.Context, res Completion) error {
 	switch res.State {
 	case StateSucceeded, StateFailed, StateCancelled:
@@ -312,7 +352,13 @@ func (q *Postgres) Complete(ctx context.Context, res Completion) error {
 		return fmt.Errorf("queue: %q is not a terminal state", res.State)
 	}
 
-	tag, err := q.pool.Exec(ctx, `
+	return q.inTx(ctx, func(tx pgx.Tx) (runOutcome, error) {
+		return complete(ctx, tx, res)
+	})
+}
+
+func complete(ctx context.Context, tx pgx.Tx, res Completion) (runOutcome, error) {
+	tag, err := tx.Exec(ctx, `
 		UPDATE jobs
 		   SET status       = $3,
 		       exit_code    = $4,
@@ -326,12 +372,12 @@ func (q *Postgres) Complete(ctx context.Context, res Completion) error {
 		res.JobID, res.LeaseID, string(res.State), res.ExitCode,
 		res.ErrorClass, res.ErrorDetail)
 	if err != nil {
-		return fmt.Errorf("queue: complete job %s: %w", res.JobID, err)
+		return runOutcome{}, fmt.Errorf("queue: complete job %s: %w", res.JobID, err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: job %s", ErrStaleLease, res.JobID)
+		return runOutcome{}, fmt.Errorf("%w: job %s", ErrStaleLease, res.JobID)
 	}
-	return nil
+	return advanceRun(ctx, tx, res.JobID)
 }
 
 // requeueSQL returns a job to the queue, or dead-letters it when it has no
@@ -354,22 +400,33 @@ UPDATE jobs
  WHERE id = $1 AND status IN ('claimed', 'running', 'queued')
 RETURNING status, attempts`
 
-// Requeue returns a job for another attempt, or dead-letters it.
+// Requeue returns a job for another attempt, or dead-letters it. A dead letter
+// is terminal, so it advances the DAG and may finalise the run, in the same
+// transaction (see advanceRun). This covers the sweeper's lease-expiry path.
 func (q *Postgres) Requeue(ctx context.Context, jobID uuid.UUID, reason string, backoff time.Duration) (RequeueOutcome, error) {
-	var status string
-	var attempts int32
-	err := q.pool.QueryRow(ctx, requeueSQL, jobID, backoff.Seconds(), reason).
-		Scan(&status, &attempts)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", fmt.Errorf("%w: job %s", ErrNotRequeueable, jobID)
-	}
+	var outcome RequeueOutcome
+	err := q.inTx(ctx, func(tx pgx.Tx) (runOutcome, error) {
+		var status string
+		var attempts int32
+		err := tx.QueryRow(ctx, requeueSQL, jobID, backoff.Seconds(), reason).
+			Scan(&status, &attempts)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return runOutcome{}, fmt.Errorf("%w: job %s", ErrNotRequeueable, jobID)
+		}
+		if err != nil {
+			return runOutcome{}, fmt.Errorf("queue: requeue %s: %w", jobID, err)
+		}
+		if status != "dead_letter" {
+			outcome = OutcomeRequeued
+			return runOutcome{}, nil
+		}
+		outcome = OutcomeDeadLettered
+		return advanceRun(ctx, tx, jobID)
+	})
 	if err != nil {
-		return "", fmt.Errorf("queue: requeue %s: %w", jobID, err)
+		return "", err
 	}
-	if status == "dead_letter" {
-		return OutcomeDeadLettered, nil
-	}
-	return OutcomeRequeued, nil
+	return outcome, nil
 }
 
 // SweepExpiredLeases is the orphan-recovery path: it finds jobs whose lease ran
@@ -563,10 +620,188 @@ func (q *Postgres) QueryCancelPending(ctx context.Context, limit int) (pgx.Rows,
 //
 // The status = 'queued' guard means this is safe even if a race re-queued the
 // job between the scan and this call.
+//
+// A cancelled job is terminal, so it advances the DAG and may finalise the
+// run, in the same transaction (see advanceRun).
 func (q *Postgres) TerminalizeCancel(ctx context.Context, jobID uuid.UUID) (int32, error) {
-	tag, err := q.pool.Exec(ctx, terminalCancelSQL, jobID)
+	var n int32
+	err := q.inTx(ctx, func(tx pgx.Tx) (runOutcome, error) {
+		tag, err := tx.Exec(ctx, terminalCancelSQL, jobID)
+		if err != nil {
+			return runOutcome{}, fmt.Errorf("queue: terminalize cancel %s: %w", jobID, err)
+		}
+		n = int32(tag.RowsAffected())
+		if n == 0 {
+			return runOutcome{}, nil
+		}
+		return advanceRun(ctx, tx, jobID)
+	})
 	if err != nil {
-		return 0, fmt.Errorf("queue: terminalize cancel %s: %w", jobID, err)
+		return 0, err
 	}
-	return int32(tag.RowsAffected()), nil
+	return n, nil
+}
+
+// ---------------------------------------------------------------------------
+// DAG advance and run rollup (CIC-103)
+//
+
+// RunTerminalHook is called once per run, after the transaction that moved
+// the run's last job to a terminal state has committed. state is the run's
+// final status: "succeeded", "failed" or "cancelled".
+type RunTerminalHook func(runID uuid.UUID, state string)
+
+// SetRunTerminalHook installs the hook that fires when a run finishes. A nil
+// hook disables it. Every terminal job transition in this package (Complete,
+// a Requeue that dead-letters, TerminalizeCancel) goes through advanceRun, so
+// one hook here covers the runner path, the sweeper and the cancel scan alike.
+func (q *Postgres) SetRunTerminalHook(h RunTerminalHook) {
+	if h == nil {
+		q.onRunTerminal.Store(nil)
+		return
+	}
+	q.onRunTerminal.Store(&h)
+}
+
+// runOutcome is what advanceRun did to the job's run. state is empty unless
+// this call is the one that finalised the run.
+type runOutcome struct {
+	runID uuid.UUID
+	state string
+}
+
+// fire calls the run-terminal hook when o finalised a run. It must run only
+// after the transaction that produced o has committed: a hook that reads the
+// run (forge.Complete, a backpressure release) must see the final state.
+func (q *Postgres) fire(o runOutcome) {
+	if o.state == "" {
+		return
+	}
+	if h := q.onRunTerminal.Load(); h != nil {
+		(*h)(o.runID, o.state)
+	}
+}
+
+// lockRunSQL takes the run row's lock for the rest of the transaction. Every
+// terminal transition of a job takes it after writing the job row, so two jobs
+// of one run finishing at the same moment are serialised here. Without it, two
+// READ COMMITTED transactions could each see the other's job as still running:
+// neither would promote a join job that needs both, and neither would finalise
+// the run.
+const lockRunSQL = `
+SELECT j.run_id, j.status
+  FROM jobs j
+  JOIN runs r ON r.id = j.run_id
+ WHERE j.id = $1
+   FOR UPDATE OF r`
+
+// promoteSQL queues every pending direct dependent of $1 whose needs have all
+// succeeded. The finished job itself is never matched (it is not its own
+// dependent, and the status guard excludes anything not pending). Grandchildren
+// are not touched: they become eligible when their own needs finish. The
+// jobs_queued_notify trigger rings the dispatcher for each promoted row.
+const promoteSQL = `
+UPDATE jobs d
+   SET status = 'queued', available_at = now()
+ WHERE d.status = 'pending'
+   AND d.id IN (SELECT job_id FROM job_dependencies WHERE depends_on_job_id = $1)
+   AND NOT EXISTS (
+         SELECT 1
+           FROM job_dependencies e
+           JOIN jobs p ON p.id = e.depends_on_job_id
+          WHERE e.job_id = d.id
+            AND p.status <> 'succeeded')`
+
+// cancelDescendantsSQL cancels every pending job downstream of $1, children
+// and grandchildren alike: a job whose ancestor did not succeed can never have
+// all its needs met, so leaving it pending would hang the run forever. UNION
+// (not UNION ALL) keeps a diamond from visiting the join twice.
+const cancelDescendantsSQL = `
+WITH RECURSIVE descendants(id) AS (
+    SELECT job_id FROM job_dependencies WHERE depends_on_job_id = $1
+    UNION
+    SELECT e.job_id
+      FROM job_dependencies e
+      JOIN descendants d ON e.depends_on_job_id = d.id
+)
+UPDATE jobs
+   SET status        = 'cancelled',
+       finished_at   = now(),
+       cancel_reason = coalesce(cancel_reason, 'an upstream job did not succeed')
+ WHERE id IN (SELECT id FROM descendants)
+   AND status = 'pending'`
+
+// finaliseRunSQL sets the run's final status once every job is terminal. The
+// status guard makes it single-winner: only the first transaction to see the
+// run complete gets a row back, and only that one fires the hook. A failed or
+// dead-lettered job fails the run; otherwise any cancelled job cancels it.
+const finaliseRunSQL = `
+UPDATE runs r
+   SET status      = s.state,
+       started_at  = coalesce(r.started_at, now()),
+       finished_at = now()
+  FROM (SELECT bool_and(status IN ('succeeded', 'failed', 'cancelled', 'dead_letter')) AS done,
+               CASE WHEN bool_or(status IN ('failed', 'dead_letter')) THEN 'failed'
+                    WHEN bool_or(status = 'cancelled')                THEN 'cancelled'
+                    ELSE 'succeeded' END AS state
+          FROM jobs
+         WHERE run_id = $1) s
+ WHERE r.id = $1
+   AND s.done
+   AND r.status IN ('pending', 'running')
+RETURNING r.status`
+
+// advanceRun moves the DAG on after jobID reached a terminal state inside tx:
+// on success it queues the dependents that are now unblocked, on any other
+// outcome it cancels everything downstream, and when no job of the run is left
+// running it finalises the run. It runs in the same transaction as the job's
+// terminal write, so a crash cannot leave a finished job with a stalled DAG.
+func advanceRun(ctx context.Context, tx pgx.Tx, jobID uuid.UUID) (runOutcome, error) {
+	var out runOutcome
+	var jobState string
+	if err := tx.QueryRow(ctx, lockRunSQL, jobID).Scan(&out.runID, &jobState); err != nil {
+		return runOutcome{}, fmt.Errorf("queue: lock run of job %s: %w", jobID, err)
+	}
+
+	switch jobState {
+	case string(StateSucceeded):
+		if _, err := tx.Exec(ctx, promoteSQL, jobID); err != nil {
+			return runOutcome{}, fmt.Errorf("queue: promote dependents of %s: %w", jobID, err)
+		}
+	case string(StateFailed), string(StateCancelled), "dead_letter":
+		if _, err := tx.Exec(ctx, cancelDescendantsSQL, jobID); err != nil {
+			return runOutcome{}, fmt.Errorf("queue: cancel dependents of %s: %w", jobID, err)
+		}
+	default:
+		return runOutcome{}, fmt.Errorf("queue: advance run: job %s is %q, not terminal", jobID, jobState)
+	}
+
+	err := tx.QueryRow(ctx, finaliseRunSQL, out.runID).Scan(&out.state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return runOutcome{runID: out.runID}, nil
+	}
+	if err != nil {
+		return runOutcome{}, fmt.Errorf("queue: finalise run %s: %w", out.runID, err)
+	}
+	return out, nil
+}
+
+// inTx runs fn in a transaction and commits it. fn reports whether a run was
+// finalised; the hook fires only after the commit succeeds.
+func (q *Postgres) inTx(ctx context.Context, fn func(pgx.Tx) (runOutcome, error)) error {
+	tx, err := q.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("queue: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	out, err := fn(tx)
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("queue: commit: %w", err)
+	}
+	q.fire(out)
+	return nil
 }

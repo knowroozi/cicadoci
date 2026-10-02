@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -150,6 +151,14 @@ func run() error {
 	}
 
 	svcCfg := runnersvc.DefaultConfig()
+	// CIC-103: the one run-terminal hook. The queue fires it exactly once per
+	// run, after the transaction that finished the run's last job commits
+	// (runner report, sweeper dead letter, or cancel scan alike). It must be
+	// set here, before runnersvc.New copies svcCfg. forge.Complete and the
+	// backpressure release attach to this hook rather than adding their own.
+	svcCfg.OnRunTerminal = func(runID uuid.UUID, state string) {
+		log.Info("run finished", "run_id", runID, "state", state)
+	}
 	svc := runnersvc.New(st.Pool(), q, svcCfg, log, secretsStore)
 	dispatcher := dispatch.New(q, svc.Sessions(), dispatch.DefaultConfig(svcCfg.LeaseTTL()), log)
 
