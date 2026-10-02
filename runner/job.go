@@ -187,10 +187,17 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 
 		// Build the step env by resolving secret references against the lease-scoped
 		// values fetched by GetJobSecrets. Plain env values pass through untouched.
-		stepEnv := secretexpr.Resolve(mergeEnv(spec.GetEnv(), step.GetEnv()), secrets)
+		//
+		// Compute the raw (pre-resolution) env once: it is fed to BOTH Resolve and the
+		// unresolved-secret check, so the check runs over the raw references, not over
+		// resolved values. A delivered secret's value is therefore never re-parsed, so
+		// its content can never leak into the failure message or a log line (neither of
+		// which goes through the log masker).
+		stepRaw := mergeEnv(spec.GetEnv(), step.GetEnv())
+		stepEnv := secretexpr.Resolve(stepRaw, secrets)
 		// (should-fix #3, Dwight #91): a missing/unavailable secret must surface as a
 		// clear error, not a confusing downstream auth failure at step runtime.
-		if missing := unresolvedSecrets(stepEnv); len(missing) > 0 {
+		if missing := unresolvedSecrets(stepRaw, secrets); len(missing) > 0 {
 			msg := fmt.Sprintf("step %d: secret(s) referenced but unavailable: %s", stepIndex, strings.Join(missing, ", "))
 			a.log.Warn("unresolved secret in step env",
 				"job_id", jobID, "step", stepIndex, "missing", missing)

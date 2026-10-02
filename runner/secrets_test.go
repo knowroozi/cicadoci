@@ -132,7 +132,7 @@ func TestUnresolvedSecrets_ReturnsMissingNames(t *testing.T) {
 		"PLAIN":  "not-a-secret",        // not a ref
 		"EMPTY":  "",                    // empty
 	}
-	missing := unresolvedSecrets(env)
+	missing := unresolvedSecrets(env, map[string]string{})
 	if len(missing) != 1 {
 		t.Fatalf("expected 1 unresolved ref, got %v", missing)
 	}
@@ -144,7 +144,7 @@ func TestUnresolvedSecrets_ReturnsMissingNames(t *testing.T) {
 // TestUnresolvedSecrets_Empty returns nil when there are no refs at all.
 func TestUnresolvedSecrets_Empty(t *testing.T) {
 	env := map[string]string{"FOO": "bar"}
-	got := unresolvedSecrets(env)
+	got := unresolvedSecrets(env, map[string]string{})
 	if len(got) != 0 {
 		t.Errorf("got %v, want empty", got)
 	}
@@ -156,8 +156,38 @@ func TestUnresolvedSecrets_AllResolved(t *testing.T) {
 		"DEPLOY": "arn:aws:iam::1:role/deploy",
 		"API":    "tok_abc",
 	}
-	got := unresolvedSecrets(env)
+	got := unresolvedSecrets(env, map[string]string{"DEPLOY": "arn:aws:iam::1:role/deploy", "API": "tok_abc"})
 	if len(got) != 0 {
 		t.Errorf("got %v, want empty (all resolved)", got)
+	}
+}
+
+// TestUnresolvedSecrets_DeliveredRefValueNotFlagged is the blocking finding from
+// Dwight's #108 review: the check runs over the RAW (pre-resolution) env and
+// drops every name present in the fetched map, so a delivered secret whose VALUE
+// itself contains a template or a bare reference is never flagged — and no part
+// of that value is ever read back or echoed into the failure message.
+func TestUnresolvedSecrets_DeliveredRefValueNotFlagged(t *testing.T) {
+	// raw declares two refs; both are delivered, even though one delivered value
+	// is itself a bash-style template and the other is itself a bare ref string.
+	raw := map[string]string{
+		"AUTH":   "Bearer ${{ secrets.TOK }}",
+		"DBPASS": "secrets.PW",
+	}
+	secrets := map[string]string{
+		"TOK": "x-${{ secrets.leaked }}", // value is itself a template
+		"PW":  "secrets.hunter2",         // value is itself a bare ref
+	}
+	if missing := unresolvedSecrets(raw, secrets); len(missing) != 0 {
+		t.Errorf("unresolvedSecrets = %v, want none; a delivered value must not be re-parsed", missing)
+	}
+
+	// Conversely, a name absent from the map IS flagged, by NAME only.
+	got := unresolvedSecrets(map[string]string{
+		"X": "pre-${{ secrets.MISSING }}",
+		"Y": "secrets.OtherMissing",
+	}, map[string]string{})
+	if len(got) != 2 || got[0] != "MISSING" || got[1] != "OtherMissing" {
+		t.Errorf("unresolvedSecrets(missing) = %v, want [MISSING OtherMissing]", got)
 	}
 }

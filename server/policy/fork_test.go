@@ -187,3 +187,38 @@ func TestForkPolicy_StripsTemplateFormSecret(t *testing.T) {
 		t.Error("step Env key Z (non-secret) was incorrectly removed")
 	}
 }
+
+// TestForkPolicy_StripEmbeddedSecrets verifies that an embedded secret
+// reference (CIC-135), e.g. "Bearer ${{ secrets.T }}", is scrubbed from a
+// fork-PR job so the untrusted fork executor never receives it. The value is
+// built by string concatenation so this source file never keeps '$' adjacent to
+// '{{', which the shell/expansion would otherwise expand.
+func TestForkPolicy_StripEmbeddedSecrets(t *testing.T) {
+	pol := &ForkPolicy{ForkSafeTag: "fork-safe"}
+	wf := &workflow.Workflow{
+		Name: "test",
+		Jobs: map[string]*workflow.Job{
+			"build": {
+				RunsOn: []string{"linux"},
+				Env: map[string]string{
+					"AUTH":  "Bearer " + "${{ secrets.TOKEN }}",
+					"URL":   "postgres://u:" + "${{ secrets.PW }}" + "@db:5432",
+					"PLAIN": "not-a-reference",
+				},
+				Steps: []*workflow.Step{},
+			},
+		},
+	}
+	pol.Apply(wf)
+
+	job := wf.Jobs["build"]
+	if _, ok := job.Env["AUTH"]; ok {
+		t.Fatal("AUTH embedded secret ref should be scrubbed")
+	}
+	if _, ok := job.Env["URL"]; ok {
+		t.Fatal("URL embedded secret ref should be scrubbed")
+	}
+	if _, ok := job.Env["PLAIN"]; !ok {
+		t.Fatal("PLAIN should survive scrubbing")
+	}
+}

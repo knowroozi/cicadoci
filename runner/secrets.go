@@ -64,22 +64,34 @@ func fetchJobSecrets(ctx context.Context, client secretsClient, jobID, leaseID s
 	return out, nil
 }
 
-// unresolvedSecrets returns the distinct, sorted list of secret NAMES that are
-// still present in env after resolution — i.e. references that were declared in
-// the workflow but had no corresponding value in the fetched map. This is the
-// "secret X not available" check Dwight's #91 should-fix item asks for: it
-// surfaces a missing secret as a clear error at runtime rather than letting a
-// step fail on an opaque auth error downstream.
+// unresolvedSecrets returns the distinct, sorted list of secret NAMES
+// referenced by the pre-resolution env that have no corresponding value in
+// secrets — i.e. references that were declared in the workflow but were not
+// delivered by the fetch. This is the "secret X not available" check Dwight's
+// #91 should-fix item asks for: it surfaces a missing secret as a clear error
+// at runtime rather than letting a step fail on an opaque auth error
+// downstream.
 //
-// The returned list contains only NAMES, not values.
-func unresolvedSecrets(env map[string]string) []string {
-	if len(env) == 0 {
+// It runs on the RAW, pre-resolution env and subtracts the names present in
+// secrets, so it never re-parses a delivered secret's VALUE: a secret whose
+// value itself contains a `secrets.` template or bare reference is delivered
+// and must not be flagged, and must never have part of its content echoed back
+// into the failure message or a log line (which do not go through the log
+// masker) — that would leak secret content. The returned list contains only
+// NAMES, not values.
+func unresolvedSecrets(raw, secrets map[string]string) []string {
+	if len(raw) == 0 {
 		return nil
 	}
 	seen := make(map[string]struct{})
-	for _, v := range env {
-		if name, ok := secretexpr.Extract(v); ok {
-			seen[name] = struct{}{}
+	for _, v := range raw {
+		// NamesIn reports every reference in a value, including embedded
+		// `${{ secrets.NAME }}` occurrences (CIC-135) and the bare whole-value
+		// form. A name that is present in secrets was delivered and is dropped.
+		for _, name := range secretexpr.NamesIn(v) {
+			if _, delivered := secrets[name]; !delivered {
+				seen[name] = struct{}{}
+			}
 		}
 	}
 	if len(seen) == 0 {
