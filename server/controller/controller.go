@@ -205,8 +205,12 @@ func (c *Controller) HandlePush(payload webhook.PushPayload) error {
 		"" /* prAction */, false, /* isFork */
 		pushCloneURL, "refs/heads/"+branch); err != nil {
 		c.log.Warn("job creation failed for push run", "run", runID, "err", err)
-		// Job creation failure is non-fatal: the run was created and its
-		// status can be reported separately.
+		// A load failure is a server error, not a zero-match: finalise the
+		// run as failed so it does not stay 'pending' forever.
+		if ferr := c.store.FinalizeRunToFailed(ctx, runID); ferr != nil {
+			c.log.Warn("failed to finalise push run after job creation error",
+				"run", runID, "err", ferr)
+		}
 	}
 
 	// Report the new run to the forge.
@@ -304,6 +308,12 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "pull_request", branch, payload.PullRequest.Head.SHA, payload.Action, isFork,
 		baseCloneURL, checkoutRef); err != nil {
 		c.log.Warn("job creation failed for PR run", "run", runID, "err", err)
+		// A load failure is a server error, not a zero-match: finalise the
+		// run as failed so it does not stay 'pending' forever.
+		if ferr := c.store.FinalizeRunToFailed(ctx, runID); ferr != nil {
+			c.log.Warn("failed to finalise PR run after job creation error",
+				"run", runID, "err", ferr)
+		}
 	}
 
 	report(ctx, c.forge, owner, repoName, payload.PullRequest.Head.SHA, runID, branch, c.log)

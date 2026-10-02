@@ -329,7 +329,15 @@ func (c *Controller) LoadAndCreateJobs(
 	// comes from the base branch for PRs.
 	loader := c.cfg.WorkflowLoader
 	if loader == nil {
-		c.log.Debug("no workflow loader configured; skipping job creation",
+		// No loader configured: treat as zero-match and finalise the run.
+		// Only attempt finalisation when the store is wired; in unit tests
+		// where store is nil the run may stay pending, which is acceptable.
+		if c.store != nil {
+			if ferr := c.store.FinalizeRunToSucceeded(ctx, runID); ferr != nil {
+				c.log.Warn("failed to finalise no-loader run", "run", runID, "repo", repoID, "err", ferr)
+			}
+		}
+		c.log.Debug("no workflow loader; run finalised or skipped",
 			"run", runID, "repo", repoID)
 		return nil
 	}
@@ -341,7 +349,12 @@ func (c *Controller) LoadAndCreateJobs(
 	}
 
 	if len(workflows) == 0 {
-		c.log.Debug("no workflows found for repo; skipping job creation",
+		// CIC-85: a run with no stored workflows still needs a terminal state.
+		if err := c.store.FinalizeRunToSucceeded(ctx, runID); err != nil {
+			c.log.Warn("failed to finalise no-workflows run",
+				"run", runID, "repo", repoID, "err", err)
+		}
+		c.log.Info("no workflows found; run finalised as succeeded",
 			"run", runID, "repo", repoID)
 		return nil
 	}
@@ -362,23 +375,27 @@ func (c *Controller) LoadAndCreateJobs(
 	}
 
 	created := 0
+	matched := false // a workflow matched the event, regardless of job creation outcome
 	for _, wf := range workflows {
 		// Fork PRs: enforce zero-secrets / no-identity / safe-tag policy.
 		if isFork && c.cfg.ForkPolicy != nil {
 			wf = c.cfg.ForkPolicy.Apply(wf)
 			c.log.Debug("applied fork policy to workflow", "workflow", wf.Name, "run", runID)
 		}
+		// A workflow that matches the event counts as "matched"
+		// regardless of whether it passes validation — a matched
+		// but invalid workflow means the run was expected to do work.
+		if !wf.On.Matches(event) {
+			continue
+		}
+		matched = true
+
 		// Validate the workflow before attempting DAG creation.
 		// A workflow loaded from an unknown source may be structurally
-		// invalid; we skip it and log a warning rather than failing
-		// the entire run.
+		// invalid; we skip it and log a warning rather than failing the run.
 		if verr := wf.Validate(); verr != nil {
 			c.log.Warn("workflow validation failed; skipping",
 				"workflow", wf.Name, "run", runID, "err", verr)
-			continue
-		}
-
-		if !wf.On.Matches(event) {
 			continue
 		}
 
@@ -408,8 +425,26 @@ func (c *Controller) LoadAndCreateJobs(
 	}
 
 	if created == 0 {
-		c.log.Debug("no workflows matched the event; no jobs created",
-			"run", runID, "repo", repoID, "event_type", eventType)
+		// CIC-85: zero-match run finalisation.
+		if matched {
+			// A workflow matched the event but produced no jobs
+			// (DAG build failure, validation error, or store insert error).
+			// The run was expected to do work; finalise as failed.
+			if err := c.store.FinalizeRunToFailed(ctx, runID); err != nil {
+				c.log.Warn("failed to finalise matched-but-failed run",
+					"run", runID, "repo", repoID, "err", err)
+			}
+			c.log.Warn("matched workflow produced no jobs; run finalised as failed",
+				"run", runID, "repo", repoID, "event_type", eventType)
+		} else {
+			// No workflow matched the event: flip to succeeded.
+			if err := c.store.FinalizeRunToSucceeded(ctx, runID); err != nil {
+				c.log.Warn("failed to finalise zero-match run",
+					"run", runID, "repo", repoID, "err", err)
+			}
+			c.log.Info("no workflows matched the event; run finalised as succeeded",
+				"run", runID, "repo", repoID, "event_type", eventType)
+		}
 	}
 	return nil
 }

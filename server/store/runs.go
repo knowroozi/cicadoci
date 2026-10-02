@@ -125,6 +125,45 @@ func (s *Store) CreateRun(ctx context.Context, opts CreateRunOptions) (runID uui
 	return runID, newNum, nil
 }
 
+// FinalizeRunToSucceeded flips a pending run to 'succeeded' with
+// finished_at=now().  Used by the controller when no jobs matched the
+// incoming event (zero-match run finalisation, CIC-85).
+//
+// It is a no-op when the run is already in a non-pending state; it does
+// not force a transition from 'running' or 'completed'.
+func (s *Store) FinalizeRunToSucceeded(ctx context.Context, runID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `
+        UPDATE runs
+        SET status      = 'succeeded',
+            finished_at = now()
+        WHERE id        = $1
+        AND status      = 'pending'
+    `, runID)
+	if err != nil {
+		return fmt.Errorf("FinalizeRunToSucceeded: %w", err)
+	}
+	return nil
+}
+
+// FinalizeRunToFailed flips a pending run to 'failed' with
+// finished_at=now().  Used by the controller when a workflow
+// matched the event but its jobs could not be created
+// (e.g., DAG build failure, validation failure, job insert error).
+// It is a no-op when the run is already in a non-pending state.
+func (s *Store) FinalizeRunToFailed(ctx context.Context, runID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `
+        UPDATE runs
+        SET status        = 'failed',
+            finished_at   = now()
+        WHERE id          = $1
+        AND status        = 'pending'
+     `, runID)
+	if err != nil {
+		return fmt.Errorf("FinalizeRunToFailed: %w", err)
+	}
+	return nil
+}
+
 // ── Job spec for creation ───────────────────────────────────────────────────────
 
 // JobSpec describes one job in a run's DAG.
