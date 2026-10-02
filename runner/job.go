@@ -139,8 +139,10 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 	// only the references secret_refs authorizes and registers the values in
 	// its redaction masker; the runner holds them in memory and never writes
 	// them to disk or the log stream. A job that references no secrets gets an
-	// empty map. A transport / auth failure is an infrastructure failure.
-	secrets, err := fetchJobSecrets(ctx, a.secrets, jobID, leaseID)
+	// empty map without a round trip. A transport / auth failure is an
+	// infrastructure failure. The RPC authenticates the runner like every
+	// other call, so it must carry the credential (CIC-133).
+	secrets, err := fetchJobSecrets(a.authContext(ctx), a.secrets, jobID, leaseID, spec.GetSecretRefs())
 	if err != nil {
 		a.log.Error("fetch job secrets", "job_id", jobID, "error", err)
 		a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{

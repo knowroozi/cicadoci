@@ -42,7 +42,7 @@ func TestFetchJobSecrets_DeliversValues(t *testing.T) {
 			"PROD_API_TOKEN": "abc",
 		},
 	}
-	got, err := fetchJobSecrets(context.Background(), fake, "job-1", "lease-7")
+	got, err := fetchJobSecrets(context.Background(), fake, "job-1", "lease-7", []string{"DEPLOY_ROLE", "PROD_API_TOKEN"})
 	if err != nil {
 		t.Fatalf("fetchJobSecrets: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestFetchJobSecrets_DeliversValues(t *testing.T) {
 // gets an empty but non-nil map, so downstream Resolve sees a defined value.
 func TestFetchJobSecrets_EmptyIsNonNil(t *testing.T) {
 	fake := &fakeSecretsClient{secrets: nil}
-	got, err := fetchJobSecrets(context.Background(), fake, "j", "l")
+	got, err := fetchJobSecrets(context.Background(), fake, "j", "l", []string{"A"})
 	if err != nil {
 		t.Fatalf("fetchJobSecrets: %v", err)
 	}
@@ -73,11 +73,28 @@ func TestFetchJobSecrets_EmptyIsNonNil(t *testing.T) {
 	}
 }
 
+// TestFetchJobSecrets_NoRefsSkipsRPC: a job whose assignment lists no
+// secret_refs must not call GetJobSecrets at all, so a job without secrets
+// never depends on the secrets path (CIC-133).
+func TestFetchJobSecrets_NoRefsSkipsRPC(t *testing.T) {
+	fake := &fakeSecretsClient{err: status.Error(codes.Unauthenticated, "must not be called")}
+	got, err := fetchJobSecrets(context.Background(), fake, "j", "l", nil)
+	if err != nil {
+		t.Fatalf("fetchJobSecrets: %v", err)
+	}
+	if fake.calls != 0 {
+		t.Errorf("GetJobSecrets called %d times, want 0", fake.calls)
+	}
+	if got == nil || len(got) != 0 {
+		t.Errorf("got %v, want non-nil empty map", got)
+	}
+}
+
 // TestFetchJobSecrets_InfraError wraps a transport error with a clean prefix.
 func TestFetchJobSecrets_InfraError(t *testing.T) {
 	under := status.Error(codes.Unavailable, "upstream down")
 	fake := &fakeSecretsClient{err: under}
-	_, err := fetchJobSecrets(context.Background(), fake, "j", "l")
+	_, err := fetchJobSecrets(context.Background(), fake, "j", "l", []string{"A"})
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -91,7 +108,7 @@ func TestFetchJobSecrets_InfraError(t *testing.T) {
 // Production agents always wire a live client, so this path is a test /
 // pre-connect convenience, not a security posture.
 func TestFetchJobSecrets_NilClient(t *testing.T) {
-	got, err := fetchJobSecrets(context.Background(), nil, "j", "l")
+	got, err := fetchJobSecrets(context.Background(), nil, "j", "l", []string{"A"})
 	if err != nil {
 		t.Fatalf("nil client returned error: %v", err)
 	}

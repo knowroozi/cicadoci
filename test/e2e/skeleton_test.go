@@ -34,6 +34,7 @@ import (
 	"cicadoci.com/cicado/server/dispatch"
 	"cicadoci.com/cicado/server/queue"
 	"cicadoci.com/cicado/server/runnersvc"
+	"cicadoci.com/cicado/server/secrets"
 	"cicadoci.com/cicado/server/store"
 )
 
@@ -50,6 +51,13 @@ type harness struct {
 // startServer brings up the gRPC service and dispatcher on a random port.
 func startServer(t *testing.T, ctx context.Context) *harness {
 	t.Helper()
+	return startServerWithSecrets(t, ctx, nil)
+}
+
+// startServerWithSecrets is startServer with a secret store wired into the
+// service, so GetJobSecrets delivers real values.
+func startServerWithSecrets(t *testing.T, ctx context.Context, secretStore secrets.Store) *harness {
+	t.Helper()
 
 	st := testdb.New(t)
 	q := queue.NewPostgres(st.Pool())
@@ -61,7 +69,7 @@ func startServer(t *testing.T, ctx context.Context) *harness {
 	cfg := runnersvc.DefaultConfig()
 	cfg.HeartbeatInterval = 2 * time.Second
 
-	svc := runnersvc.New(st.Pool(), q, cfg, log, nil)
+	svc := runnersvc.New(st.Pool(), q, cfg, log, secretStore)
 
 	dispatchCfg := dispatch.DefaultConfig(cfg.LeaseTTL())
 	dispatchCfg.PollInterval = 250 * time.Millisecond
@@ -136,7 +144,7 @@ func (h *harness) seedJob(t *testing.T, steps [][]string, opts ...func(*jobOptio
 	t.Helper()
 	ctx := context.Background()
 
-	o := jobOptions{executor: "shell", requiredTags: []string{}}
+	o := jobOptions{executor: "shell", requiredTags: []string{}, env: `{"CICADO_JOB":"skeleton"}`, secretRefs: []string{}}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -164,10 +172,10 @@ func (h *harness) seedJob(t *testing.T, steps [][]string, opts ...func(*jobOptio
 	// what the scheduler does, which is why 'pending' is the schema default.
 	var jobID uuid.UUID
 	if err := h.store.Pool().QueryRow(ctx,
-		`INSERT INTO jobs (run_id, name, status, executor, required_tags, env, timeout_seconds)
-		 VALUES ($1, 'walking-skeleton', 'pending', $2, $3, '{"CICADO_JOB":"skeleton"}'::jsonb, 120)
+		`INSERT INTO jobs (run_id, name, status, executor, required_tags, env, secret_refs, timeout_seconds)
+		 VALUES ($1, 'walking-skeleton', 'pending', $2, $3, $4::jsonb, $5, 120)
 		 RETURNING id`,
-		runID, o.executor, o.requiredTags).Scan(&jobID); err != nil {
+		runID, o.executor, o.requiredTags, o.env, o.secretRefs).Scan(&jobID); err != nil {
 		t.Fatalf("create job: %v", err)
 	}
 
@@ -189,6 +197,13 @@ func (h *harness) seedJob(t *testing.T, steps [][]string, opts ...func(*jobOptio
 type jobOptions struct {
 	executor     string
 	requiredTags []string
+	env          string // job env as a JSON object
+	secretRefs   []string
+}
+
+// withSecretEnv sets the job env (a JSON object) and its secret_refs.
+func withSecretEnv(env string, refs ...string) func(*jobOptions) {
+	return func(o *jobOptions) { o.env, o.secretRefs = env, refs }
 }
 
 func withRequiredTags(tags ...string) func(*jobOptions) {
@@ -371,6 +386,62 @@ func TestWalkingSkeleton(t *testing.T) {
 	}
 	if leaseID != nil {
 		t.Error("a completed job still holds its lease")
+	}
+}
+
+// TestSecretDelivery runs a job that references a secret through the real
+// GetJobSecrets path: the runner must authenticate the call, receive the value
+// against its live lease, resolve it into the step env, and the server must
+// mask the value in the stored logs. It guards CIC-133, where the runner sent
+// GetJobSecrets without its credential and every job failed as infra; the
+// unit tests missed that because they use a fake secrets client.
+func TestSecretDelivery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("needs a database and spawns processes")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	secretStore := secrets.NewMemory(key)
+
+	h := startServerWithSecrets(t, ctx, secretStore)
+	regToken := h.mintRegistrationToken(t, []string{"linux", "shell"})
+
+	const value = "s3cr3t-e2e-value"
+	jobID := h.seedJob(t, [][]string{
+		{"sh", "-c", `[ "$DEPLOY_TOKEN" = "` + value + `" ] && echo secret-matched; echo "token=$DEPLOY_TOKEN"`},
+	}, withSecretEnv(`{"DEPLOY_TOKEN":"${{ secrets.DEPLOY_TOKEN }}"}`, "DEPLOY_TOKEN"))
+
+	// Store the secret before any runner exists, so it is in place when the
+	// job is claimed.
+	var orgID, repoID uuid.UUID
+	if err := h.store.Pool().QueryRow(ctx, `
+		SELECT r.org_id, r.id FROM jobs j JOIN runs ru ON ru.id = j.run_id
+		  JOIN repos r ON r.id = ru.repo_id WHERE j.id = $1`, jobID).Scan(&orgID, &repoID); err != nil {
+		t.Fatalf("find repo: %v", err)
+	}
+	if err := secretStore.Put(ctx, orgID.String(), repoID.String(), "DEPLOY_TOKEN", []byte(value), nil); err != nil {
+		t.Fatalf("put secret: %v", err)
+	}
+
+	h.startRunner(t, ctx, regToken)
+
+	status := awaitJobStatus(t, h.store.Pool(), jobID, 60*time.Second,
+		"succeeded", "failed", "dead_letter")
+	logs := jobLogs(t, h.store.Pool(), jobID)
+	if status != "succeeded" {
+		t.Fatalf("job finished %q, want succeeded. logs:\n%s", status, logs)
+	}
+	if !strings.Contains(logs, "secret-matched") {
+		t.Errorf("step did not see the secret value in its env; logs:\n%s", logs)
+	}
+	if strings.Contains(logs, value) {
+		t.Errorf("secret value reached the stored logs unmasked:\n%s", logs)
 	}
 }
 

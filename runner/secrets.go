@@ -33,12 +33,16 @@ type secretsClient interface {
 // name->value map. A job that references no secrets legitimately gets an empty
 // (non-nil) map. Transport / authorization failures are wrapped so the caller
 // can classify them as infrastructure failures.
-func fetchJobSecrets(ctx context.Context, client secretsClient, jobID, leaseID string) (map[string]string, error) {
+//
+// refs is the job's secret_refs from the assignment. When it is empty the
+// server would grant nothing, so the RPC is skipped: a job without secrets
+// must not depend on the secrets path being reachable (CIC-133).
+func fetchJobSecrets(ctx context.Context, client secretsClient, jobID, leaseID string, refs []string) (map[string]string, error) {
 	// A nil client means the agent was constructed without a live gRPC
 	// connection (unit tests, or a runner that has not connected yet). That is
 	// NOT an error: the job simply carries no secrets and the step runs with an
 	// empty secret set. Only a live RPC failure is an infrastructure error.
-	if client == nil {
+	if client == nil || len(refs) == 0 {
 		return map[string]string{}, nil
 	}
 	resp, err := client.GetJobSecrets(ctx, &runnerv1.GetJobSecretsRequest{
