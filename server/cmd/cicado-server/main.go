@@ -64,6 +64,7 @@ func run() error {
 		webhookMaxConcurrent = flag.Int("webhook-max-concurrent", 16, "max concurrent webhook dispatches (flood backpressure); 0 disables")
 		secretKeyHex         = flag.String("secret-key", os.Getenv("CICADO_SECRET_KEY"), "hex-encoded 32-byte AES-256 encryption key for the secrets store")
 		allowEphemeralKey    = flag.Bool("allow-ephemeral-key", envBool("CICADO_ALLOW_EPHEMERAL_KEY", false), "permit an ephemeral random secret key when CICADO_SECRET_KEY is empty (DEVELOPMENT ONLY: secrets will not survive a restart)")
+		githubWorkflowToken  = flag.String("github-workflow-token", os.Getenv("CICADO_GITHUB_WORKFLOW_TOKEN"), "long-lived fine-grained GitHub personal access token (Contents: read) used to fetch the repo's workflow files on a default-branch push; NOT a GitHub App installation token, which expires after 1 h (prefer the env var: a flag value shows in ps); empty keeps the producer off and relies on the store/dev-seed path")
 	)
 	flag.Parse()
 
@@ -182,6 +183,26 @@ func run() error {
 	// dev-seed / CLI ingest in dev. A nil table simply means no jobs, which is
 	// the safe default.
 	ctrlOpts.WorkflowLoader = controller.NewStoreLoader(st, log)
+
+	// CIC-120: wire the production workflow producer. When a token is
+	// configured, a push to the default branch syncs the repo's workflow files
+	// from the code host into the workflows table (upsert present files, delete
+	// removed ones) *before* the loader reads them. The #95 gates live in the
+	// controller (push on the default branch only; PRs never invoke the
+	// producer, so no fork-supplied definition reaches the shared repo row). An
+	// empty token leaves the producer nil and keeps the store/dev-seed path.
+	//
+	// TODO(CIC-146): the token is one static, long-lived fine-grained PAT.
+	// Mint GitHub App installation tokens per call and decode installation.id
+	// from the webhook instead.
+	// TODO(CIC-121): the fetch path is .github/workflows (the #95 default); the
+	// .cicado/workflows convention is decided in CIC-121.
+	if p := newWorkflowProducer(*githubWorkflowToken, st, log, &http.Client{Timeout: 20 * time.Second}); p != nil {
+		ctrlOpts.Producer = p
+		log.Info("workflow producer active",
+			"source", "github", "token_source", "CICADO_GITHUB_WORKFLOW_TOKEN")
+	}
+
 	ctrl := controller.New(st, controller.NoOpForge{}, ctrlOpts, log)
 
 	grpcServer := grpc.NewServer()
@@ -313,4 +334,16 @@ func envBool(key string, fallback bool) bool {
 	default:
 		return true
 	}
+}
+
+// newWorkflowProducer builds the GitHub workflow producer from the
+// --github-workflow-token value, or returns nil when the token is empty. The
+// return is an untyped nil in that case, so the controller's
+// `cfg.Producer != nil` check sees no producer (a typed nil *GitHubWorkflowProducer
+// in the interface would not compare equal to nil).
+func newWorkflowProducer(token string, st store.WorkflowStore, log *slog.Logger, httpClient *http.Client) controller.WorkflowProducer {
+	if token == "" {
+		return nil
+	}
+	return controller.NewGitHubWorkflowProducer(token, st, log, httpClient)
 }

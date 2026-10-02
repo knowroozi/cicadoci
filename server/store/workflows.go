@@ -72,10 +72,39 @@ func (s *Store) UpsertWorkflow(ctx context.Context, in WorkflowInput) (uuid.UUID
 	return id, nil
 }
 
+// DeleteWorkflowsNotIn removes the repo's workflow rows whose path is not in
+// keepPaths, and returns how many rows it deleted.
+//
+// It is the prune half of a sync: a producer that has just fetched the full set
+// of workflow files present at a ref passes their paths here, so a workflow file
+// deleted from the repo stops triggering runs. The delete is scoped to repoID;
+// rows of other repos are never touched. An empty keepPaths deletes every row of
+// the repo (the workflows directory is gone at the ref). runs.workflow_id is ON
+// DELETE SET NULL, so past runs keep their history.
+//
+// The caller must only call this after a fetch that succeeded: a failed or
+// partial fetch passed here would delete live workflows.
+func (s *Store) DeleteWorkflowsNotIn(ctx context.Context, repoID uuid.UUID, keepPaths []string) (int64, error) {
+	if repoID == uuid.Nil {
+		return 0, fmt.Errorf("delete workflows: repo id is required")
+	}
+	if keepPaths == nil {
+		keepPaths = []string{} // NOT (path = ANY(NULL)) is NULL, which would delete nothing
+	}
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM workflows WHERE repo_id = $1 AND NOT (path = ANY($2::text[]))`,
+		repoID, keepPaths)
+	if err != nil {
+		return 0, fmt.Errorf("delete stale workflows for repo %s: %w", repoID, err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // ── Narrow interface for the controller's producer ─────────────────────────────
 
 // WorkflowStore is the narrow interface the controller's workflow producer needs
 // from the store. *store.Store satisfies it.
 type WorkflowStore interface {
 	UpsertWorkflow(ctx context.Context, in WorkflowInput) (uuid.UUID, error)
+	DeleteWorkflowsNotIn(ctx context.Context, repoID uuid.UUID, keepPaths []string) (int64, error)
 }

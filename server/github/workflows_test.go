@@ -4,6 +4,7 @@ package github_test
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -71,9 +72,11 @@ func TestFetchWorkflowFiles_NoWorkflows(t *testing.T) {
 	fetcher := github.NewWorkflowFetcher("token", srv.Client())
 	fetcher.BaseURL = srv.URL
 
+	// GitHub 404s both a missing directory and an unreadable private repo, so
+	// the fetcher must report it distinctly rather than as "zero files".
 	files, err := fetcher.FetchWorkflowFiles(context.Background(), "org", "repo", "deadbeef")
-	if err != nil {
-		t.Fatalf("404 on listing should not error, got: %v", err)
+	if !errors.Is(err, github.ErrWorkflowDirNotFound) {
+		t.Fatalf("404 on listing: err = %v, want ErrWorkflowDirNotFound", err)
 	}
 	if len(files) != 0 {
 		t.Fatalf("expected 0 files, got %d", len(files))

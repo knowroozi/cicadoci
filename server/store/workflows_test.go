@@ -117,3 +117,78 @@ func TestUpsertWorkflowRequiresRepoAndPath(t *testing.T) {
 		t.Error("upsert with empty path: expected error, got nil")
 	}
 }
+
+// TestDeleteWorkflowsNotIn proves the CIC-120 prune: rows whose path is not in
+// the kept set are deleted, the delete is scoped to the given repo, and an
+// empty kept set clears that repo only.
+func TestDeleteWorkflowsNotIn(t *testing.T) {
+	st := testdb.New(t)
+	ctx := context.Background()
+
+	orgID, err := st.UpsertOrg(ctx, "acme", "Acme")
+	if err != nil {
+		t.Fatalf("upsert org: %v", err)
+	}
+	repoA, err := st.FindOrCreateRepo(ctx, orgID, "github", "acme", "core", "main")
+	if err != nil {
+		t.Fatalf("repo a: %v", err)
+	}
+	repoB, err := st.FindOrCreateRepo(ctx, orgID, "github", "acme", "other", "main")
+	if err != nil {
+		t.Fatalf("repo b: %v", err)
+	}
+	def, _ := json.Marshal(&workflow.Workflow{Name: "x"})
+	put := func(repo uuid.UUID, path string) {
+		t.Helper()
+		if _, err := st.UpsertWorkflow(ctx, store.WorkflowInput{
+			RepoID: repo, Name: path, Path: path, Definition: def,
+		}); err != nil {
+			t.Fatalf("upsert %s: %v", path, err)
+		}
+	}
+	paths := func(repo uuid.UUID) []string {
+		t.Helper()
+		rows, err := st.ListWorkflowsForRepo(ctx, repo)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.Path)
+		}
+		return out
+	}
+
+	put(repoA, ".github/workflows/ci.yaml")
+	put(repoA, ".github/workflows/old-deploy.yml")
+	put(repoB, ".github/workflows/old-deploy.yml") // same path, other repo
+
+	n, err := st.DeleteWorkflowsNotIn(ctx, repoA, []string{".github/workflows/ci.yaml"})
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("deleted = %d, want 1", n)
+	}
+	if got := paths(repoA); len(got) != 1 || got[0] != ".github/workflows/ci.yaml" {
+		t.Errorf("repo a paths = %v, want [ci.yaml]", got)
+	}
+	if got := paths(repoB); len(got) != 1 {
+		t.Errorf("repo b paths = %v, want its row untouched", got)
+	}
+
+	// Empty kept set (workflows directory gone): clears repo a only.
+	if n, err := st.DeleteWorkflowsNotIn(ctx, repoA, nil); err != nil || n != 1 {
+		t.Errorf("delete all = (%d, %v), want (1, nil)", n, err)
+	}
+	if got := paths(repoA); len(got) != 0 {
+		t.Errorf("repo a paths = %v, want none", got)
+	}
+	if got := paths(repoB); len(got) != 1 {
+		t.Errorf("repo b paths = %v, want its row untouched", got)
+	}
+
+	if _, err := st.DeleteWorkflowsNotIn(ctx, uuid.Nil, nil); err == nil {
+		t.Error("nil repo id: want error")
+	}
+}

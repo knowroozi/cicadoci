@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -83,9 +84,12 @@ type githubContentsFileResponse struct {
 // "content" field — that only appears in the per-file endpoint
 // (GET /repos/.../contents/.github/workflows/ci.yaml).
 //
-// A 404 on the directory listing is not an error: the repo has no
-// workflow files.  A 404 on a per-file request is not an error: the
-// file was removed between the listing and the fetch.
+// A 404 on the directory listing returns ErrWorkflowDirNotFound: GitHub
+// answers 404 both when the directory is absent and when the token cannot
+// read the repo (private repos outside a fine-grained PAT's selection), so
+// the caller must not read it as "the repo has no workflows".  A 404 on a
+// per-file request is not an error: the file was removed between the
+// listing and the fetch.
 //
 // The ref is a commit SHA (from a push event) or a branch name.
 func (f *WorkflowFetcher) FetchWorkflowFiles(
@@ -100,7 +104,7 @@ func (f *WorkflowFetcher) FetchWorkflowFiles(
 	listing, err := f.getList(ctx, dirURL)
 	if err != nil {
 		if isNotFound(err) {
-			return nil, nil // no workflows yet
+			return nil, ErrWorkflowDirNotFound
 		}
 		return nil, fmt.Errorf("fetch workflow dir: %w", err)
 	}
@@ -201,6 +205,11 @@ func (f *WorkflowFetcher) authHeaders(req *http.Request) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 }
+
+// ErrWorkflowDirNotFound is returned by FetchWorkflowFiles when the
+// .github/workflows listing is a 404. It is ambiguous: the directory may be
+// absent, or the repo, ref or token's access may be missing.
+var ErrWorkflowDirNotFound = errors.New("github: .github/workflows not found or not readable")
 
 var errNotFound = fmt.Errorf("not found")
 
