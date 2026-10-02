@@ -432,7 +432,7 @@ func TestReceiver_FloodBackpressure(t *testing.T) {
 
 func TestReceiver_PullRequestEvent(t *testing.T) {
 	secret := "secret123"
-	body := []byte(`{"action":"opened","number":42,"base":{"ref":"main"},"head":{"ref":"feature-branch","sha":"abc123"},"repository":{"name":"myrepo","full_name":"owner/myrepo","private":false},"fork":false}`)
+	body := []byte(`{"action":"opened","pull_request":{"number":42,"fork":false,"base":{"ref":"main"},"head":{"ref":"feature-branch","sha":"abc123","repo":{"full_name":"owner/myrepo","fork":false}}},"repository":{"name":"myrepo","full_name":"owner/myrepo","private":false}}`)
 	sig := sign(secret, body)
 
 	var prCount int
@@ -526,7 +526,7 @@ func TestDispatch_PushPayloadDecoding(t *testing.T) {
 }
 
 func TestDispatch_PullRequestActionPreserved(t *testing.T) {
-	body := []byte(`{"action":"synchronize","number":7,"base":{"ref":"main"},"head":{"ref":"dev"},"repository":{"name":"repo","full_name":"owner/repo"},"fork":false}`)
+	body := []byte(`{"action":"synchronize","pull_request":{"number":7,"base":{"ref":"main"},"head":{"ref":"dev"},"fork":false},"repository":{"name":"repo","full_name":"owner/repo"}}`)
 
 	var captured string
 	d := capturePullRequest{fn: func(p PullRequestPayload) error {
@@ -596,15 +596,17 @@ var (
 func TestPayloadJSONRoutrdTrip(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{
 		"action": "opened",
-		"number": 42,
-		"base":   map[string]any{"ref": "main"},
+		"pull_request": map[string]any{
+			"number": 42,
+			"base":   map[string]any{"ref": "main"},
+		},
 	})
 	var p PullRequestPayload
 	if err := json.Unmarshal(body, &p); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}
-	if p.Action != "opened" || p.Number != 42 {
-		t.Errorf("unexpected pull request payload: action=%q number=%d", p.Action, p.Number)
+	if p.Action != "opened" || p.PullRequest.Number != 42 {
+		t.Errorf("unexpected pull request payload: action=%q number=%d", p.Action, p.PullRequest.Number)
 	}
 }
 func TestReceiver_FailsClosed_WhenSecretEmpty(t *testing.T) {

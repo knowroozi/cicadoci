@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"cicadoci.com/cicado/internal/testdb"
 	"cicadoci.com/cicado/server/audit"
 	"cicadoci.com/cicado/server/backpressure"
 	"cicadoci.com/cicado/server/forge"
@@ -62,7 +63,7 @@ func TestMaybeOpenGate_NilManager(t *testing.T) {
 	// With ApprovalGates = nil, maybeOpenGate must not panic.
 	c := New(nil, nil, Config{ApprovalGates: nil}, nil)
 	c.maybeOpenGate(context.Background(), uuid.New(), "acme", "widgets",
-		webhook.PullRequestPayload{Number: 42}) // zero payload is fine
+		webhook.PullRequestPayload{}) // zero payload is fine
 	// No panic is the assertion.
 }
 
@@ -523,5 +524,131 @@ func TestStoreLoader_ListerError(t *testing.T) {
 	_, err := l.LoadAll(context.Background(), uuid.New(), "")
 	if err == nil {
 		t.Fatal("expected error when ListWorkflowsForRepo fails")
+	}
+}
+
+// ── CIC-102: fork PR stored as fork=true (PG-gated) ────────────────
+//
+// TestForkPRStoredAsFork: a fork PR payload, processed end-to-end via
+// store.CreateRun, produces a runs row with is_fork=true.
+//
+// TestForkPRStoredAsFork_HeadNull: a PR with head.repo=null (deleted
+// fork) is also stored as is_fork=true (fail-closed).
+//
+// Both tests seed a real repos row so CreateRun succeeds.
+
+func TestForkPRStoredAsFork(t *testing.T) {
+	st := testdb.New(t)
+	ctx := context.Background()
+
+	// Seed org + repo so CreateRun can complete.
+	orgID, err := st.UpsertOrg(ctx, "acme", "Acme")
+	if err != nil {
+		t.Fatalf("upsert org: %v", err)
+	}
+	_, err = st.FindOrCreateRepo(ctx, orgID, "github", "acme", "widgets", "main")
+	if err != nil {
+		t.Fatalf("find or create repo: %v", err)
+	}
+
+	// Build a fork PR payload from a real GitHub JSON fixture.
+	paylaodJSON := []byte(`{
+			"action": "opened",
+			"pull_request": {
+				"number": 42,
+				"fork": true,
+				"base": {"ref": "main"},
+				"head": {"ref": "feature", "sha": "abc123", "repo": {"full_name": "alice/widgets", "fork": true}}
+			},
+			"repository": {"name": "widgets", "full_name": "acme/widgets"}
+	}`)
+
+	var payload webhook.PullRequestPayload
+	if err := json.Unmarshal(paylaodJSON, &payload); err != nil {
+		t.Fatalf("unmarshal fork PR JSON: %v", err)
+	}
+	if !payload.IsFork() {
+		t.Fatal("IsFork() should be true for a fork PR fixture")
+	}
+
+	// The controller uses repoID — but here we verify the store directly.
+	// We need repoID from FindOrCreateRepo.
+	repoID, err := st.FindOrCreateRepo(ctx, orgID, "github", "acme", "widgets", "main")
+	if err != nil {
+		t.Fatalf("find or create repo: %v", err)
+	}
+
+	runID, _, err := st.CreateRun(ctx, store.CreateRunOptions{
+		RepoID:        repoID,
+		Event:         "pull_request",
+		Ref:           "main",
+		Sha:           "abc123",
+		Actor:         "pr-42",
+		TriggerSource: store.TriggerForge,
+		IsFork:        payload.IsFork(),
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	row, err := st.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if !row.IsFork {
+		t.Error("CreateRun with IsFork=true: is_fork stored as false")
+	}
+}
+
+func TestForkPRStoredAsFork_HeadNull(t *testing.T) {
+	st := testdb.New(t)
+	ctx := context.Background()
+
+	orgID, err := st.UpsertOrg(ctx, "acme", "Acme")
+	if err != nil {
+		t.Fatalf("upsert org: %v", err)
+	}
+	repoID, err := st.FindOrCreateRepo(ctx, orgID, "github", "acme", "widgets", "main")
+	if err != nil {
+		t.Fatalf("find or create repo: %v", err)
+	}
+
+	// head.repo is null → IsFork() fail-closed → is_fork=true
+	paylaodJSON := []byte(`{
+			"action": "opened",
+			"pull_request": {
+				"number": 44,
+				"base": {"ref": "main"},
+				"head": {"ref": "feature", "sha": "def456", "repo": null}
+			},
+			"repository": {"name": "widgets", "full_name": "acme/widgets"}
+	}`)
+
+	var payload webhook.PullRequestPayload
+	if err := json.Unmarshal(paylaodJSON, &payload); err != nil {
+		t.Fatalf("unmarshal null-head JSON: %v", err)
+	}
+	if !payload.IsFork() {
+		t.Fatal("IsFork() should be true for null head.repo (fail-closed)")
+	}
+
+	runID, _, err := st.CreateRun(ctx, store.CreateRunOptions{
+		RepoID:        repoID,
+		Event:         "pull_request",
+		Ref:           "main",
+		Sha:           "def456",
+		Actor:         "pr-44",
+		TriggerSource: store.TriggerForge,
+		IsFork:        payload.IsFork(),
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	row, err := st.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if !row.IsFork {
+		t.Error("CreateRun with IsFork=true (null head): is_fork stored as false")
 	}
 }

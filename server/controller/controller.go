@@ -257,33 +257,34 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 
 	// Base.Ref is the target branch (what the PR merges into);
 	// it is used for trigger matching and run correlation.
-	branch := payload.Base.Ref
-	prNumber := strconv.Itoa(payload.Number) // used as actor
+	// isFork delegates to PullRequestPayload.IsFork() — fail-closed.
+	isFork := payload.IsFork()
+	branch := payload.PullRequest.Base.Ref
+	prNumber := strconv.Itoa(payload.PullRequest.Number) // used as actor
 	runID, number, err := c.store.CreateRun(ctx, store.CreateRunOptions{
 		RepoID:        repoID,
 		Event:         "pull_request",
 		Ref:           branch,
-		Sha:           payload.Head.SHA,
+		Sha:           payload.PullRequest.Head.SHA,
 		Actor:         prNumber,
 		TriggerSource: store.TriggerForge,
-		IsFork:        payload.Fork,
+		IsFork:        isFork,
 	})
 	if err != nil {
 		return fmt.Errorf("controller pr: create run: %w", err)
 	}
 	c.log.Info("run created", "run", runID, "number", number,
-		"event", "pull_request", "pr", payload.Number, "repo", payload.Repository.FullName)
+		"event", "pull_request", "pr", payload.PullRequest.Number, "repo", payload.Repository.FullName)
 
 	// Create job DAG from matching workflows.
 	// SECURITY (CIC-84): PR events must NOT trigger the workflow producer.
 	// The producer upserts into the repo's shared (repo_id, path) row,
 	// so a same-repo PR to main could poison subsequent push runs.
-
-	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "pull_request", branch, payload.Head.SHA, payload.Action, payload.Fork); err != nil {
+	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "pull_request", branch, payload.PullRequest.Head.SHA, payload.Action, isFork); err != nil {
 		c.log.Warn("job creation failed for PR run", "run", runID, "err", err)
 	}
 
-	report(ctx, c.forge, owner, repoName, payload.Head.SHA, runID, branch, c.log)
+	report(ctx, c.forge, owner, repoName, payload.PullRequest.Head.SHA, runID, branch, c.log)
 
 	// Audit the run creation.  Actor is the PR number as a string.
 	c.emitAudit(ctx, runID, "pull_request", prNumber, owner, repoName, branch)
@@ -399,9 +400,9 @@ func (c *Controller) maybeOpenGate(
 	}
 	g := &approvalgates.Gate{
 		RunID:   runID.String(),
-		Channel: fmt.Sprintf("%d", payload.Number),
+		Channel: fmt.Sprintf("%d", payload.PullRequest.Number),
 		Allow:   "approve",
-		Reason:  fmt.Sprintf("PR #%d on %s/%s", payload.Number, owner, repo),
+		Reason:  fmt.Sprintf("PR #%d on %s/%s", payload.PullRequest.Number, owner, repo),
 		Deny:    "deny",
 		Allowed: c.cfg.AllowedApprovers,
 	}

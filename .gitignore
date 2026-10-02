@@ -18,3 +18,4 @@ docker-compose.override.yml
 .ua/tmp/
 .ua/diff-overlay.json
 
+/cicado-server

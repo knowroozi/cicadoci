@@ -39,30 +39,73 @@ type PushPayload struct {
 	} `json:"pusher"`
 }
 
-// PullRequestPayload is the minimal subset of GitHub's pull_request event.
-type PullRequestPayload struct {
-	Action string `json:"action"` // "opened", "synchronize", "closed", etc.
-	Number int    `json:"number"`
+//  pull_request 
+//
+// CIC-102: GitHub nests fork/base/head under "pull_request", not at the
+// top level. The old flat struct caused Fork to be false and ref/SHA to
+// be empty on real events, bypassing the fork-PR policy and GetJobSecrets
+// guard. The fields below are the minimal subset CICaDo consumes.
+
+// Repo is the minimal subset of a GitHub repository sub-object.
+type Repo struct {
+	FullName string `json:"full_name"`
+	Fork     bool   `json:"fork"`
+}
+
+// PullRequestHead represents GitHub's pull_request.head sub-object.
+//
+// Head.Repo is optional: GitHub may send null for deleted forks. When
+// JSON null is received, Head.Repo is nil, which IsFork treats as fork.
+type PullRequestHead struct {
+	Ref  string `json:"ref"`
+	SHA  string `json:"sha"`
+	Repo *Repo  `json:"repo"`
+}
+
+// PullRequest is GitHub's nested pull_request object.
+type PullRequest struct {
+	Number int `json:"number"`
 	Base   struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
-	Head struct {
-		Ref  string `json:"ref"`
-		SHA  string `json:"sha"`
-		Repo struct {
-			FullName string `json:"full_name"`
-		} `json:"repo"`
-	} `json:"head"`
-	Fork       bool `json:"fork"`
-	Repository struct {
-		Name          string `json:"name"`
-		FullName      string `json:"full_name"`
-		DefaultBranch string `json:"default_branch"`
-		Private       bool   `json:"private"`
-	} `json:"repository"`
+	Head PullRequestHead `json:"head"`
+	Fork bool            `json:"fork"`
 }
 
-// CheckSuitePayload is the minimal subset of GitHub's check_suite event.
+// PullRequestPayload is the top-level pull_request webhook payload.
+// Action, PullRequest, and Repository are at the top level; Fork,
+// Base, Head are nested under PullRequest (CIC-102 fix).
+type PullRequestPayload struct {
+	Action      string      `json:"action"`
+	PullRequest PullRequest `json:"pull_request"`
+	Repository  Repo        `json:"repository"`
+}
+
+// IsFork returns true when the pull request should be treated as a fork PR.
+//
+// Fork detection uses a single authoritative signal:
+//
+//	head.repo.full_name != repository.full_name  (different repo = fork).
+//
+// We do NOT use pull_request.fork or head.repo.fork because when the
+// base repository is itself a GitHub fork, those fields report true
+// even for same-repo PRs.
+//
+// Fail-closed conditions (any one is sufficient):
+//   - head.repo is nil        (deleted fork or malformed payload)
+//   - repository.full_name is empty      (cannot confirm same repo)
+//   - head.repo.full_name is empty      (incomplete payload)
+func (p PullRequestPayload) IsFork() bool {
+	head := p.PullRequest.Head
+	if head.Repo == nil {
+		return true
+	}
+	if p.Repository.FullName == "" || head.Repo.FullName == "" {
+		return true
+	}
+	return head.Repo.FullName != p.Repository.FullName
+}
+
 type CheckSuitePayload struct {
 	Action     string `json:"action"` // "requested"
 	CheckSuite struct {
