@@ -32,11 +32,14 @@ import (
 
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
 	"cicadoci.com/cicado/server/api"
+	"cicadoci.com/cicado/server/archive"
 	"cicadoci.com/cicado/server/audit"
+	"cicadoci.com/cicado/server/blobstore"
 	"cicadoci.com/cicado/server/controller"
 	"cicadoci.com/cicado/server/dispatch"
 	"cicadoci.com/cicado/server/forge"
 	githubpkg "cicadoci.com/cicado/server/github"
+	"cicadoci.com/cicado/server/logs"
 	"cicadoci.com/cicado/server/queue"
 	"cicadoci.com/cicado/server/runnersvc"
 	"cicadoci.com/cicado/server/secrets"
@@ -155,7 +158,18 @@ func run() error {
 		}
 	}
 
+	// CIC-82: per-job live logs over SSE. The runner service publishes each
+	// persisted (already masked) chunk or event to the hub; the SSE handler
+	// replays history through the compactor and then tails the hub. The blob
+	// store is in-memory until an S3 store is configured, so archived logs do
+	// not survive a restart.
+	logHub := logs.NewHub(1024)
+	sse := logs.NewSSE(logHub, archive.NewCompactor(st.Pool(), blobstore.NewMemory()))
+
 	svcCfg := runnersvc.DefaultConfig()
+	svcCfg.LogPublish = func(jobID uuid.UUID, kind string, seq int64, data []byte) {
+		logHub.Publish(jobID, archive.Entry{Seq: seq, Kind: kind, Data: data})
+	}
 	// CIC-103: the one run-terminal hook. The queue fires it exactly once per
 	// run, after the transaction that finished the run's last job commits
 	// (runner report, sweeper dead letter, or cancel scan alike). It must be
@@ -253,7 +267,7 @@ func run() error {
 	})
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
-		Handler:           api.New(st, api.WithLogger(log), api.WithWebhookReceiver(webhookReceiver)),
+		Handler:           api.New(st, api.WithLogger(log), api.WithWebhookReceiver(webhookReceiver), api.WithSSEHandler(sse)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

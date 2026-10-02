@@ -335,7 +335,7 @@ func (s *Service) ingestLogUp(
 		// so a client that reconnects after this watermark sees this entry
 		// in the replay phase, not the live phase.
 		if s.cfg.LogPublish != nil {
-			s.cfg.LogPublish(jobID, "chunk", int64(chunk.GetSeq()))
+			s.cfg.LogPublish(jobID, "chunk", int64(chunk.GetSeq()), data)
 		}
 		if err := s.advanceLogWatermark(ctx, jobID, leaseID, chunk.GetSeq()); err != nil {
 			return uuid.Nil, 0, 0, err
@@ -372,7 +372,7 @@ func (s *Service) ingestLogUp(
 			return uuid.Nil, 0, 0, status.Error(codes.Internal, "persist structured event")
 		}
 		if s.cfg.LogPublish != nil {
-			s.cfg.LogPublish(jobID, "event", int64(event.GetSeq()))
+			s.cfg.LogPublish(jobID, "event", int64(event.GetSeq()), []byte(payload))
 		}
 		if err := s.advanceLogWatermark(ctx, jobID, leaseID, event.GetSeq()); err != nil {
 			return uuid.Nil, 0, 0, err

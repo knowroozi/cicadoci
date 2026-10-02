@@ -39,6 +39,7 @@ type Handler struct {
 	logger          *slog.Logger
 	auth            authenticator
 	webhookReceiver *webhook.Receiver // M3 webhook receiver; nil until WithWebhookReceiver opts it in
+	sseHandler      http.Handler      // per-job live log stream (CIC-82); nil until WithSSEHandler opts it in
 
 	handler http.Handler // pre-composed middleware chain, assembled once at startup and frozen in place after that point.
 }
@@ -51,6 +52,7 @@ type options struct {
 	logger          *slog.Logger
 	auth            authenticator
 	webhookReceiver *webhook.Receiver
+	sseHandler      http.Handler
 }
 
 func WithLogger(l *slog.Logger) Option         { return func(o *options) { o.logger = l } }
@@ -67,6 +69,19 @@ func WithWebhookReceiver(r *webhook.Receiver) Option {
 	}
 	return func(o *options) { o.webhookReceiver = r }
 }
+
+// WithSSEHandler serves the per-job live log stream at
+// GET /api/v1/logs?job=<jobID> (CIC-82). The route is absent without it.
+func WithSSEHandler(sse http.Handler) Option {
+	if sse == nil {
+		panic("api: WithSSEHandler requires a non-nil http.Handler")
+	}
+	return func(o *options) { o.sseHandler = sse }
+}
+
+// sseRoute is the one streaming route. It bypasses the mux and the regular
+// chain: see buildSSEChain.
+const sseRoute = "/api/v1/logs"
 
 // defaultRequestTimeout is M1's per-request ceiling before a slow client stalls its goroutine for free.
 const defaultRequestTimeout = 30 * time.Second
@@ -96,9 +111,22 @@ func New(r store.Reader, opts ...Option) *Handler {
 		o.logger = slog.Default()
 	}
 
-	h := &Handler{reader: r, logger: o.logger, auth: o.auth, webhookReceiver: o.webhookReceiver}
+	h := &Handler{reader: r, logger: o.logger, auth: o.auth, webhookReceiver: o.webhookReceiver, sseHandler: o.sseHandler}
 	mux := h.buildMux()
 	h.handler = buildChain(h, mux, o.timeout)
+	if o.sseHandler != nil {
+		// The SSE stream gets its own chain (still authenticated); every
+		// other request, including any other method on this path, takes the
+		// regular one.
+		regular, sse := h.handler, buildSSEChain(h, o.sseHandler)
+		h.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && r.URL.Path == sseRoute {
+				sse.ServeHTTP(w, r)
+				return
+			}
+			regular.ServeHTTP(w, r)
+		})
+	}
 	return h
 }
 
@@ -185,6 +213,21 @@ func buildChain(h *Handler, inner http.Handler, timeout time.Duration) http.Hand
 	chain = withLogging(chain, h.logger)       // one access-log line per request, sees the FINAL post-inner status once every inner layer has settled.
 	chain = withRecover(chain, h.logger)       // outermost: any panic below yields an internal-error envelope rather than crashing the runtime worker.
 
+	return chain
+}
+
+// buildSSEChain is buildChain for the long-lived SSE stream:
+//
+//	sse handler -> auth -> logging -> recover
+//
+// It drops two layers. withRequestTimeout would cancel every stream at the
+// 30-second ceiling. withJSONErrors buffers the whole response in a
+// bodyRecorder, so no event would reach the client until the stream ended.
+// The SSE handler writes its own JSON error bodies, so nothing is lost.
+func buildSSEChain(h *Handler, inner http.Handler) http.Handler {
+	chain := withAuthenticator(h.auth, h.logger)(inner)
+	chain = withLogging(chain, h.logger)
+	chain = withRecover(chain, h.logger)
 	return chain
 }
 
@@ -308,6 +351,14 @@ func writeError(w http.ResponseWriter, log *slog.Logger, status int, code, messa
 type statusRecorder struct { // captures just the response code for withLogging; passthrough body writes keep logging cost flat.
 	http.ResponseWriter
 	status int
+}
+
+// Flush lets a streaming handler under withLogging (the SSE route) push
+// each event to the client; without it the handler's http.Flusher check fails.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func (r *statusRecorder) WriteHeader(code int) {

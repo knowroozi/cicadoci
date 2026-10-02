@@ -61,8 +61,10 @@ type Config struct {
 	Masker redact.Masker
 	// LogPublish is called after a chunk or event is persisted, before the
 	// watermark is advanced. It is the fan-out hook for the SSE hub
-	// (CIC-33). When nil, log emission is a no-op.
-	LogPublish func(jobID uuid.UUID, kind string, seq int64)
+	// (CIC-33). data is exactly what was persisted, so it has already been
+	// through Masker (CIC-82): live viewers never see a registered secret.
+	// When nil, log emission is a no-op.
+	LogPublish func(jobID uuid.UUID, kind string, seq int64, data []byte)
 	// OnRunTerminal is called exactly once per run, after the transaction
 	// that moved the run's last job to a terminal state has committed. state
 	// is the run's final status: "succeeded", "failed" or "cancelled". New
