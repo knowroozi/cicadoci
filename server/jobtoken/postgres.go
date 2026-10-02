@@ -168,7 +168,7 @@ func (p *Postgres) Lookup(ctx context.Context, hash []byte) (record, error) {
 	err := p.pool.QueryRow(ctx, `
 SELECT id, claims, expires_at, revoked_at, created_by, created_at
 FROM tokens
-WHERE token_hash = $1
+WHERE token_hash = $1 AND kind = 'job'
 LIMIT 1`,
 		hash,
 	).Scan(&id, &claimsB, &expiry, &revokedAt, &issuer, &issuedAt)
@@ -203,7 +203,7 @@ func (p *Postgres) MarkRevoked(ctx context.Context, id uuid.UUID, at time.Time) 
 	tag, err := p.pool.Exec(ctx, `
 UPDATE tokens
 SET revoked_at = $1
-WHERE id = $2 AND revoked_at IS NULL`,
+WHERE id = $2 AND kind = 'job' AND revoked_at IS NULL`,
 		at, id)
 	if err != nil {
 		return false, err
@@ -215,7 +215,7 @@ WHERE id = $2 AND revoked_at IS NULL`,
 // rows updated) for an unknown id.
 func (p *Postgres) SetLastUse(ctx context.Context, id uuid.UUID, when time.Time) error {
 	_, err := p.pool.Exec(ctx,
-		`UPDATE tokens SET last_used_at = $1 WHERE id = $2`,
+		`UPDATE tokens SET last_used_at = $1 WHERE id = $2 AND kind = 'job'`,
 		when, id)
 	return err
 }

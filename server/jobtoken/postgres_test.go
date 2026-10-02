@@ -7,6 +7,7 @@ package jobtoken_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"testing"
 	"time"
@@ -160,5 +161,64 @@ func TestPostgres_ClaimsRoundTrip(t *testing.T) {
 	}
 	if !got.HasScope(jobtoken.ScopeWrite) {
 		t.Error("expected write scope to survive the round trip")
+	}
+}
+
+// TestPostgres_LookupIsScopedToJobKind is CIC-123: a `kind='runner'` token
+// (same `tokens` table, no shared subject — a runner credential lives in a
+// different code path) must be invisible to the *job-token* `Lookup` query.
+// The runner-side query already used `WHERE token_hash = $1 AND kind =
+// 'runner'` (see server/runnersvc/service.go); the job side had drifted.
+// We verify that a job token still resolves AND that a runner token is
+// reported as `ErrStoreNotFound` by `jobtoken` — no cross-kind leakage.
+func TestPostgres_LookupIsScopedToJobKind(t *testing.T) {
+	st := testdb.New(t)
+	ctx := context.Background()
+	store := jobtoken.NewPostgres(st.Pool())
+	pool := st.Pool()
+	aud := jobtoken.NewMemoryAuditor()
+	mgr, err := jobtoken.NewManager(store, aud)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// 1. Seed a real job token and confirm the normal job path still
+	// resolves: the fix must not regress a correct kind='job' lookup.
+	s := seedPG(t, pool)
+	jobTok, err := mgr.Issue(ctx, claimsFor(s), time.Hour)
+	if err != nil {
+		t.Fatalf("job issue: %v", err)
+	}
+	jobHash := sha256.Sum256([]byte(jobTok.Raw))
+	if _, err := store.Lookup(ctx, jobHash[:]); err != nil {
+		t.Fatalf("Lookup of a real job token = %v, want success", err)
+	}
+
+	// 2. A different token kind (runner) in the SAME table must not resolve
+	// through the job-token path.
+	var orgID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO orgs (slug, name) VALUES ($1, $1) RETURNING id`,
+		"org-"+uuid.NewString()[:8]).Scan(&orgID); err != nil {
+		t.Fatalf("seed org: %v", err)
+	}
+	var runnerID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO runners (org_id, name, status) VALUES ($1, $2, 'online') RETURNING id`,
+		orgID, "runner-"+uuid.NewString()[:8]).Scan(&runnerID); err != nil {
+		t.Fatalf("seed runner: %v", err)
+	}
+	runnerHash := sha256.Sum256([]byte("cicado_rnr_" + uuid.NewString()))
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO tokens (kind, token_hash, org_id, runner_id)
+			 VALUES ('runner', $1, $2, $3)`,
+		runnerHash[:], orgID, runnerID); err != nil {
+		t.Fatalf("seed runner token: %v", err)
+	}
+
+	// The runner token must NOT be resolved through jobtoken.Lookup.
+	if _, err := store.Lookup(ctx, runnerHash[:]); !errors.Is(err, jobtoken.ErrStoreNotFound) {
+		t.Errorf("Lookup of a runner token = %v, want ErrStoreNotFound "+
+			"(job-token path must ignore kind != 'job' rows)", err)
 	}
 }
