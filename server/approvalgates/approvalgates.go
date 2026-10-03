@@ -61,6 +61,12 @@ type Gate struct {
 	Allowed []string
 
 	// Timeout is how long the gate stays open.
+	//
+	// A positive Timeout arms an automatic timeout: a gate that nobody
+	// resolves transitions to GateTimedOut after this duration, so inaction
+	// can never hold a run at GatePending forever. A zero Timeout means "no
+	// automatic timeout" (the gate is resolved only by an explicit Resolve or
+	// CloseAll) — the manager does not invent one.
 	Timeout time.Duration
 
 	// MessageID is the chat message the buttons are rendered in.
@@ -87,6 +93,11 @@ type GateRecord struct {
 	CreatedAt time.Time
 	ResumedAt time.Time
 	ActorID   string // who acted, for the audit trail
+
+	// timer, when non-nil, is the auto-timeout armed at Open for a gate whose
+	// Timeout is set. It is stopped by any terminal transition (a manual Resolve
+	// or CloseAll) so it can never resolve a gate that was resolved first.
+	timer *time.Timer
 }
 
 // NewManager creates a gate manager.
@@ -111,9 +122,28 @@ func NewManager(provider chat.ChatProvider, onResolved func(runID string, state 
 // requestID returned by RequestApproval would be wrong: RequestApproval
 // in the stub stores MsgID from its arg, and the returned triggerID
 // is a distinct concept (Slack trigger_id, used for modal-opening calls).
+//
+// If the post fails the gate record is removed again: a half-open gate that
+// was never actually posted to the channel must not linger in the manager,
+// wait for a resolution that can never arrive, or leave a timer armed.
+// (CIC-108 sub-bug: a gate was recorded even when the post failed, which
+// left a dead record and a dangling callback.)
+//
+// A gate that carries a positive Timeout is armed with an auto-timeout, so
+// inaction times it out on its own rather than sitting at GatePending forever
+// the way the manager did before timeout enforcement was added (CIC-108).
 func (m *Manager) Open(ctx context.Context, g *Gate) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// CIC-108 B1: a stale auto-timeout from an earlier Open for the same run
+	// must never move a newer gate. Stop the previous record's timer before
+	// overwriting it; the identity guard in onTimeout makes this safe even if a
+	// callback is mid-flight.
+	if old, ok := m.gates[g.RunID]; ok && old != nil && old.timer != nil {
+		old.timer.Stop()
+	}
+
 	rec := &GateRecord{
 		Gate:      *g,
 		State:     GatePending,
@@ -138,12 +168,26 @@ func (m *Manager) Open(ctx context.Context, g *Gate) error {
 		AllowedUsers: g.Allowed,
 	})
 	if err != nil {
+		// No half-open gate: remove the record and do not arm a timer, so a post
+		// that failed can never later be resolved, timed out, or close a message
+		// that was never posted.
+		delete(m.gates, rec.Gate.RunID)
 		return err
 	}
 
 	// Persist the resolved message ID on the internal record copy so that
 	// Resolve/CloseAll can later look up the same message on the provider.
 	rec.Gate.MessageID = g.MessageID
+
+	// Automatic timeout enforcement: arm a timer that moves a still-pending gate
+	// to GateTimedOut after g.Timeout. Any manual resolution stops it, so the
+	// timer is race-safe with Resolve/CloseAll via onTimeout's pending guard.
+	// A zero Timeout means "no automatic timeout".
+	if g.Timeout > 0 {
+		// Capture rec by identity so a stale callback from an earlier Open for
+		// the same run cannot move this record (CIC-108 B1).
+		rec.timer = time.AfterFunc(g.Timeout, func() { m.onTimeout(rec) })
+	}
 	return nil
 }
 
@@ -169,31 +213,47 @@ func (m *Manager) Resolve(_ context.Context, runID, actorID, actionID string) er
 		m.mu.Unlock()
 		return fmt.Errorf("approvalgates: user %q not in allow-list for run %q", actorID, runID)
 	}
-	rec.ActorID = actorID
-	rec.ResumedAt = time.Now()
 	var status chat.ApprovalStatus
+	// CIC-108/N3: the audit fields are assigned inside the terminal cases only, so
+	// a click for an unknown action returns an error without recording that user
+	// as the actor on a gate that is still pending.
 	switch actionID {
 	case rec.Gate.Allow:
+		rec.ActorID = actorID
+		rec.ResumedAt = time.Now()
 		rec.State = GateApproved
 		status = chat.ApprovalApproved
 	case rec.Gate.Deny:
+		rec.ActorID = actorID
+		rec.ResumedAt = time.Now()
 		rec.State = GateDenied
 		status = chat.ApprovalDenied
 	default:
 		m.mu.Unlock()
 		return fmt.Errorf("approvalgates: unknown action %q", actionID)
 	}
-	// Copy the resolved gate for use outside the lock.
+
+	// Stop the auto-timeout now that we own the resolution, and copy the
+	// terminal state out under the lock so the callback below reads only
+	// by-value values. In practice the terminal-state write above is the only
+	// writer of rec.State (it only happens on a pending->terminal transition),
+	// so the pre-CIC-108 read-after-unlock was race-free in behavior; capturing
+	// the by-value copy is still kept as defense-in-depth, not because a race
+	// is reachable today.
+	if rec.timer != nil {
+		rec.timer.Stop()
+	}
 	gateCopy := *rec
 	m.mu.Unlock()
 
-	// Close the buttons so they can't be clicked again,
-	// using the actual resolution status and the gate's channel/message.
+	// Close the buttons so they can't be clicked again, using the actual
+	// resolution status and the gate's channel/message.
 	_ = m.provider.CloseApproval(context.Background(), gateCopy.Gate.Channel, string(gateCopy.Gate.MessageID), status)
 
-	// Signal the waiter.
+	// Signal the waiter, OUTSIDE the lock and with the by-value state captured
+	// above, so the callback cannot re-enter and deadlock on m.mu.
 	if m.onResolved != nil {
-		m.onResolved(runID, rec.State)
+		m.onResolved(runID, gateCopy.State)
 	}
 	return nil
 }
@@ -224,20 +284,63 @@ func (m *Manager) State(runID string) GateState {
 	return GatePending
 }
 
-// CloseAll marks all pending gates as resolved (e.g. on shutdown).
-func (m *Manager) CloseAll(runID string) {
+// onTimeout moves a still-pending gate to GateTimedOut. It is the auto-timeout
+// callback wired by Open and is also reachable in spirit from CloseAll; it is
+// idempotent because it only acts on a gate still at GatePending, so it races
+// safely with any manual Resolve/CloseAll (the lock serializes the guard).
+func (m *Manager) onTimeout(rec *GateRecord) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	rec, ok := m.gates[runID]
-	if !ok || rec.State != GatePending {
+	// CIC-108 B1: act only if this record is still the current gate for the run.
+	// A later Open may have replaced it (and stopped this timer); a stray
+	// callback from an earlier timer must not move the newer gate.
+	cur, ok := m.gates[rec.Gate.RunID]
+	if !ok || cur != rec || rec.State != GatePending {
+		m.mu.Unlock()
 		return
 	}
 	rec.State = GateTimedOut
+	rec.ResumedAt = time.Now()
+	if rec.timer != nil {
+		rec.timer.Stop()
+	}
 	gateCopy := *rec
-	// Close the provider-side unconditionally — a caller that passes no
-	// onResolved callback still must not leave interactive buttons open.
+	m.mu.Unlock()
+
+	// Close the timed-out buttons and signal the waiter outside the lock, with
+	// the by-value state captured above.
 	_ = m.provider.CloseApproval(context.Background(), gateCopy.Gate.Channel, string(gateCopy.Gate.MessageID), chat.ApprovalTimedOut)
 	if m.onResolved != nil {
-		m.onResolved(runID, rec.State)
+		m.onResolved(rec.Gate.RunID, gateCopy.State)
+	}
+}
+
+// CloseAll resolves a single still-pending gate as a timeout (e.g. on
+// shutdown). It is deliberately named for the shutdown use case in which it is
+// the manager's way of clearing the gate; it accepts the one runID being closed.
+//
+// The terminal transition and the value copies happen under the lock; the
+// provider close and the onResolved callback happen OUTSIDE it, so a callback
+// that re-enters the manager (e.g. to read State) cannot deadlock on m.mu.
+// (CIC-108 sub-bug: onResolved was previously called while the lock was held.)
+func (m *Manager) CloseAll(runID string) {
+	m.mu.Lock()
+	rec, ok := m.gates[runID]
+	if !ok || rec.State != GatePending {
+		m.mu.Unlock()
+		return
+	}
+	rec.State = GateTimedOut
+	rec.ResumedAt = time.Now()
+	if rec.timer != nil {
+		rec.timer.Stop()
+	}
+	gateCopy := *rec
+	m.mu.Unlock()
+
+	// Close the provider-side unconditionally — a caller that passes no onResolved
+	// callback still must not leave interactive buttons open.
+	_ = m.provider.CloseApproval(context.Background(), gateCopy.Gate.Channel, string(gateCopy.Gate.MessageID), chat.ApprovalTimedOut)
+	if m.onResolved != nil {
+		m.onResolved(runID, gateCopy.State)
 	}
 }
