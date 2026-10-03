@@ -21,13 +21,14 @@ import (
 // Grammar it consumes (every value-taking flag precedes the image, which is the
 // first bare token; the command follows the image):
 //
-//	docker run --rm [--network none] -v <host>:<mount> -w <mount> [-e K=V ...] <image> <cmd>...
+//	docker run --rm [--network none] -v <host>:<mount> -w <mount> [-e K=V ...] --entrypoint "" <image> <cmd>...
 const fakeDockerScript = `#!/bin/sh
 [ "${1:-}" = run ] && shift
 while [ $# -ge 1 ]; do
 	case "$1" in
 		--rm) shift 1 ;;
 		--network) shift 2 ;;
+		--entrypoint) shift 2 ;;
 		-v) shift 2 ;;
 		-w) shift 2 ;;
 		-e) shift 2 ;;
@@ -158,6 +159,39 @@ func TestDockerRunArgsShapes(t *testing.T) {
 	// The image precedes the command.
 	if imgI, echoI := indexOf(args, "alpine"), indexOf(args, "/bin/sh"); imgI == -1 || echoI == -1 || imgI > echoI {
 		t.Errorf("expected image before command; got %v", args)
+	}
+}
+
+// TestDockerRunArgsDisablesImageEntrypoint pins the CIC-152 fix: the run line
+// forces --entrypoint "" so a step's command runs directly instead of being
+// handed to the image's ENTRYPOINT as trailing arguments. Without this, an
+// image that sets an ENTRYPOINT (e.g. ["python"]) would receive a run: step's
+// shell as an argument and the step would never execute.
+func TestDockerRunArgsDisablesImageEntrypoint(t *testing.T) {
+	args := dockerRunArgs("/host/ws", Step{
+		Image:   "python", // a hypothetical image with ENTRYPOINT ["python"]
+		Command: []string{"/bin/sh", "-c", "echo build"},
+	})
+
+	// --entrypoint must appear and its value must be the empty string, which is
+	// what disables the image's entrypoint.
+	eI := indexOf(args, "--entrypoint")
+	if eI == -1 {
+		t.Fatalf("expected --entrypoint in run args, got %v", args)
+	}
+	if eI+1 >= len(args) || args[eI+1] != "" {
+		t.Fatalf("expected --entrypoint with an empty value; args after --entrypoint = %v", args[eI:])
+	}
+
+	// It must precede the image, and the command must still follow the image:
+	// --rm ... --entrypoint "" <image> <cmd>...
+	imgI := indexOf(args, "python")
+	cmdI := indexOf(args, "echo build")
+	if imgI == -1 || cmdI == -1 {
+		t.Fatalf("expected image and command in args: %v", args)
+	}
+	if eI >= imgI || imgI >= cmdI {
+		t.Errorf("expected --entrypoint before image before command; got --entrypoint@%d image@%d cmd@%d in %v", eI, imgI, cmdI, args)
 	}
 }
 

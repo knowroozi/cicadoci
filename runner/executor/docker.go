@@ -238,6 +238,14 @@ func dockerRunArgs(workspace string, step Step) []string {
 		args = append(args, "-e", kv)
 	}
 
+	// --entrypoint "" disables the image's ENTRYPOINT so the step's command runs
+	// directly -- exactly as the shell executor runs it -- instead of being
+	// handed to the image's entrypoint as trailing arguments. Without this, an
+	// image that sets an ENTRYPOINT (e.g. ENTRYPOINT ["python"]) would receive a
+	// run: step's shell invocation as if it were an argument to that entrypoint,
+	// and the step would never execute. This is the CIC-152 fix.
+	args = append(args, "--entrypoint", "")
+
 	// The image is the first bare token after the flags; the step's command
 	// follows it, verbatim.
 	args = append(args, step.Image)
