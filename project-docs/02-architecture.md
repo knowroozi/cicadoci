@@ -105,7 +105,7 @@ Deliberate constraints: no loops, no expressions beyond status/branch conditiona
 
 - **No stored cloud keys**: server is an OIDC issuer; jobs exchange identity JWTs for STS creds via `AssumeRoleWithWebIdentity` (trust conditions on `sub` = org/repo/branch/env, `aud`).
 - **Secret redaction on log ingest**: all secret values + common encodings (base64, URL) scrubbed before persist/fan-out. Adversarial tests in CI. (CVE-2025-30066 class: exfil via logs needs no network.)
-- **Per-job ephemeral tokens** scoped to run/repo; GitHub installation tokens minted per job, never persisted.
+- **Per-job ephemeral tokens** scoped to run/repo; GitHub installation tokens minted per job, never persisted — **designed, not wired (CIC-151)** (`newForge` passes a `nil` TokenMinter and the minter token path is a stub), so **private repos cannot be cloned**.
 - **Fork-PR isolation**: no secrets, restricted runner tag, no deploy identities.
 - **Pinning**: step images referenced by digest where provided; plugin execution (post-MVP) requires digest + cosign verification.
 - **Audit everything**: every state change from any surface (web/chat/MCP/API) → audit_events with principal.
