@@ -83,8 +83,7 @@ on:
 jobs:
   test:
     runs-on: [linux, docker]
-    steps:
-      - uses: checkout            # built-in step, not a marketplace fetch
+    steps:                        # the repo is checked out automatically before step 1
       - run: ./scripts/test.sh
         image: golang:1.24
   deploy:

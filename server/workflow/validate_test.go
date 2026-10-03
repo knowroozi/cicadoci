@@ -3,6 +3,7 @@ package workflow
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -17,7 +18,7 @@ func validWorkflow() *Workflow {
 			"build": {
 				RunsOn: []string{"linux"},
 				Steps: []*Step{
-					{Name: "checkout", Uses: "checkout"},
+					{Name: "checkout", Run: "true"},
 					{Name: "compile", Run: "go build ./...", Image: "golang:1.24"},
 				},
 			},
@@ -89,6 +90,9 @@ func TestValidate_StepNoUsesNoRun(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for step with neither uses nor run")
 	}
+	if !strings.Contains(err.Error(), "'run' is required") {
+		t.Errorf("error = %v, want \"'run' is required\"", err)
+	}
 }
 
 func TestValidate_StepBothUsesAndRun(t *testing.T) {
@@ -99,6 +103,11 @@ func TestValidate_StepBothUsesAndRun(t *testing.T) {
 	err := Validate(w)
 	if err == nil {
 		t.Fatal("expected error for step with both uses and run")
+	}
+	// CIC-147: only the mutually-exclusive error, not a second "uses not
+	// supported" error for the same step.
+	if msg := err.Error(); !strings.Contains(msg, "mutually exclusive") || strings.Contains(msg, "not yet supported") || strings.Contains(msg, "checkout is automatic") {
+		t.Errorf("error = %v, want only the mutually-exclusive error", err)
 	}
 }
 
@@ -248,5 +257,41 @@ func TestSchemaV1_RequiresCoreFields(t *testing.T) {
 		if !have[field] {
 			t.Errorf("schema does not require field %q", field)
 		}
+	}
+}
+
+// TestValidate_UsesNotSupported is CIC-147: a uses:-only step fails
+// validation at parse time so the user sees a clear positional error
+// instead of a silent "step has no command" infrastructure failure.
+func TestValidate_UsesNotSupported(t *testing.T) {
+	w := validWorkflow()
+	w.Jobs["build"].Steps = []*Step{
+		{Name: "checkout", Uses: "actions/checkout@v4"},
+	}
+	err := Validate(w)
+	if err == nil {
+		t.Fatal("expected error for uses:-only step not supported in MVP")
+	}
+	if !strings.Contains(err.Error(), "not yet supported by the runner") {
+		t.Errorf("error = %v, want the uses-not-supported error", err)
+	}
+}
+
+// TestValidate_UsesCheckoutIsAutomatic is CIC-147: `uses: checkout`, the
+// step the architecture doc used to show, gets a message saying checkout is
+// automatic (the controller prepends it) instead of a "replace it with an
+// equivalent run: step" hint that has no answer.
+func TestValidate_UsesCheckoutIsAutomatic(t *testing.T) {
+	w := validWorkflow()
+	w.Jobs["build"].Steps = []*Step{
+		{Uses: "checkout"},
+		{Run: "make test"},
+	}
+	err := Validate(w)
+	if err == nil {
+		t.Fatal("expected error for uses: checkout")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "checkout is automatic, remove this step") || strings.Contains(msg, "equivalent 'run:") {
+		t.Errorf("error = %v, want the checkout-is-automatic message only", err)
 	}
 }

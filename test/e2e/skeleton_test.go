@@ -214,6 +214,13 @@ func withRequiredTags(tags ...string) func(*jobOptions) {
 // context is cancelled.
 func (h *harness) startRunner(t *testing.T, ctx context.Context, regToken string) string {
 	t.Helper()
+	return h.startRunnerWithExecutors(t, ctx, regToken, "shell")
+}
+
+// startRunnerWithExecutors is startRunner for a runner that advertises the
+// given executors (e.g. "cicanscript", which controller-created jobs use).
+func (h *harness) startRunnerWithExecutors(t *testing.T, ctx context.Context, regToken string, executors ...string) string {
+	t.Helper()
 
 	conn, err := grpc.NewClient(h.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -224,7 +231,7 @@ func (h *harness) startRunner(t *testing.T, ctx context.Context, regToken string
 	enrollCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	resp, err := runner.Enroll(enrollCtx, conn, regToken, "test-runner", []string{"shell"})
+	resp, err := runner.Enroll(enrollCtx, conn, regToken, "test-runner", executors)
 	if err != nil {
 		t.Fatalf("enroll: %v", err)
 	}
@@ -235,7 +242,7 @@ func (h *harness) startRunner(t *testing.T, ctx context.Context, regToken string
 		RunnerID:      resp.GetRunnerId(),
 		WorkspaceRoot: t.TempDir(),
 		Capacity:      2,
-		Executors:     []string{"shell"},
+		Executors:     executors,
 		Logger:        h.log,
 	}, conn)
 

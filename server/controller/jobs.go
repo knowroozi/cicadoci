@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -194,6 +195,14 @@ func convertJobSpecs(w *workflow.Workflow, dag *workflow.DAG, gitCloneURL, gitRe
 			continue
 		}
 
+		// CIC-148: when this job runs a workflow with git context, prepend a
+		// synthetic "checkout" step so the runner clones the repo before the
+		// first user step.  Without this, a workflow expecting the repo in the
+		// workdir always sees an empty directory.
+		steps := convertSteps(j.Steps)
+		if gitCloneURL != "" {
+			steps = append([]store.StepSpec{cloneStepSpec(gitCloneURL, gitRef, gitSha)}, steps...)
+		}
 		spec := store.JobSpec{
 			Name:         name,
 			Executor:     "cicanscript", // TODO(CIC-132): select executor from workflow step spec, not hard-coded
@@ -207,7 +216,7 @@ func convertJobSpecs(w *workflow.Workflow, dag *workflow.DAG, gitCloneURL, gitRe
 			GitCloneURL:  gitCloneURL,
 			GitRef:       gitRef,
 			GitSha:       gitSha,
-			Steps:        convertSteps(j.Steps),
+			Steps:        steps,
 		}
 		specs = append(specs, spec)
 	}
@@ -265,6 +274,61 @@ func secretRefsFor(j *workflow.Job, isFork bool) []string {
 	return out
 }
 
+// cloneStepSpec builds a synthetic store.StepSpec that fetches and checks out
+// the commit to build as the first step of a job when git context is available.
+//
+// CIC-148: without this, JobAssignment.Git was ignored by the runner and every
+// workflow step ran in an empty workdir.  We emit one shell command that runs
+// the whole checkout so the output streams directly to the job logs via the
+// normal RunStep path.
+//
+// Credentials: the URL is a plain https clone URL with no token in it.  Steps
+// are persisted in the `steps` table and sent in the assignment, so a token
+// must never be embedded in Command; secrets reach the runner only through the
+// lease-scoped GetJobSecrets.  Private-repo clones therefore need a follow-up
+// that feeds an installation token from the lease to a git credential helper.
+func cloneStepSpec(cloneURL, ref, sha string) store.StepSpec {
+	return store.StepSpec{
+		Name:    "checkout",
+		Command: []string{"/bin/sh", "-ec", buildCloneScript(cloneURL, ref, sha)},
+	}
+}
+
+// buildCloneScript generates the POSIX /bin/sh script for the checkout step:
+//
+//	git init -q .
+//	git remote add origin <url>
+//	git fetch --depth 1 origin <sha, else ref>
+//	git checkout -q FETCH_HEAD
+//
+// It fetches exactly the commit to build instead of cloning the default
+// branch and then checking out <ref>: `git clone --depth 1` implies
+// --single-branch, so a later `git checkout <ref>` of any non-default branch
+// or PR ref fails.  The SHA is preferred because it pins the exact commit the
+// event named; the ref is the fallback, then HEAD.  Every argument is
+// single-quoted via shellQuote to prevent shell injection.
+func buildCloneScript(url, ref, sha string) string {
+	target := sha
+	if target == "" {
+		target = ref
+	}
+	if target == "" {
+		target = "HEAD"
+	}
+	var sb strings.Builder
+	sb.WriteString("git init -q .\n")
+	sb.WriteString("git remote add origin " + shellQuote(url) + "\n")
+	sb.WriteString("git fetch --depth 1 origin " + shellQuote(target) + "\n")
+	sb.WriteString("git checkout -q FETCH_HEAD\n")
+	return sb.String()
+}
+
+// shellQuote wraps s in single quotes, escaping any embedded single quotes via
+// the POSIX '\” idiom.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
 // convertSteps maps workflow.Step → store.StepSpec for each step in the job.
 func convertSteps(steps []*workflow.Step) []store.StepSpec {
 	if len(steps) == 0 {
@@ -282,7 +346,13 @@ func convertSteps(steps []*workflow.Step) []store.StepSpec {
 		}
 		var cmd []string
 		if s.Run != "" {
-			cmd = []string{s.Run}
+			// CIC-147: wrap the script as /bin/sh -ec <script> so a
+			// multi-word or multi-line run: string executes correctly
+			// instead of failing as "executable file not found" when
+			// the exec package treats the whole string as argv[0].
+			// Both the shell and docker executors consume step.Command
+			// as trailing argv, so this 3-element slice works for both.
+			cmd = []string{"/bin/sh", "-ec", s.Run}
 		}
 		envJSON, _ := json.Marshal(s.Env) // nil or empty → {}
 		out[i] = store.StepSpec{

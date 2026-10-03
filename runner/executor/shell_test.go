@@ -225,3 +225,29 @@ func TestShellCleanupRemovesWorkspace(t *testing.T) {
 		t.Error("workspace still exists after cleanup")
 	}
 }
+
+// TestShellExecsShellScriptAsOneProgram is CIC-147: the controller
+// now wraps run: <script> as /bin/sh -ec <script> so the shell
+// executor receives 3 args instead of 1.  This test confirms that
+// the resulting command executes as a single shell program — both
+// "hi there" and "good" lines must appear in the captured output —
+// and does not try to find the multi-word string in the binary path.
+func TestShellExecsShellScriptAsOneProgram(t *testing.T) {
+	sh := executor.NewShell()
+	sink := &collectingSink{}
+	res, err := sh.RunStep(context.Background(), executor.Step{
+		Command: []string{"/bin/sh", "-ec", "echo \"hi there\" && echo good"},
+	}, sink)
+	if err != nil {
+		t.Fatalf("RunStep: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Errorf("exit code = %d, want 0", res.ExitCode)
+	}
+	out := sink.out()
+	for _, want := range []string{"hi there", "good"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("captured output %q missing %q", out, want)
+		}
+	}
+}

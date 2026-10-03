@@ -122,7 +122,7 @@ func validateStep(jobName string, idx int, s *Step) []error {
 		errs = append(errs, fmt.Errorf("%s: both 'uses' (%q) and 'run' (%q) set; they are mutually exclusive", prefix, s.Uses, s.Run))
 	}
 	if !hasUses && !hasRun {
-		errs = append(errs, fmt.Errorf("%s: neither 'uses' nor 'run' set; exactly one is required", prefix))
+		errs = append(errs, fmt.Errorf("%s: 'run' is required", prefix))
 	}
 
 	// If, when set, must be one of the known conditionals.
@@ -145,6 +145,23 @@ func validateStep(jobName string, idx int, s *Step) []error {
 	// Identity, when set, must be one of the known identity types.
 	if s.Identity != "" && !isValidIdentity(s.Identity) {
 		errs = append(errs, fmt.Errorf("%s: invalid 'identity' value %q; must be one of: none, aws", prefix, s.Identity))
+	}
+
+	// CIC-147: `uses:` steps are not supported by the runner in MVP, so a
+	// uses:-only step is rejected instead of reaching the runner with no
+	// command.  `checkout` gets its own message: the controller already
+	// prepends a synthetic checkout step (CIC-148), so the fix is to delete
+	// the line, not to rewrite it.  A step with both uses and run already got
+	// the mutually-exclusive error above.  See docs/decisions/CIC-147-run-steps.md.
+	if hasUses && !hasRun {
+		if s.Uses == "checkout" {
+			errs = append(errs, fmt.Errorf("%s: 'uses: checkout' is not needed; checkout is automatic, remove this step", prefix))
+		} else {
+			errs = append(errs, fmt.Errorf(
+				"%s: 'uses: %q' is not yet supported by the runner in MVP; "+
+					"replace it with an equivalent 'run: ...' step (see CIC-147)",
+				prefix, s.Uses))
+		}
 	}
 
 	return errs

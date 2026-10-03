@@ -9,7 +9,7 @@ import (
 // Go raw string literals preserve spaces literally.
 
 func TestParse_Valid(t *testing.T) {
-	src := "name: test\non:\n  push:\n    branches: [main]\njobs:\n  build:\n    runs-on: [linux, docker]\n    steps:\n    - uses: checkout\n    - run: go build ./...\n      image: golang:1.24\n"
+	src := "name: test\non:\n  push:\n    branches: [main]\njobs:\n  build:\n    runs-on: [linux, docker]\n    steps:\n    - run: go vet ./...\n    - run: go build ./...\n      image: golang:1.24\n"
 	wf, _, err := Parse([]byte(src), "test.yaml")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -30,8 +30,8 @@ func TestParse_Valid(t *testing.T) {
 	if len(job.Steps) != 2 {
 		t.Fatalf("len(steps) = %d, want 2", len(job.Steps))
 	}
-	if job.Steps[0].Uses != "checkout" {
-		t.Errorf("steps[0].Uses = %q, want 'checkout'", job.Steps[0].Uses)
+	if job.Steps[0].Run != "go vet ./..." {
+		t.Errorf("steps[0].Run = %q, want 'go vet ./...'", job.Steps[0].Run)
 	}
 	if job.Steps[1].Run != "go build ./..." {
 		t.Errorf("steps[1].Run = %q, want 'go build ./...'", job.Steps[1].Run)
