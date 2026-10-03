@@ -13,6 +13,8 @@ was never set, so no live log line reached anyone.
   (which would cut every stream at 30 s) and `withJSONErrors` (which buffers the
   whole body, so nothing would stream). Every other request, and every other
   method on `/api/v1/logs`, still takes the full `buildChain`.
+
+> **Known issue: CIC-150.** "still authenticated" describes the chain *shape* (`buildSSEChain` keeps the `buildChain` auth slot), but at runtime **no real authenticator is wired**: `main.go`'s `api.New` (main.go:270) supplies no authenticator (`AllowUnauthenticated`, main.go:266, is webhook-only), so the SSE stream — like the rest of the API — is currently readable by anyone. The slot exists; a real authenticator is not yet supplied (CIC-150).
   `statusRecorder` forwards `Flush` so events pass through `withLogging`.
 - **Masked fan-out.** `LogPublish` gains a `data []byte` argument carrying
   exactly the bytes persisted to `log_entries`, which have already been through
