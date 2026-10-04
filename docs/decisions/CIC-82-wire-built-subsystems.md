@@ -8,13 +8,13 @@ was never set, so no live log line reached anyone.
 
 - **Route.** `api.WithSSEHandler` serves `GET /api/v1/logs?job=<id>`. Without
   the option the route does not exist.
-- **Its own chain, still authenticated.** The stream runs through
+- **Its own chain, auth slot armed since CIC-150.** The stream runs through
   `buildSSEChain`: auth → logging → recover. It drops `withRequestTimeout`
   (which would cut every stream at 30 s) and `withJSONErrors` (which buffers the
   whole body, so nothing would stream). Every other request, and every other
   method on `/api/v1/logs`, still takes the full `buildChain`.
 
-> **Known issue: CIC-150.** "still authenticated" describes the chain *shape* (`buildSSEChain` keeps the `buildChain` auth slot), but at runtime **no real authenticator is wired**: `main.go`'s `api.New` (main.go:270) supplies no authenticator (`AllowUnauthenticated`, main.go:266, is webhook-only), so the SSE stream — like the rest of the API — is currently readable by anyone. The slot exists; a real authenticator is not yet supplied (CIC-150).
+> **Known issue: CIC-150 — RESOLVED.** "still authenticated" describes the chain *shape* (`buildSSEChain` keeps the `buildChain` auth slot), but at runtime **no real authenticator was wired**: `main.go`'s `api.New` (main.go:270) supplied no authenticator (`AllowUnauthenticated`, main.go:266, is webhook-only), so the SSE stream — like the rest of the API — was readable by anyone. **CIC-150 installs a fail-closed `staticTokenAuthenticator` on that slot via `--api-token`/`CICADO_API_TOKEN`, with `apiStartupGuard` refusing a token-less start unless `--insecure-api` is explicit.** Per-tenant org-scoping (org A must not read org B) is parked against CIC-44. See `CIC-150-api-authentication.md`.
   `statusRecorder` forwards `Flush` so events pass through `withLogging`.
 - **Masked fan-out.** `LogPublish` gains a `data []byte` argument carrying
   exactly the bytes persisted to `log_entries`, which have already been through

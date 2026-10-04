@@ -59,6 +59,29 @@ func WithLogger(l *slog.Logger) Option         { return func(o *options) { o.log
 func WithTimeout(d time.Duration) Option       { return func(o *options) { o.timeout = d } }
 func WithAuthenticator(a authenticator) Option { return func(o *options) { o.auth = a } }
 
+// WithAPIToken arms CIC-150's fail-closed authentication. When secret is
+// non-empty it installs the static operator-token authenticator, so every
+// /api/v1/* request except the webhook-delivery and health-probe exemptions
+// must carry "Authorization: Bearer <secret>". An empty secret leaves the
+// no-op authenticator in place -- that is the --insecure-api development path,
+// which apiStartupGuard in main.go forbids unless the operator also passed
+// --insecure-api, so production is never left wide open.
+//
+// main.go uses this Option (not WithAuthenticator, whose unexported parameter is
+// in-package only) to hand in the configured --api-token secret.
+func WithAPIToken(secret string) Option {
+	return func(o *options) {
+		// CIC-150 B4: always arm a static-token authenticator. NewStaticTokenAuthenticator
+		// trims the secret, so an empty or whitespace-only secret installs a REJECT-ALL
+		// authenticator (every /api/v1/* request 401s) instead of leaving the
+		// noOpAuthenticator default in place, which would leave every /api/v1/* endpoint
+		// fully open. main's apiStartupGuard catches an empty/whitespace CICADO_API_TOKEN
+		// first; this is the authenticator failing closed on its own terms, so no single
+		// layer may be trusted to have caught it.
+		o.auth = NewStaticTokenAuthenticator(secret)
+	}
+}
+
 // WithWebhookReceiver registers a POST /api/v1/webhooks/github route powered by
 // the supplied *webhook.Receiver.  The receiver performs HMAC-SHA256 signature
 // verification and delivery-ID idempotency before any database work, so it does

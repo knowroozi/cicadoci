@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -57,23 +58,78 @@ func main() {
 	}
 }
 
+// serverFlags holds the command-line flag pointers for cicado-server. The
+// registrations live in registerFlags so the flag set is defined once and the
+// B1-test can exercise it on a fresh FlagSet (verifying, for example, that the
+// CIC-150 API-token flag carries no non-empty default, which PrintDefaults
+// would otherwise print into the usage text).
+type serverFlags struct {
+	grpcAddr             *string
+	httpAddr             *string
+	databaseURL          *string
+	migrate              *bool
+	devSeedFlag          *bool
+	logLevel             *string
+	webhookSecret        *string
+	insecureWebhook      *bool
+	webhookMaxConcurrent *int
+	secretKeyHex         *string
+	allowEphemeralKey    *bool
+	githubWorkflowToken  *string
+	githubAppToken       *string
+	apiToken             *string
+	insecureAPI          *bool
+}
+
+// registerFlags registers all of cicado-server's command-line flags on fs and
+// returns the pointers. Both run() (on flag.CommandLine) and the tests (on a
+// fresh flag.FlagSet) call it, so the registered flags are always the same.
+// The apiToken flag keeps an empty default (not os.Getenv(...)) so its value
+// is never printed in the flag usage text; run() reads CICADO_API_TOKEN after
+// flag.Parse().
+func registerFlags(fs *flag.FlagSet) *serverFlags {
+	return &serverFlags{
+		grpcAddr:             fs.String("grpc-addr", envOr("CICADO_GRPC_ADDR", ":8081"), "address for the gRPC runner service"),
+		httpAddr:             fs.String("http-addr", envOr("CICADO_HTTP_ADDR", ":8080"), "address for the HTTP API"),
+		databaseURL:          fs.String("database-url", os.Getenv("CICADO_DATABASE_URL"), "Postgres connection string"),
+		migrate:              fs.Bool("migrate", envBool("CICADO_MIGRATE", true), "apply pending migrations at startup"),
+		devSeedFlag:          fs.Bool("dev-seed", envBool("CICADO_DEV_SEED", false), "seed a development org, a well-known registration token, and a demo job (NEVER in production)"),
+		logLevel:             fs.String("log-level", envOr("CICADO_LOG_LEVEL", "info"), "debug, info, warn, or error"),
+		webhookSecret:        fs.String("webhook-secret", os.Getenv("CICADO_WEBHOOK_SECRET"), "GitHub App webhook signing secret; empty disables verification unless --insecure-webhook is also set"),
+		insecureWebhook:      fs.Bool("insecure-webhook", envBool("CICADO_INSECURE_WEBHOOK", false), "permit running with no webhook signing secret (fail-open); DEVELOPMENT ONLY — GitHub deliveries accepted without HMAC verification"),
+		webhookMaxConcurrent: fs.Int("webhook-max-concurrent", 16, "max concurrent webhook dispatches (flood backpressure); 0 disables"),
+		secretKeyHex:         fs.String("secret-key", os.Getenv("CICADO_SECRET_KEY"), "hex-encoded 32-byte AES-256 encryption key for the secrets store"),
+		allowEphemeralKey:    fs.Bool("allow-ephemeral-key", envBool("CICADO_ALLOW_EPHEMERAL_KEY", false), "permit an ephemeral random secret key when CICADO_SECRET_KEY is empty (DEVELOPMENT ONLY: secrets will not survive a restart)"),
+		githubWorkflowToken:  fs.String("github-workflow-token", os.Getenv("CICADO_GITHUB_WORKFLOW_TOKEN"), "long-lived fine-grained GitHub personal access token (Contents: read) used to fetch the repo's workflow files on a default-branch push; NOT a GitHub App installation token, which expires after 1 h (prefer the env var: a flag value shows in ps); empty keeps the producer off and relies on the store/dev-seed path"),
+		githubAppToken:       fs.String("github-app-token", os.Getenv("CICADO_GITHUB_APP_TOKEN"), "GitHub token used to report runs as checks (Checks API); empty reports nothing. A GitHub App installation token expires after 1 hour, so a static one suits short-lived dev servers only; minting per call is CIC-146. The Checks API accepts only App installation tokens, not PATs"),
+		// CIC-150: empty (not os.Getenv(...)) default so the secret's value is
+		// never printed in the flag usage text; read from CICADO_API_TOKEN after
+		// flag.Parse() in run().
+		apiToken:    fs.String("api-token", "", "bearer secret required on every /api/v1/* request except webhooks and health probes (CIC-150); empty refuses to start unless --insecure-api is also set. Supplied via the CICADO_API_TOKEN env var, read after flag.Parse() so the secret never appears in the flag usage text"),
+		insecureAPI: fs.Bool("insecure-api", envBool("CICADO_INSECURE_API", false), "permit /api/v1/* without an API token (fail-open; DEVELOPMENT ONLY -- CIC-150)"),
+	}
+}
+
 func run() error {
-	var (
-		grpcAddr             = flag.String("grpc-addr", envOr("CICADO_GRPC_ADDR", ":8081"), "address for the gRPC runner service")
-		httpAddr             = flag.String("http-addr", envOr("CICADO_HTTP_ADDR", ":8080"), "address for the HTTP API")
-		databaseURL          = flag.String("database-url", os.Getenv("CICADO_DATABASE_URL"), "Postgres connection string")
-		migrate              = flag.Bool("migrate", envBool("CICADO_MIGRATE", true), "apply pending migrations at startup")
-		devSeedFlag          = flag.Bool("dev-seed", envBool("CICADO_DEV_SEED", false), "seed a development org, a well-known registration token, and a demo job (NEVER in production)")
-		logLevel             = flag.String("log-level", envOr("CICADO_LOG_LEVEL", "info"), "debug, info, warn, or error")
-		webhookSecret        = flag.String("webhook-secret", os.Getenv("CICADO_WEBHOOK_SECRET"), "GitHub App webhook signing secret; empty disables verification unless --insecure-webhook is also set")
-		insecureWebhook      = flag.Bool("insecure-webhook", envBool("CICADO_INSECURE_WEBHOOK", false), "permit running with no webhook signing secret (fail-open); DEVELOPMENT ONLY — GitHub deliveries accepted without HMAC verification")
-		webhookMaxConcurrent = flag.Int("webhook-max-concurrent", 16, "max concurrent webhook dispatches (flood backpressure); 0 disables")
-		secretKeyHex         = flag.String("secret-key", os.Getenv("CICADO_SECRET_KEY"), "hex-encoded 32-byte AES-256 encryption key for the secrets store")
-		allowEphemeralKey    = flag.Bool("allow-ephemeral-key", envBool("CICADO_ALLOW_EPHEMERAL_KEY", false), "permit an ephemeral random secret key when CICADO_SECRET_KEY is empty (DEVELOPMENT ONLY: secrets will not survive a restart)")
-		githubWorkflowToken  = flag.String("github-workflow-token", os.Getenv("CICADO_GITHUB_WORKFLOW_TOKEN"), "long-lived fine-grained GitHub personal access token (Contents: read) used to fetch the repo's workflow files on a default-branch push; NOT a GitHub App installation token, which expires after 1 h (prefer the env var: a flag value shows in ps); empty keeps the producer off and relies on the store/dev-seed path")
-		githubAppToken       = flag.String("github-app-token", os.Getenv("CICADO_GITHUB_APP_TOKEN"), "GitHub token used to report runs as checks (Checks API); empty reports nothing. A GitHub App installation token expires after 1 hour, so a static one suits short-lived dev servers only; minting per call is CIC-146. The Checks API accepts only App installation tokens, not PATs")
-	)
+	// Registration lives in registerFlags(fs) so the flag set is registered
+	// once and the B1-test can exercise it on a fresh FlagSet; run() uses the
+	// returned pointers under the same bare names as before.
+	f := registerFlags(flag.CommandLine)
+	grpcAddr, httpAddr, databaseURL, migrate, devSeedFlag, logLevel, webhookSecret,
+		insecureWebhook, webhookMaxConcurrent, secretKeyHex, allowEphemeralKey,
+		githubWorkflowToken, githubAppToken, apiToken, insecureAPI :=
+		f.grpcAddr, f.httpAddr, f.databaseURL, f.migrate, f.devSeedFlag, f.logLevel,
+		f.webhookSecret, f.insecureWebhook, f.webhookMaxConcurrent, f.secretKeyHex,
+		f.allowEphemeralKey, f.githubWorkflowToken, f.githubAppToken, f.apiToken, f.insecureAPI
+
 	flag.Parse()
+
+	// CIC-150 B1/B4: resolve the effective API token via resolveAPIToken, the single
+	// source of truth -- an empty flag default falls back to CICADO_API_TOKEN and the
+	// result is trimmed, so a whitespace-only env var is treated as empty and fails
+	// closed in apiStartupGuard below. run() and the tests both call resolveAPIToken, so
+	// the trim cannot silently regress on either path.
+	*apiToken = resolveAPIToken(*apiToken)
 
 	log := newLogger(*logLevel)
 	slog.SetDefault(log)
@@ -83,6 +139,13 @@ func run() error {
 	// the operational half of CIC-80: a production server with no webhook
 	// secret must not start and accept unverified deliveries.
 	if err := webhookStartupGuard(*webhookSecret, *insecureWebhook); err != nil {
+		return err
+	}
+
+	// CIC-150: fail closed on a missing API token unless the operator
+	// explicitly opted in to the development-only fail-open path, mirroring
+	// the webhook guard above.
+	if err := apiStartupGuard(*apiToken, *insecureAPI); err != nil {
 		return err
 	}
 
@@ -265,9 +328,24 @@ func run() error {
 		Dispatch:             ctrl,
 		AllowUnauthenticated: *insecureWebhook,
 	})
+	// CIC-150 B4: arm the fail-closed API gate only when a real token is present.
+	// An empty/absent token is the explicit --insecure-api development path (no
+	// auth, which apiStartupGuard above already permits only with the opt-in);
+	// a present token is always armed, and WithAPIToken itself fails closed at its
+	// own layer: a whitespace-only/empty secret installs a reject-all authenticator
+	// rather than leaving the API open. No layer may trust another to have caught it.
+	apiOpts := []api.Option{
+		api.WithLogger(log),
+		api.WithWebhookReceiver(webhookReceiver),
+		api.WithSSEHandler(sse),
+	}
+	if *apiToken != "" {
+		apiOpts = append(apiOpts, api.WithAPIToken(*apiToken))
+	}
+
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
-		Handler:           api.New(st, api.WithLogger(log), api.WithWebhookReceiver(webhookReceiver), api.WithSSEHandler(sse)),
+		Handler:           api.New(st, apiOpts...),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -359,6 +437,34 @@ func webhookStartupGuard(secret string, insecureWebhook bool) error {
 	if secret == "" && !insecureWebhook {
 		return errors.New("CICADO_WEBHOOK_SECRET is not set and --insecure-webhook was not passed; " +
 			"set CICADO_WEBHOOK_SECRET for signature verification, or pass --insecure-webhook " +
+			"(fail-open; for local development only)")
+	}
+	return nil
+}
+
+// resolveAPIToken is the single source of truth for the effective API token. An
+// empty flag value falls back to CICADO_API_TOKEN, then the result is trimmed so a
+// whitespace-only env var (a Secret holding only a newline) is treated as empty and
+// fails closed in apiStartupGuard instead of arming an authenticator whose stored
+// token trims to "". Both run() and the tests call it, so the trim cannot silently
+// regress on either path (CIC-150 B4).
+func resolveAPIToken(flagVal string) string {
+	if flagVal == "" {
+		flagVal = os.Getenv("CICADO_API_TOKEN")
+	}
+	return strings.TrimSpace(flagVal)
+}
+
+// apiStartupGuard refuses to start when no API token is configured and the
+// operator did not explicitly opt into the development-only fail-open path. It
+// is the operational half of CIC-150: a production server must not leave
+// /api/v1 -- and therefore any job's live log stream -- readable by anyone who
+// can reach the port. run() threads the flag values into it. Returns nil when a
+// token is present or when --insecure-api was explicitly set.
+func apiStartupGuard(apiToken string, insecureAPI bool) error {
+	if apiToken == "" && !insecureAPI {
+		return errors.New("CICADO_API_TOKEN is not set and --insecure-api was not passed; " +
+			"set CICADO_API_TOKEN for bearer authentication on /api/v1/*, or pass --insecure-api " +
 			"(fail-open; for local development only)")
 	}
 	return nil
