@@ -91,17 +91,17 @@ func registerFlags(fs *flag.FlagSet) *serverFlags {
 	return &serverFlags{
 		grpcAddr:             fs.String("grpc-addr", envOr("CICADO_GRPC_ADDR", ":8081"), "address for the gRPC runner service"),
 		httpAddr:             fs.String("http-addr", envOr("CICADO_HTTP_ADDR", ":8080"), "address for the HTTP API"),
-		databaseURL:          fs.String("database-url", os.Getenv("CICADO_DATABASE_URL"), "Postgres connection string"),
+		databaseURL:          fs.String("database-url", "", "Postgres connection string; read from CICADO_DATABASE_URL after flag.Parse() so a password-bearing DSN never appears in the flag usage text (CIC-150 B4 / CIC-159)"),
 		migrate:              fs.Bool("migrate", envBool("CICADO_MIGRATE", true), "apply pending migrations at startup"),
 		devSeedFlag:          fs.Bool("dev-seed", envBool("CICADO_DEV_SEED", false), "seed a development org, a well-known registration token, and a demo job (NEVER in production)"),
 		logLevel:             fs.String("log-level", envOr("CICADO_LOG_LEVEL", "info"), "debug, info, warn, or error"),
-		webhookSecret:        fs.String("webhook-secret", os.Getenv("CICADO_WEBHOOK_SECRET"), "GitHub App webhook signing secret; empty disables verification unless --insecure-webhook is also set"),
+		webhookSecret:        fs.String("webhook-secret", "", "GitHub App webhook signing secret; empty disables verification unless --insecure-webhook is also set. Read from CICADO_WEBHOOK_SECRET after flag.Parse() so the secret never appears in the flag usage text (CIC-150 B4 / CIC-159)"),
 		insecureWebhook:      fs.Bool("insecure-webhook", envBool("CICADO_INSECURE_WEBHOOK", false), "permit running with no webhook signing secret (fail-open); DEVELOPMENT ONLY — GitHub deliveries accepted without HMAC verification"),
 		webhookMaxConcurrent: fs.Int("webhook-max-concurrent", 16, "max concurrent webhook dispatches (flood backpressure); 0 disables"),
-		secretKeyHex:         fs.String("secret-key", os.Getenv("CICADO_SECRET_KEY"), "hex-encoded 32-byte AES-256 encryption key for the secrets store"),
+		secretKeyHex:         fs.String("secret-key", "", "hex-encoded 32-byte AES-256 encryption key for the secrets store. Read from CICADO_SECRET_KEY after flag.Parse() so the key never appears in the flag usage text (CIC-150 B4 / CIC-159)"),
 		allowEphemeralKey:    fs.Bool("allow-ephemeral-key", envBool("CICADO_ALLOW_EPHEMERAL_KEY", false), "permit an ephemeral random secret key when CICADO_SECRET_KEY is empty (DEVELOPMENT ONLY: secrets will not survive a restart)"),
-		githubWorkflowToken:  fs.String("github-workflow-token", os.Getenv("CICADO_GITHUB_WORKFLOW_TOKEN"), "long-lived fine-grained GitHub personal access token (Contents: read) used to fetch the repo's workflow files on a default-branch push; NOT a GitHub App installation token, which expires after 1 h (prefer the env var: a flag value shows in ps); empty keeps the producer off and relies on the store/dev-seed path"),
-		githubAppToken:       fs.String("github-app-token", os.Getenv("CICADO_GITHUB_APP_TOKEN"), "GitHub token used to report runs as checks (Checks API); empty reports nothing. A GitHub App installation token expires after 1 hour, so a static one suits short-lived dev servers only; minting per call is CIC-146. The Checks API accepts only App installation tokens, not PATs"),
+		githubWorkflowToken:  fs.String("github-workflow-token", "", "long-lived fine-grained GitHub personal access token (Contents: read) used to fetch the repo's workflow files on a default-branch push; NOT a GitHub App installation token, which expires after 1 h. Read from CICADO_GITHUB_WORKFLOW_TOKEN after flag.Parse() so the token never appears in the flag usage text (a flag value shows in ps); empty keeps the producer off and relies on the store/dev-seed path (CIC-150 B4 / CIC-159)"),
+		githubAppToken:       fs.String("github-app-token", "", "GitHub token used to report runs as checks (Checks API); empty reports nothing. A GitHub App installation token expires after 1 hour, so a static one suits short-lived dev servers only; minting per call is CIC-146. The Checks API accepts only App installation tokens, not PATs. Read from CICADO_GITHUB_APP_TOKEN after flag.Parse() so the token never appears in the flag usage text (CIC-150 B4 / CIC-159)"),
 		// CIC-150: empty (not os.Getenv(...)) default so the secret's value is
 		// never printed in the flag usage text; read from CICADO_API_TOKEN after
 		// flag.Parse() in run().
@@ -124,12 +124,14 @@ func run() error {
 
 	flag.Parse()
 
-	// CIC-150 B1/B4: resolve the effective API token via resolveAPIToken, the single
-	// source of truth -- an empty flag default falls back to CICADO_API_TOKEN and the
-	// result is trimmed, so a whitespace-only env var is treated as empty and fails
-	// closed in apiStartupGuard below. run() and the tests both call resolveAPIToken, so
-	// the trim cannot silently regress on either path.
-	*apiToken = resolveAPIToken(*apiToken)
+	// CIC-150 B1/B4 / CIC-159 B1: resolve all six secret / token flags through the
+	// SAME helper the tests call (resolveSecretFlags below, which funnels through
+	// envSecret). run() calls this once so dropping the call from run() is caught
+	// by TestDBEnvFallbackIsWiredIntoRun; dropping any single assignment in
+	// resolveSecretFlags is caught by TestResolveSecretFlags. No behaviour change
+	// for a non-empty env value: it was read at registration time before this
+	// change.
+	resolveSecretFlags(f)
 
 	log := newLogger(*logLevel)
 	slog.SetDefault(log)
@@ -442,17 +444,49 @@ func webhookStartupGuard(secret string, insecureWebhook bool) error {
 	return nil
 }
 
-// resolveAPIToken is the single source of truth for the effective API token. An
-// empty flag value falls back to CICADO_API_TOKEN, then the result is trimmed so a
-// whitespace-only env var (a Secret holding only a newline) is treated as empty and
-// fails closed in apiStartupGuard instead of arming an authenticator whose stored
-// token trims to "". Both run() and the tests call it, so the trim cannot silently
-// regress on either path (CIC-150 B4).
-func resolveAPIToken(flagVal string) string {
-	if flagVal == "" {
-		flagVal = os.Getenv("CICADO_API_TOKEN")
+// envSecret is the single source of truth for every secret / token flag that
+// keeps an empty default and falls back to a CICADO_* env var after flag.Parse().
+// The flag value wins when non-empty (used exactly as typed, interior spaces
+// preserved); an empty or whitespace-only flag falls back to os.Getenv(key) and
+// the result is trimmed so a whitespace-only env var -- a Secret holding only a
+// newline -- is treated as empty and fails closed (CIC-150 B4 / CIC-159 B1).
+// run() calls it for each of the API/webhook/secret/github tokens and the
+// database URL, and the tests call the same helper, so the trim cannot silently
+// diverge between the two paths. Callers that need a "present vs empty" decision
+// (fail-closed guards, --insecure-* opt-outs, the checks-reporter arming gate)
+// compare the returned value against "".
+func envSecret(flagVal, key string) string {
+	if strings.TrimSpace(flagVal) != "" {
+		return flagVal // the flag wins as typed.
 	}
-	return strings.TrimSpace(flagVal)
+	return strings.TrimSpace(os.Getenv(key))
+}
+
+// resolveAPIToken is the API-token specialisation of envSecret: the empty-default
+// --api-token flag falls back to CICADO_API_TOKEN. Kept as a named entry point so
+// CIC-150 B4's run()/test path reads literally; it funnels through envSecret so
+// there is exactly one place that resolves a flag value to its env override.
+func resolveAPIToken(flagVal string) string {
+	return envSecret(flagVal, "CICADO_API_TOKEN")
+}
+
+// resolveSecretFlags applies the env-var fallback for every secret / token flag
+// that keeps an empty default. It is the single call run() makes after
+// flag.Parse(): dropping the call from run() is caught by
+// TestDBEnvFallbackIsWiredIntoRun (a missing database URL makes the start-up
+// error fire); dropping any single assignment inside is caught by
+// TestResolveSecretFlags, which exercises exactly this function on a fresh
+// FlagSet and asserts every field is trimmed from its CICADO_* env var. No call
+// site sees a different value than before: envSecret returns the operator's
+// CICADO_* value verbatim (interior spaces preserved), or "" when the env var
+// is absent.
+func resolveSecretFlags(f *serverFlags) {
+	*f.apiToken = resolveAPIToken(*f.apiToken)
+	*f.databaseURL = envSecret(*f.databaseURL, "CICADO_DATABASE_URL")
+	*f.webhookSecret = envSecret(*f.webhookSecret, "CICADO_WEBHOOK_SECRET")
+	*f.secretKeyHex = envSecret(*f.secretKeyHex, "CICADO_SECRET_KEY")
+	*f.githubWorkflowToken = envSecret(*f.githubWorkflowToken, "CICADO_GITHUB_WORKFLOW_TOKEN")
+	*f.githubAppToken = envSecret(*f.githubAppToken, "CICADO_GITHUB_APP_TOKEN")
 }
 
 // apiStartupGuard refuses to start when no API token is configured and the
