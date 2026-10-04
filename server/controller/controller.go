@@ -718,6 +718,94 @@ func (c *Controller) maybeOpenGate(
 	}
 }
 
+// ── installation events (CIC-146) ────────────────────────────────────
+
+// HandleInstallation stores repos.installation_id for repos
+// named in the GitHub installation webhook event.
+// Actions: created, deleted, suspend, unsuspend,
+// new_permissions_accepted.
+// CIC-146: created and new_permissions_accepted stamp
+// installation_id for repos in payload.Repositories (B2: top-level);
+// all other actions are no-ops (clearing is CIC-81 scope).
+func (c *Controller) HandleInstallation(payload webhook.InstallationPayload) error {
+	// S1 fix (#128): allow-list; GitHub installation events use
+	// created, deleted, suspend, unsuspend, new_permissions_accepted.
+	// Only created and new_permissions_accepted stamp installation IDs;
+	// all other actions are no-ops (clearing is CIC-81 scope).
+	switch payload.Action {
+	case "created", "new_permissions_accepted":
+		// fall through
+	default:
+		return nil
+	}
+
+	accountLogin := payload.Installation.Account.Login
+	if accountLogin == "" {
+		return nil // malformed payload; skip, GitHub will retry on next event
+	}
+	instID := fmt.Sprintf("%d", payload.Installation.ID)
+
+	// B2 fix (#128): stamp installation_id only for repos
+	// listed in the event's payload.Repositories, NOT all
+	// repos under the org.  This avoids unconditionally breaking
+	// public repos on a selected-repos install (the clone minter would
+	// refuse with Internal if the installation ID had no access to them).
+	for _, r := range payload.Repositories {
+		if r.Name == "" {
+			continue
+		}
+		if err := c.store.SetRepoInstallationIDByName(
+			context.Background(), accountLogin, r.Name, instID); err != nil {
+			c.log.Warn("HandleInstallation: failed to set installation_id",
+				"org", accountLogin, "repo", r.Name, "installation_id", instID, "err", err)
+			return err // S2: don't swallow store errors — return them
+		}
+	}
+
+	c.log.Info("HandleInstallation: installation_id updated for org",
+		"org", accountLogin, "installation_id", instID, "action", payload.Action)
+	return nil
+}
+
+// HandleInstallationRepos populates repos.installation_id for specific
+// repos added to or removed from an installation.  Used when a repo is
+// explicitly added to a GitHub App installation before its first push.
+func (c *Controller) HandleInstallationRepos(payload webhook.InstallationRepositoriesPayload) error {
+	instID := fmt.Sprintf("%d", payload.Installation.ID)
+	accountLogin := payload.Installation.Account.Login
+	if accountLogin == "" || payload.Installation.ID == 0 {
+		return nil
+	}
+
+	// Only "added" is actioned: repos that join an installation
+	// get their installation_id populated so the clone minter works.
+	// "removed" is deferred to CIC-81 (clearing installation_id scope).
+	// B2/S2: GitHub does not deliver "added_target"/"removed_target"
+	// in the event; only "added"/"removed".  Fixed per #128 re-review.
+	if payload.Action == "added" {
+		for _, r := range payload.RepositoriesAdded {
+			if r.Name == "" {
+				continue
+			}
+			// S2 fix: return the error instead of swallowing it.
+			if err := c.store.SetRepoInstallationIDByName(
+				context.Background(), accountLogin, r.Name, instID); err != nil {
+				return fmt.Errorf(
+					"controller: HandleInstallationRepos: set installation_id for %s/%s: %w",
+					accountLogin, r.Name, err)
+			}
+		}
+		c.log.Info("HandleInstallationRepos: installation_id set for added repos",
+			"count", len(payload.RepositoriesAdded),
+			"org", accountLogin, "installation_id", instID)
+		return nil
+	}
+
+	c.log.Debug("HandleInstallationRepos: action no-op",
+		"action", payload.Action, "org", accountLogin, "installation_id", instID)
+	return nil
+}
+
 // ── compile-time check ─────────────────────────────────────────────────────────
 
 var _ webhook.Dispatcher = (*Controller)(nil)

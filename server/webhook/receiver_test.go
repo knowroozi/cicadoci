@@ -212,6 +212,14 @@ func (d fakeDispatcher) HandleCheckRun(_ CheckRunPayload) error {
 	return d.err
 }
 
+// HandleInstallation implements Dispatcher (CIC-146).
+func (d fakeDispatcher) HandleInstallation(_ InstallationPayload) error { return d.err }
+
+// HandleInstallationRepos implements Dispatcher (CIC-146).
+func (d fakeDispatcher) HandleInstallationRepos(_ InstallationRepositoriesPayload) error {
+	return d.err
+}
+
 // TestReceiver_ValidPush tests end-to-end happy path for a push event.
 func TestReceiver_ValidPush(t *testing.T) {
 	secret := "secret123"
@@ -571,6 +579,14 @@ func (d blockingDispatcher) HandlePullRequest(_ PullRequestPayload) error { retu
 func (d blockingDispatcher) HandleCheckSuite(_ CheckSuitePayload) error   { return nil }
 func (d blockingDispatcher) HandleCheckRun(_ CheckRunPayload) error       { return nil }
 
+// HandleInstallation implements Dispatcher (CIC-146).
+func (d blockingDispatcher) HandleInstallation(_ InstallationPayload) error { return nil }
+
+// HandleInstallationRepos implements Dispatcher (CIC-146).
+func (d blockingDispatcher) HandleInstallationRepos(_ InstallationRepositoriesPayload) error {
+	return nil
+}
+
 // capturePullRequest is a Dispatcher that records the pull request action.
 type capturePullRequest struct {
 	fn func(PullRequestPayload) error
@@ -584,6 +600,14 @@ func (d capturePullRequest) HandlePullRequest(p PullRequestPayload) error {
 }
 func (d *capturePullRequest) HandleCheckSuite(_ CheckSuitePayload) error { return nil }
 func (d *capturePullRequest) HandleCheckRun(_ CheckRunPayload) error     { return nil }
+
+// HandleInstallation implements Dispatcher (CIC-146).
+func (d *capturePullRequest) HandleInstallation(_ InstallationPayload) error { return nil }
+
+// HandleInstallationRepos implements Dispatcher (CIC-146).
+func (d *capturePullRequest) HandleInstallationRepos(_ InstallationRepositoriesPayload) error {
+	return nil
+}
 
 // compile-time check
 var (

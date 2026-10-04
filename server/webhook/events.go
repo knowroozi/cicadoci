@@ -10,11 +10,13 @@ import (
 // These are the GitHub webhook event names CICaDo consumes.  The event name
 // comes from the X-GitHub-Event header.
 const (
-	EventPing        = "ping"
-	EventPush        = "push"
-	EventPullRequest = "pull_request"
-	EventCheckSuite  = "check_suite"
-	EventCheckRun    = "check_run"
+	EventPing              = "ping"
+	EventPush              = "push"
+	EventPullRequest       = "pull_request"
+	EventCheckSuite        = "check_suite"
+	EventCheckRun          = "check_run"
+	EventInstallation      = "installation"
+	EventInstallationRepos = "installation_repositories"
 )
 
 // ── payload structures ────────────────────────────────────────────
@@ -147,6 +149,56 @@ type CheckRunPayload struct {
 	Repository Repo `json:"repository"`
 }
 
+// ── installation events (CIC-146) ────────────────────────────────────────
+
+// InstallationPayload is GitHub's "installation" webhook event.
+//
+// action: "created", "deleted", "updated", "suspended", "unsuspended".
+// When a GitHub App is installed or its access changes, GitHub delivers
+// this event. The handler stores/updates repos.installation_id so that
+// the clone minter can resolve the right installation.
+type InstallationPayload struct {
+	Action       string `json:"action"`
+	Installation struct {
+		ID      int64 `json:"id"`
+		Account struct {
+			Login string `json:"login"`
+			Type  string `json:"type"` // "User" or "Organization"
+		} `json:"account"`
+	} `json:"installation"`
+	// Repositories are TOP-LEVEL in the GitHub 'installation' event (CIC-146 B3).
+	// Each entry has 'name' (not 'full_name'); the handler uses that.
+	Repositories []GitRepo `json:"repositories"`
+}
+
+// InstallationRepositoriesPayload is GitHub's "installation_repositories"
+// webhook event, delivered when repositories are added to or removed
+// from an installation.
+//
+// action: "added_target", "removed_target", "added", "removed",
+// "added", "removed". The added/removed lists contain minimal repo
+// metadata; only full_name is consumed by the handler.
+type InstallationRepositoriesPayload struct {
+	Action       string `json:"action"`
+	Installation struct {
+		ID      int64 `json:"id"`
+		Account struct {
+			Login string `json:"login"`
+			Type  string `json:"type"`
+		} `json:"account"`
+	} `json:"installation"`
+	RepositoriesAdded   []GitRepo `json:"repositories_added"` // CIC-146: new
+	RepositoriesRemoved []GitRepo `json:"repositories_removed"`
+}
+
+// GitRepo is the minimal GitHub repository representation used by
+// installation_repositories events.
+type GitRepo struct {
+	Name     string `json:"name"`
+	FullName string `json:"full_name"`
+	Private  bool   `json:"private"`
+}
+
 // ── dispatch ───────────────────────────────────────────────────────
 
 // Dispatcher receives decoded webhook events after signature and idempotency
@@ -157,6 +209,12 @@ type Dispatcher interface {
 	HandlePullRequest(payload PullRequestPayload) error
 	HandleCheckSuite(payload CheckSuitePayload) error
 	HandleCheckRun(payload CheckRunPayload) error
+	// HandleInstallation stores/updates installation_id for the org
+	// from a GitHub App installation event.  Added in CIC-146.
+	HandleInstallation(payload InstallationPayload) error
+	// HandleInstallationRepos populates installation_id for repos added
+	// to or removed from an installation.  Added in CIC-146.
+	HandleInstallationRepos(payload InstallationRepositoriesPayload) error
 }
 
 // ErrUnimplemented is returned by Dispatcher methods that have no
@@ -181,6 +239,12 @@ func (NoOpDispatcher) HandleCheckSuite(_ CheckSuitePayload) error { return nil }
 
 // HandleCheckRun implements Dispatcher.
 func (NoOpDispatcher) HandleCheckRun(_ CheckRunPayload) error { return nil }
+
+// HandleInstallation implements Dispatcher (no-op; CIC-146).
+func (NoOpDispatcher) HandleInstallation(_ InstallationPayload) error { return nil }
+
+// HandleInstallationRepos implements Dispatcher (no-op; CIC-146).
+func (NoOpDispatcher) HandleInstallationRepos(_ InstallationRepositoriesPayload) error { return nil }
 
 // ── routing ─────────────────────────────────────────────────────────
 
@@ -222,10 +286,19 @@ func Dispatch(eventType string, raw []byte, d Dispatcher) error {
 		// ping is a GitHub webhook health-check; return successfully.
 		return nil
 
-	// GitHub App lifecycle events: acknowledge and ignore; installation
-	// setup is out of scope for this ticket.
-	case "installation", "installation_repositories":
-		return nil
+	case EventInstallation:
+		var p InstallationPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		return d.HandleInstallation(p)
+
+	case EventInstallationRepos:
+		var p InstallationRepositoriesPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		return d.HandleInstallationRepos(p)
 
 	default:
 		return errUnknownEventType
