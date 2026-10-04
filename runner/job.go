@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"maps"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -132,7 +133,9 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 		ID:            jobID,
 		RunID:         spec.GetRunId(),
 		WorkspaceRoot: a.cfg.WorkspaceRoot,
-		Env:           spec.GetEnv(),
+		// CIC-161/N2: clone the proto map so InjectGitEnv does not mutate
+		// the caller-owned proto message.
+		Env: maps.Clone(spec.GetEnv()),
 	}
 
 	// Fetch SECRET VALUES against the live lease (CIC-79). The server grants
@@ -154,6 +157,18 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 		return
 	}
 	job.Secrets = secrets
+
+	// CIC-161: inject the git checkout coordinates from the server-provided
+	// GitContext as CICADO_GIT_* job env vars so cicanscript run blocks
+	// (and step-level env) can reference the clone URL, ref, and SHA that the
+	// server resolved for this run -- e.g. ${CICADO_GIT_CLONE_URL}.
+	// These are run coordinates, not secrets: clone URL / ref / SHA on their
+	// own are not sensitive; the clone credentials arrive via job secrets.
+	// The operator's own env is honoured: if they already set one of these
+	// keys, they keep it.
+	if git := spec.GetGit(); git != nil {
+		job.InjectGitEnv(git.GetCloneUrl(), git.GetRef(), git.GetSha())
+	}
 	if err := exec.Prepare(ctx, job); err != nil {
 		a.log.Error("prepare job", "job_id", jobID, "error", err)
 		a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{
@@ -193,7 +208,9 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 		// resolved values. A delivered secret's value is therefore never re-parsed, so
 		// its content can never leak into the failure message or a log line (neither of
 		// which goes through the log masker).
-		stepRaw := mergeEnv(spec.GetEnv(), step.GetEnv())
+		// CIC-161: use job.Env (which includes the injected CICADO_GIT_* vars) instead
+		// of spec.GetEnv() so each step's raw env carries the git coordinates.
+		stepRaw := mergeEnv(job.Env, step.GetEnv())
 		stepEnv := secretexpr.Resolve(stepRaw, secrets)
 		// (should-fix #3, Dwight #91): a missing/unavailable secret must surface as a
 		// clear error, not a confusing downstream auth failure at step runtime.

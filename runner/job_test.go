@@ -2,6 +2,9 @@ package runner
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -136,5 +139,71 @@ func TestCancelDuringPrepareFails(t *testing.T) {
 
 	if got := sink.terminalState(); got == runnerv1.StatusUpdate_SUCCEEDED {
 		t.Fatalf("job with cancelled context should not SUCCEED, got %v", got)
+	}
+}
+
+// TestGitEnvInjectedInShellStep is the CIC-148 acceptance test on the runner
+// side: a JobAssignment carrying a Git context must make its coordinates
+// available as CICADO_GIT_CLONE_URL / CICADO_GIT_REF / CICADO_GIT_SHA in
+// every step's environment. A shell step writes all three to a known file;
+// the test reads the file and asserts the expected values.
+func TestGitEnvInjectedInShellStep(t *testing.T) {
+	ag := newTestAgent(t)
+
+	outDir := t.TempDir()
+	outfile := filepath.Join(outDir, "gitenv.txt")
+
+	// A shell step that writes the three git env vars to a known file.
+	// Each var is written with printf; append mode for the 2nd/3rd avoids
+	// clobbering the first write.
+	cmd := fmt.Sprintf(
+		"printf \"CICADO_GIT_CLONE_URL=%%s\\n\" \"$CICADO_GIT_CLONE_URL\" > %s && "+
+			"printf \"CICADO_GIT_REF=%%s\\n\" \"$CICADO_GIT_REF\" >> %s && "+
+			"printf \"CICADO_GIT_SHA=%%s\\n\" \"$CICADO_GIT_SHA\" >> %s",
+		outfile, outfile, outfile,
+	)
+
+	assignment := &runnerv1.JobAssignment{
+		JobId:   "job-git-env",
+		LeaseId: "lease-git-env",
+		Spec: &runnerv1.JobSpec{
+			Executor: "shell",
+			Git: &runnerv1.GitContext{
+				CloneUrl: "https://github.com/acme/widgets.git",
+				Ref:      "refs/heads/main",
+				Sha:      "deadbeefcafef00d",
+			},
+			Steps: []*runnerv1.StepSpec{
+				{
+					Index:   0,
+					Name:    "capture-git-env",
+					Command: []string{"sh", "-c", cmd},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sink := &captureTerminalStatus{}
+	ag.executeJob(ctx, assignment, sink.Send)
+
+	if !sink.sawTerminal() {
+		t.Fatal("no terminal StatusUpdate received")
+	}
+	if got := sink.terminalState(); got != runnerv1.StatusUpdate_SUCCEEDED {
+		t.Fatalf("terminal state = %v, want SUCCEEDED", got)
+	}
+
+	data, err := os.ReadFile(outfile)
+	if err != nil {
+		t.Fatalf("failed to read git-env capture file %s: %v", outfile, err)
+	}
+	want := "CICADO_GIT_CLONE_URL=https://github.com/acme/widgets.git\n" +
+		"CICADO_GIT_REF=refs/heads/main\n" +
+		"CICADO_GIT_SHA=deadbeefcafef00d\n"
+	if got := string(data); got != want {
+		t.Errorf("git env capture:\n got: %q\nwant: %q", got, want)
 	}
 }

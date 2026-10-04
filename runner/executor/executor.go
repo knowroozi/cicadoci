@@ -51,6 +51,31 @@ type Job struct {
 	Secrets map[string]string
 }
 
+// InjectGitEnv sets CICADO_GIT_CLONE_URL / CICADO_GIT_REF / CICADO_GIT_SHA on
+// the job's base env. An empty field is never written; an already-present
+// key is preserved. CIC-161: surfaces the server-resolved checkout coordinates
+// to cicanscript run blocks and step-level env.
+func (j *Job) InjectGitEnv(cloneURL, ref, sha string) {
+	if j.Env == nil {
+		j.Env = make(map[string]string)
+	}
+	if cloneURL != "" {
+		if _, ok := j.Env["CICADO_GIT_CLONE_URL"]; !ok {
+			j.Env["CICADO_GIT_CLONE_URL"] = cloneURL
+		}
+	}
+	if ref != "" {
+		if _, ok := j.Env["CICADO_GIT_REF"]; !ok {
+			j.Env["CICADO_GIT_REF"] = ref
+		}
+	}
+	if sha != "" {
+		if _, ok := j.Env["CICADO_GIT_SHA"]; !ok {
+			j.Env["CICADO_GIT_SHA"] = sha
+		}
+	}
+}
+
 // Step is one step to execute.
 type Step struct {
 	Index          int32
