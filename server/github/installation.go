@@ -38,6 +38,11 @@ type InstallationConfig struct {
 	HTTPClient *http.Client
 	// BaseURL overrides the GitHub API base (for testing).
 	BaseURL string
+	// ClonePermissions is the permission scope for the GitHub installation
+	// token. "read" or "write" (maps to GitHub's permissions[].content).
+	// Default: "read" (CIC-151: a clone token needs only contents:read).
+	// Empty string means no permissions field is sent (all-installation scope).
+	ClonePermissions string
 }
 
 // DefaultExpiry is the default installation-token lifetime: 10 minutes.
@@ -124,6 +129,12 @@ func (m *InstallationTokenMinter) Mint(ctx context.Context,
 	}
 	if repo != "" {
 		reqBody[tkPerRepo] = []string{repo}
+	}
+	// CIC-151: scope the installation token to contents:read by default,
+	// or contents:write when explicitly requested. Both fork and non-fork
+	// clone paths call Mint with ClonePermissions="read".
+	if perm := cfg.ClonePermissions; perm != "" {
+		reqBody[tkPermissions] = map[string]string{"contents": perm}
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
@@ -234,6 +245,7 @@ func cloneURLWithToken(token, org, repo, sha string) string {
 
 // JSON key constants for installation token request.
 const (
-	tkPerRepo = "repositories" // GitHub expects "repositories" not "per_repo"
-	tkExpiry  = "expires_at"
+	tkPerRepo     = "repositories" // GitHub expects "repositories" not "per_repo"
+	tkExpiry      = "expires_at"
+	tkPermissions = "permissions" // CIC-151: contents permission scope (read/write)
 )

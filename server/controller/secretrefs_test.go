@@ -69,13 +69,10 @@ func TestSecretRefsFor(t *testing.T) {
 	}
 }
 
-// TestSecretRefsFor_ForkJobReturnsNil is the defense-in-depth blocker fix
-// (Dwight #91 blocker 1b): even if a fork workflow's env text contains a
-// secret reference, secretRefsFor with isFork=true returns nil, so the
-// runner never asks GetJobSecrets for a secret it is not authorized for.
-func TestSecretRefsFor_ForkJobReturnsNil(t *testing.T) {
-	// Job with a template-form ref and a bare-form ref; both should be ignored
-	// for isFork=true.
+// TestSecretRefsFor_ForkJobGetsCloneToken is the B1 fix: a fork job with a git
+// context returns only ["github_clone_token"]; no other user-declared secrets.
+// A fork job with no git context returns nil (no clone step needed).
+func TestSecretRefsFor_ForkJobGetsCloneToken(t *testing.T) {
 	job := &workflow.Job{
 		Env: map[string]string{"AUTH": "secrets.PROD_AUTH"},
 		Steps: []*workflow.Step{
@@ -83,12 +80,22 @@ func TestSecretRefsFor_ForkJobReturnsNil(t *testing.T) {
 			{Env: map[string]string{"PLAIN": "not-a-ref"}},
 		},
 	}
-	if got := secretRefsFor(job, true, "https://github.com/o/r.git"); got != nil {
-		t.Errorf("isFork=true returned %v, want nil (defense-in-depth)", got)
+	// B1: fork job with git context returns only github_clone_token.
+	g := secretRefsFor(job, true, "https://github.com/o/r.git")
+	if len(g) != 1 || g[0] != "github_clone_token" {
+		t.Errorf("isFork=true returned %v, want only [github_clone_token]", g)
 	}
-	// Sanity: the same job with isFork=false returns the refs as before.
+	// Non-fork with git context returns user refs + github_clone_token.
 	if got := secretRefsFor(job, false, "https://github.com/o/r.git"); len(got) != 3 {
-		t.Errorf("isFork=false returned %v, want 3 refs (DEPLOY, PROD_AUTH, github_clone_token)", got)
+		t.Errorf("isFork=false returned %v, want 3 (DEPLOY, PROD_AUTH, github_clone_token)", got)
+	}
+	// Fork, no git context returns nil.
+	if got := secretRefsFor(job, true, ""); got != nil {
+		t.Errorf("isFork=true, no gitCloneURL returned %v, want nil", got)
+	}
+	// Non-fork, no git context returns 2 user refs only.
+	if got := secretRefsFor(job, false, ""); len(got) != 2 {
+		t.Errorf("isFork=false, no gitCloneURL returned %v, want 2", got)
 	}
 }
 
@@ -130,22 +137,20 @@ func TestSecretRefsFor_GitCloneToken(t *testing.T) {
 	}
 }
 
-// TestSecretRefsFor_ForkJobNoGitCloneToken is the CIC-148 fork-protection
-// assertion: when isFork is true, github_clone_token is NEVER in the list,
-// even when gitCloneURL is non-empty.  This is the mutation-proven no-token-
-// for-fork case: removing the isFork guard in secretRefsFor makes this test
-// FAIL.
-func TestSecretRefsFor_ForkJobNoGitCloneToken(t *testing.T) {
+// TestSecretRefsFor_ForkJobOnlyCloneToken is the CIC-148/B1 mutation-proven
+// case: a fork job with a git context returns ONLY ["github_clone_token"],
+// never any user-declared secret refs.
+func TestSecretRefsFor_ForkJobOnlyCloneToken(t *testing.T) {
 	job := &workflow.Job{
 		Env: map[string]string{"API_KEY": "secrets.DEPLOY_TOKEN"},
 		Steps: []*workflow.Step{
 			{Env: map[string]string{"X": "value"}},
 		},
 	}
-	// Fork with git context: returns nil unconditionally.
+	// B1: fork with git context returns only github_clone_token, no user refs.
 	got := secretRefsFor(job, true, "https://github.com/org/repo.git")
-	if got != nil {
-		t.Errorf("secretRefsFor(true, gitCloneURL) = %v, want nil (no secrets for fork runs)", got)
+	if len(got) != 1 || got[0] != "github_clone_token" {
+		t.Errorf("secretRefsFor(true, gitCloneURL) = %v, want only [github_clone_token]", got)
 	}
 }
 
@@ -174,13 +179,17 @@ func TestCloneStepSpec_NonForkHasCredentialEnv(t *testing.T) {
 	}
 }
 
-// TestCloneStepSpec_ForkHasNoCredentialEnv is the CIC-148 assertion that a
-// fork job gets NO credential env in its checkout step.  This is the
-// security-critical case: fork PR runs must not have any token.
-func TestCloneStepSpec_ForkHasNoCredentialEnv(t *testing.T) {
+// TestCloneStepSpec_ForkGetsReadToken is the B1 assertion: a fork job gets
+// a CICADO_GITHUB_TOKEN env (contents:read scoped) in its checkout step.
+// GetJobSecrets provides the fork run with a contents:read token via the
+// minter; all other secret refs are refused for fork runs.
+func TestCloneStepSpec_ForkGetsReadToken(t *testing.T) {
 	spec := cloneStepSpec("https://github.com/org/repo.git", "refs/heads/main", "abc123", true)
-	if spec.Env != nil {
-		t.Errorf("cloneStepSpec with isFork=true should have no Env, got: %s", spec.Env)
+	if spec.Env == nil {
+		t.Error("B1: fork job should have non-nil Env with CICADO_GITHUB_TOKEN (contents:read)")
+	}
+	if !strings.Contains(string(spec.Env), "github_clone_token") {
+		t.Error("B1: fork job Env does not reference github_clone_token")
 	}
 }
 

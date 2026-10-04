@@ -42,6 +42,7 @@ import (
 	githubpkg "cicadoci.com/cicado/server/github"
 	"cicadoci.com/cicado/server/logs"
 	"cicadoci.com/cicado/server/queue"
+	"cicadoci.com/cicado/server/redact"
 	"cicadoci.com/cicado/server/runnersvc"
 	"cicadoci.com/cicado/server/secrets"
 	"cicadoci.com/cicado/server/store"
@@ -79,6 +80,8 @@ type serverFlags struct {
 	githubAppToken       *string
 	apiToken             *string
 	insecureAPI          *bool
+	githubAppID          *int64
+	githubAppKeyFile     *string
 }
 
 // registerFlags registers all of cicado-server's command-line flags on fs and
@@ -107,6 +110,12 @@ func registerFlags(fs *flag.FlagSet) *serverFlags {
 		// flag.Parse() in run().
 		apiToken:    fs.String("api-token", "", "bearer secret required on every /api/v1/* request except webhooks and health probes (CIC-150); empty refuses to start unless --insecure-api is also set. Supplied via the CICADO_API_TOKEN env var, read after flag.Parse() so the secret never appears in the flag usage text"),
 		insecureAPI: fs.Bool("insecure-api", envBool("CICADO_INSECURE_API", false), "permit /api/v1/* without an API token (fail-open; DEVELOPMENT ONLY -- CIC-150)"),
+		// CIC-151 / CIC-146: per-job GitHub installation token minting.
+		// When --github-app-id and --github-app-key-file are both set, a
+		// per-job minter is wired into runnersvc. The App private key
+		// path is NEVER logged or written to the database.
+		githubAppID:      fs.Int64("github-app-id", int64(0), "GitHub App ID for App-JWT minting (CIC-151); 0 disables per-job token minting"),
+		githubAppKeyFile: fs.String("github-app-key-file", "", "path to GitHub App PEM private key (RSA only, PKCS#1 or PKCS#8); used with --github-app-id; NEVER logged or persisted"),
 	}
 }
 
@@ -117,10 +126,11 @@ func run() error {
 	f := registerFlags(flag.CommandLine)
 	grpcAddr, httpAddr, databaseURL, migrate, devSeedFlag, logLevel, webhookSecret,
 		insecureWebhook, webhookMaxConcurrent, secretKeyHex, allowEphemeralKey,
-		githubWorkflowToken, githubAppToken, apiToken, insecureAPI :=
+		githubWorkflowToken, githubAppToken, apiToken, insecureAPI, githubAppID, githubAppKeyFile :=
 		f.grpcAddr, f.httpAddr, f.databaseURL, f.migrate, f.devSeedFlag, f.logLevel,
 		f.webhookSecret, f.insecureWebhook, f.webhookMaxConcurrent, f.secretKeyHex,
-		f.allowEphemeralKey, f.githubWorkflowToken, f.githubAppToken, f.apiToken, f.insecureAPI
+		f.allowEphemeralKey, f.githubWorkflowToken, f.githubAppToken, f.apiToken, f.insecureAPI,
+		f.githubAppID, f.githubAppKeyFile
 
 	flag.Parse()
 
@@ -257,6 +267,50 @@ func run() error {
 			}
 		}()
 	}
+	// CIC-151 / CIC-146: wire the per-job GitHub installation token
+	// minter. When --github-app-id and --github-app-key-file are both
+	// set, GetJobSecrets dynamically mints a short-lived token per job;
+	// when either is empty the minter is nil and GetJobSecrets treats
+	// "github_clone_token" as a static secret looked up from the store.
+	var minter runnersvc.CloneMinterFunc
+	if *githubAppID > 0 && *githubAppKeyFile != "" {
+		keyBytes, err := os.ReadFile(*githubAppKeyFile)
+		if err != nil {
+			return fmt.Errorf("read --github-app-key-file: %w", err)
+		}
+		// B3a: the minter requires a redact.RegisteringMasker so the
+		// minted token value is masked before it reaches log storage
+		// or the gRPC response. A misconfigured masker is a fatal error.
+		rm, ok := svcCfg.Masker.(redact.RegisteringMasker)
+		if !ok {
+			return fmt.Errorf("CIC-151: clone minter requires redact.RegisteringMasker, got %T", svcCfg.Masker)
+		}
+		// B3b: validate the key at startup so a malformed key fails the
+		// binary immediately rather than producing opaque errors when the
+		// first job that needs a token tries to mint it. No HTTP call is
+		// made here; just a local RSA PKCS#1v15 sign with the key bytes.
+		probeCtx, probeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if _, probeErr := githubpkg.AppAuthFunc(probeCtx, githubpkg.InstallationConfig{
+			AppID:         *githubAppID,
+			AppPrivateKey: keyBytes,
+		}); probeErr != nil {
+			probeCancel()
+			return fmt.Errorf("CIC-151: --github-app-key-file key validation failed (expected PKCS#1 or PKCS#8 RSA PEM): %w", probeErr)
+		}
+		probeCancel()
+
+		// B2: per-repo resolver + per-repo scoping via repos.installation_id.
+		minter = runnersvc.NewCloneMinterFunc(
+			context.Background(), st.Pool(), *githubAppID, keyBytes, rm)
+	}
+
+	svcCfg.CloneMinter = minter
+	if minter != nil {
+		// B3a: log app_id only; do NOT log the key file path.
+		log.Info("CIC-151: GitHub clone minter enabled (per-repo, RS256)",
+			"app_id", *githubAppID)
+	}
+
 	svc := runnersvc.New(st.Pool(), q, svcCfg, log, secretsStore)
 	// The dispatcher gets no backpressure tracker (CIC-106). Run-level
 	// backpressure is the controller's: it holds one slot per run until the

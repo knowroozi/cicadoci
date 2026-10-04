@@ -76,6 +76,12 @@ type Config struct {
 	// backpressure release attach here. When nil, runs are still finalised
 	// in the database; nothing else is notified.
 	OnRunTerminal func(runID uuid.UUID, state string)
+	// CloneMinter mints a per-job GitHub installation token on demand.
+	// When non-nil, GetJobSecrets calls it for secret_refs that include
+	// "github_clone_token" instead of looking the value up from the
+	// static secrets store (CIC-151 / CIC-146). When nil, GetJobSecrets
+	// treats that secret like any other — looked up from the store.
+	CloneMinter CloneMinterFunc
 }
 
 // DefaultConfig returns workable defaults for a development install.
@@ -301,7 +307,9 @@ func (s *Service) GetJobSecrets(ctx context.Context, req *runnerv1.GetJobSecrets
 		return nil, status.Error(codes.Internal, "look up job")
 	}
 
-	if s.secrets == nil || len(secretRefs) == 0 {
+	// S3: the clone minter can mint even when s.secrets is nil (CIC-151);
+	// so skip only when BOTH store and minter are nil.
+	if s.secrets == nil && s.cfg.CloneMinter == nil {
 		return &runnerv1.GetJobSecretsResponse{}, nil
 	}
 
@@ -315,13 +323,15 @@ func (s *Service) GetJobSecrets(ctx context.Context, req *runnerv1.GetJobSecrets
 	if err != nil {
 		return nil, status.Error(codes.Internal, "look up run")
 	}
-	if isFork {
-		// Fork PR runs get no secrets (CIC-27, fork-PR policy).
-		s.log.Warn("GetJobSecrets: fork run requested secrets, returning none",
+	// B1: fork PR runs get ONLY github_clone_token via the clone minter
+	// (CIC-151 / conv-e2490b #2); all other secret refs are refused
+	// for fork runs (CIC-27 defense-in-depth). When no minter is
+	// configured a fork run gets nothing.
+	if isFork && s.cfg.CloneMinter == nil {
+		s.log.Warn("GetJobSecrets: fork run, no clone minter configured, refusing all secrets",
 			"run_id", runID.String())
 		return &runnerv1.GetJobSecretsResponse{}, nil
 	}
-
 	// Look up org_id from the repo row.
 	var orgID uuid.UUID
 	err = s.pool.QueryRow(ctx,
@@ -333,6 +343,51 @@ func (s *Service) GetJobSecrets(ctx context.Context, req *runnerv1.GetJobSecrets
 	resp := &runnerv1.GetJobSecretsResponse{Secrets: make(map[string]string, len(secretRefs))}
 
 	for _, name := range secretRefs {
+		// CIC-151 / CIC-146: dynamically mint a per-job GitHub
+		// installation token instead of looking it up from the
+		// store. The token is NEVER persisted. Fork PR runs get
+		// a contents:read clone token; all other secret refs are
+		// refused for fork runs (CIC-27).
+		if name == "github_clone_token" && s.cfg.CloneMinter != nil {
+			token, err := s.cfg.CloneMinter(ctx,
+				orgID.String(), repoID.String(), isFork)
+			if err != nil {
+				// B3c: log as error, not warning. The token is
+				// omitted so the job's step fails with
+				// secret_unavailable; the error is logged
+				// without any key material.
+				s.log.Error("GetJobSecrets: clone minter failed; github_clone_token omitted, job will fail",
+					"secret", name, "run_id", runID.String(),
+					"org_id", orgID.String(), "repo_id", repoID.String(),
+					"err", err)
+				return nil, status.Error(codes.Internal, "clone minter failed")
+			}
+			// B5 soft-skip: minter returned ("", nil) when
+			// installation_id is not yet set (pre-CIC-146).
+			// The step gets an anonymous clone; omit the secret
+			// ref rather than sending an empty value.
+			if token == "" {
+				continue
+			}
+			if rm, ok := s.cfg.Masker.(redact.RegisteringMasker); ok {
+				// The minter already registered with its own Masker
+				// (CIC-74); registering again guarantees the
+				// server-side log masker knows the token value
+				// before it leaves the server process.
+				rm.RegisterWithVariants(token)
+			}
+			resp.Secrets[name] = token
+			continue
+		}
+		if isFork {
+			s.log.Warn("GetJobSecrets: fork run cannot access static secret, skipping",
+				"secret", name, "run_id", runID.String())
+			continue
+		}
+		// S3: s.secrets must be non-nil for static-store lookups.
+		if s.secrets == nil {
+			return nil, status.Error(codes.Internal, "secrets store not configured for GetJobSecrets")
+		}
 		lease, err := s.secrets.Get(ctx, orgID.String(), repoID.String(), name)
 		if err != nil {
 			// A missing secret is a configuration error, not a security
@@ -342,7 +397,7 @@ func (s *Service) GetJobSecrets(ctx context.Context, req *runnerv1.GetJobSecrets
 				"secret", name, "run_id", runID.String(), "org_id", orgID.String(), "repo_id", repoID.String())
 			continue
 		}
-		defer lease.Close() // zero the value after we're done with it
+		defer lease.Close() // zero the value before we return
 
 		// Register with the server-side masker so that a subsequent log
 		// payload containing this value is scrubbed before persistence

@@ -278,25 +278,26 @@ const githubCloneTokenSecretName = "github_clone_token"
 // on top of ForkPolicy.Apply: `secretRefsFor` returns nil for fork jobs
 // regardless of the workflow text.
 func secretRefsFor(j *workflow.Job, isFork bool, gitCloneURL string) []string {
-	if isFork {
-		return nil
-	}
 	seen := make(map[string]struct{})
-	for _, n := range secretexpr.Refs(j.Env) {
-		seen[n] = struct{}{}
-	}
-	for _, step := range j.Steps {
-		for _, n := range secretexpr.Refs(step.Env) {
-			seen[n] = struct{}{}
-		}
-	}
-	// CIC-148: when the job has a git context (gitCloneURL != "") and is not
-	// a fork, the runner needs a per-repo GitHub token.  The token value
-	// is NEVER stored in the step command or the job row's env column;
-	// it is fetched only via GetJobSecrets and injected as
-	// CICADO_GITHUB_TOKEN into the checkout step's env.
+	// CIC-148 / CIC-151 B1: when the job has a git context, the runner needs
+	// a per-repo GitHub token for the checkout step. Fork PR runs get a
+	// contents:read-scoped token via the minter; non-fork runs get the
+	// static installation token. GetJobSecrets enforces the fork carve-out
+	// for all OTHER secret refs (CIC-27 defense-in-depth).
 	if gitCloneURL != "" {
 		seen[githubCloneTokenSecretName] = struct{}{}
+	}
+	// Skip static-secret refs from the user workflow for fork runs; only
+	// github_clone_token is allowed for fork PR jobs.
+	if !isFork {
+		for _, n := range secretexpr.Refs(j.Env) {
+			seen[n] = struct{}{}
+		}
+		for _, step := range j.Steps {
+			for _, n := range secretexpr.Refs(step.Env) {
+				seen[n] = struct{}{}
+			}
+		}
 	}
 	if len(seen) == 0 {
 		return nil
@@ -312,11 +313,12 @@ func secretRefsFor(j *workflow.Job, isFork bool, gitCloneURL string) []string {
 // cloneStepSpec builds a synthetic store.StepSpec that fetches and checks out
 // the commit to build as the first step of a job when git context is available.
 //
-// CIC-148: for a non-fork PR with a git context, a CICADO_GITHUB_TOKEN step
-// env is injected pointing at the github_clone_token secret.  The runner's
-// fetchJobSecrets resolves it via the lease-scoped GetJobSecrets RPC; the
-// git credential helper in buildCloneScript reads it from $CICADO_GITHUB_
-// TOKEN.  Fork PR runs get NO token — the step env is nil.
+// CIC-148 + CIC-151: CICADO_GITHUB_TOKEN is injected for ALL clone steps
+// (fork and non-fork).  Fork PR runs get a contents:read token via the
+// clone minter; all other secret refs stay refused by GetJobSecrets
+// (CIC-27 defense-in-depth).  The token value is NEVER stored in the step
+// command or the job row's env column; it is fetched via GetJobSecrets
+// and injected here as a secret template reference.
 //
 // CIC-147: without this, JobAssignment.Git was ignored by the runner and every
 // workflow step ran in an empty workdir.  We emit one shell command that runs
@@ -333,9 +335,9 @@ func cloneStepSpec(cloneURL, ref, sha string, isFork bool) store.StepSpec {
 		Name:    "checkout",
 		Command: []string{"/bin/sh", "-ec", buildCloneScript(cloneURL, ref, sha)},
 	}
-	// Fork PR runs: no token, no credential — the clone uses whatever
-	// public access the repo has.
-	if !isFork && cloneURL != "" {
+	// CIC-148 + CIC-151 B1: CICADO_GITHUB_TOKEN for ALL clone steps.
+	// Fork PR runs get a contents:read token via the minter.
+	if cloneURL != "" {
 		spec.Env = []byte(`{"CICADO_GITHUB_TOKEN":"${{ secrets.github_clone_token }}"}`)
 	}
 	return spec

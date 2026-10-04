@@ -301,12 +301,15 @@ func TestConvertJobSpecs_NonForkInjectsGitCloneToken(t *testing.T) {
 
 // TestConvertJobSpecs_ForkRun_NoGithubCloneToken verifies the security-critical
 // case: a fork PR run must NOT get github_clone_token in its SecretRefs or in
-// the checkout step's env.
-func TestConvertJobSpecs_ForkRun_NoGithubCloneToken(t *testing.T) {
+// TestConvertJobSpecs_ForkRun_GetsGithubCloneToken verifies B1: a fork PR run
+// gets github_clone_token in SecretRefs for the contents:read minter but no
+// other user secrets (CIC-27 defense-in-depth).
+func TestConvertJobSpecs_ForkRun_GetsGithubCloneToken(t *testing.T) {
 	wf := &workflow.Workflow{
 		Name: "ci",
 		Jobs: map[string]*workflow.Job{
 			"build": {
+				Env: map[string]string{"MY_SECRET": "${{ secrets.my_app_api_key }}"},
 				Steps: []*workflow.Step{
 					{Name: "test", Run: "go test ./..."},
 				},
@@ -322,15 +325,28 @@ func TestConvertJobSpecs_ForkRun_NoGithubCloneToken(t *testing.T) {
 		t.Fatalf("got %d specs, want 1", len(specs))
 	}
 	spec := specs[0]
-	// The checkout step is prepended but has no env (fork run — no token).
+	// B1: the checkout step IS present with CICADO_GITHUB_TOKEN in Env.
 	checkout := spec.Steps[0]
-	if checkout.Env != nil {
-		t.Errorf("fork PR checkout step has Env = %s, want nil (no token for fork runs)", checkout.Env)
+	if checkout.Env == nil {
+		t.Error("B1: fork PR checkout step should have Env with CICADO_GITHUB_TOKEN")
 	}
-	// github_clone_token must NOT be in SecretRefs.
+	if !strings.Contains(string(checkout.Env), "github_clone_token") {
+		t.Errorf("B1: checkout.Env = %s, want it to reference github_clone_token", checkout.Env)
+	}
+	// B1: github_clone_token must be in SecretRefs (for the minter).
+	var found bool
 	for _, ref := range spec.SecretRefs {
 		if ref == "github_clone_token" {
-			t.Error("fork PR SecretRefs contains github_clone_token; fork runs must not receive GitHub tokens")
+			found = true
+		}
+	}
+	if !found {
+		t.Error("B1: SecretRefs must contain github_clone_token")
+	}
+	// B1 defense-in-depth: no other user secrets for fork runs.
+	for _, ref := range spec.SecretRefs {
+		if ref != "github_clone_token" {
+			t.Errorf("B1: fork run SecretRefs contains unexpected secret %q", ref)
 		}
 	}
 }
