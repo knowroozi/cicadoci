@@ -53,6 +53,10 @@ services:
       # (CIC-80). Absent this flag the server refuses to start because a
       # missing secret is no longer accepted silently.
       CICADO_INSECURE_WEBHOOK: "true"
+      # CIC-150: the API token guard requires CICADO_API_TOKEN or
+      # --insecure-api.  dev stack has no real secrets, so opt into
+      # the explicitly-loud, non-secure API path.
+      CICADO_INSECURE_API: "true"
     ports:
       - "8080:8080"
       - "8081:8081"

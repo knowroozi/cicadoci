@@ -182,11 +182,6 @@ func run() error {
 	// A persistent key (CICADO_SECRET_KEY) is required in production.
 	// Without it the server refuses to start unless --allow-ephemeral-key
 	// was also passed, preventing silent loss of encrypted-at-rest data.
-	// Construct the secrets store.
-	//
-	// A persistent key (CICADO_SECRET_KEY) is required in production.
-	// Without it the server refuses to start unless --allow-ephemeral-key
-	// was also passed, preventing silent loss of encrypted-at-rest data.
 	var secretsStore secrets.Store
 	if *secretKeyHex != "" {
 		keyBytes, err := hex.DecodeString(*secretKeyHex)
