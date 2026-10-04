@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
+
+	"cicadoci.com/cicado/internal/secretexpr"
 )
 
 // fakeSecretsClient implements the narrow secretsClient surface for offline
@@ -189,5 +191,94 @@ func TestUnresolvedSecrets_DeliveredRefValueNotFlagged(t *testing.T) {
 	}, map[string]string{})
 	if len(got) != 2 || got[0] != "MISSING" || got[1] != "OtherMissing" {
 		t.Errorf("unresolvedSecrets(missing) = %v, want [MISSING OtherMissing]", got)
+	}
+}
+
+// CIC-148 B2: github_clone_token is an optional secret.
+
+func TestUnresolvedSecrets_SkipsGithubCloneToken(t *testing.T) {
+	// github_clone_token absent from the delivered secrets map must NOT
+	// appear in the missing list.
+	raw := map[string]string{
+		"CICADO_GITHUB_TOKEN": "${{ secrets.github_clone_token }}",
+		"OTHER":               "${{ secrets.some_real_secret }}",
+	}
+	missing := unresolvedSecrets(raw, nil)
+	if len(missing) != 1 || missing[0] != "some_real_secret" {
+		t.Errorf("expected [some_real_secret], got %v", missing)
+	}
+	// With an empty raw env (no template refs) missing is nil.
+	missing2 := unresolvedSecrets(map[string]string{"CICADO_GITHUB_TOKEN": "unused-literal"}, nil)
+	if len(missing2) != 0 {
+		t.Errorf("expected [] for no-refs, got %v", missing2)
+	}
+	// github_clone_token present but whitespace-only — still skipped
+	missing3 := unresolvedSecrets(raw, map[string]string{"github_clone_token": "   \t\n "})
+	if len(missing3) != 1 || missing3[0] != "some_real_secret" {
+		t.Errorf("expected [some_real_secret] even for whitespace-only token, got %v", missing3)
+	}
+}
+
+func TestResolveOptionalSecrets_TokenAbsent(t *testing.T) {
+	// Raw references github_clone_token; token absent -> blanked to "".
+	raw := map[string]string{"CICADO_GITHUB_TOKEN": "${{ secrets.github_clone_token }}"}
+	env := secretexpr.Resolve(raw, nil)
+	got := resolveOptionalSecrets(env, raw, nil)
+	if got["CICADO_GITHUB_TOKEN"] != "" {
+		t.Errorf("expected CICADO_GITHUB_TOKEN to be empty when token absent, got %q", got["CICADO_GITHUB_TOKEN"])
+	}
+}
+
+func TestResolveOptionalSecrets_TokenWhitespace(t *testing.T) {
+	// Raw references github_clone_token; token whitespace-only -> blanked to "".
+	raw := map[string]string{"CICADO_GITHUB_TOKEN": "${{ secrets.github_clone_token }}"}
+	whitespace := "    "
+	env := secretexpr.Resolve(raw, map[string]string{"github_clone_token": whitespace})
+	got := resolveOptionalSecrets(env, raw, map[string]string{"github_clone_token": whitespace})
+	if got["CICADO_GITHUB_TOKEN"] != "" {
+		t.Errorf("expected CICADO_GITHUB_TOKEN to be empty for whitespace-only token, got %q", got["CICADO_GITHUB_TOKEN"])
+	}
+}
+
+func TestResolveOptionalSecrets_TokenDelivered(t *testing.T) {
+	// Token present and non-whitespace -> pass through.
+	raw := map[string]string{"CICADO_GITHUB_TOKEN": "${{ secrets.github_clone_token }}"}
+	env := secretexpr.Resolve(raw, map[string]string{"github_clone_token": "ghs_real_token_value"})
+	got := resolveOptionalSecrets(env, raw, map[string]string{"github_clone_token": "ghs_real_token_value"})
+	if got["CICADO_GITHUB_TOKEN"] != "ghs_real_token_value" {
+		t.Errorf("expected pass-through of real token, got %q", got["CICADO_GITHUB_TOKEN"])
+	}
+}
+
+func TestResolveOptionalSecrets_NoGithubTokenKey(t *testing.T) {
+	// CICADO_GITHUB_TOKEN not in env -> leave untouched, no panic.
+	env := map[string]string{"OTHER": "value"}
+	raw := map[string]string{"OTHER": "value"}
+	got := resolveOptionalSecrets(env, raw, nil)
+	if _, found := got["CICADO_GITHUB_TOKEN"]; found {
+		t.Errorf("did not expect CICADO_GITHUB_TOKEN key to be added when absent from env")
+	}
+}
+
+// B4: a user's own CICADO_GITHUB_TOKEN that references a DIFFERENT secret
+// (my_pat) must survive unchanged. The runner must not clobber it with
+// "" just because github_clone_token is absent.
+func TestResolveOptionalSecrets_UserMyPatPreserved(t *testing.T) {
+	raw := map[string]string{"CICADO_GITHUB_TOKEN": "${{ secrets.my_pat }}"}
+	env := secretexpr.Resolve(raw, map[string]string{"my_pat": "ghs_my_pat_value"})
+	got := resolveOptionalSecrets(env, raw, map[string]string{"my_pat": "ghs_my_pat_value"})
+	if got["CICADO_GITHUB_TOKEN"] != "ghs_my_pat_value" {
+		t.Errorf("B4: user my_pat token must not be clobbered, got %q", got["CICADO_GITHUB_TOKEN"])
+	}
+}
+
+// B4 variant: my_pat present, github_clone_token absent.
+// B4 must preserve my_pat resolved value.
+func TestResolveOptionalSecrets_UserMyPatAndCloneTokenAbsent(t *testing.T) {
+	raw := map[string]string{"CICADO_GITHUB_TOKEN": "${{ secrets.my_pat }}"}
+	env := secretexpr.Resolve(raw, map[string]string{"my_pat": "ghs_my_pat_value"})
+	got := resolveOptionalSecrets(env, raw, nil)
+	if got["CICADO_GITHUB_TOKEN"] != "ghs_my_pat_value" {
+		t.Errorf("B4: my_pat must survive when github_clone_token absent, got %q", got["CICADO_GITHUB_TOKEN"])
 	}
 }

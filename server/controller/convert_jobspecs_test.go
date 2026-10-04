@@ -198,12 +198,30 @@ func TestNoCloneStepWhenGitURLIsEmpty(t *testing.T) {
 // remote, fetch exactly the SHA (preferred over the ref), check out FETCH_HEAD.
 func TestBuildCloneScriptPrefersSha(t *testing.T) {
 	got := buildCloneScript("https://github.com/o/r.git", "refs/heads/main", "deadbeef")
-	want := "git init -q .\n" +
-		"git remote add origin 'https://github.com/o/r.git'\n" +
-		"git fetch --depth 1 origin 'deadbeef'\n" +
-		"git checkout -q FETCH_HEAD\n"
-	if got != want {
-		t.Errorf("got:\n%q\nwant:\n%q", got, want)
+	// CIC-148 (N1+B2): conditional git -c credential helper for authenticated
+	// fetch, unconditional anon fallback.
+	// N1: git -c credential.helper (not git config) — doesn't persist to
+	// .git/config for later repo-controlled steps.
+	if !strings.Contains(got, "git -c credential.helper=") {
+		t.Errorf("N1: expected git -c credential.helper in script:\n%s", got)
+	}
+	if strings.Contains(got, "git config credential.helper") {
+		t.Errorf("N1: git config credential.helper should not appear (N1 fix):\n%s", got)
+	}
+	// B2: conditional on CICADO_GITHUB_TOKEN being non-empty
+	if !strings.Contains(got, "CICADO_GITHUB_TOKEN") {
+		t.Errorf("B2: expected CICADO_GITHUB_TOKEN guard in script:\n%s", got)
+	}
+	// SHA preferred over ref.
+	if !strings.Contains(got, "deadbeef") {
+		t.Errorf("sha not used in fetch: %s", got)
+	}
+	if strings.Contains(got, "refs/heads/main") {
+		t.Errorf("unexpected ref in script: %s", got)
+	}
+	// Checkout FETCH_HEAD.
+	if !strings.Contains(got, "git checkout") {
+		t.Errorf("missing checkout: %s", got)
 	}
 }
 
@@ -227,5 +245,92 @@ func TestBuildCloneScriptQuotesArguments(t *testing.T) {
 	got := buildCloneScript("https://x/a'; rm -rf /; '.git", "", "")
 	if !strings.Contains(got, `'https://x/a'\''; rm -rf /; '\''.git'`) {
 		t.Errorf("URL not safely quoted:\n%s", got)
+	}
+}
+
+// TestConvertJobSpecs_NonForkInjectsGitCloneToken is the CIC-148 controller
+// integration test: a non-fork job with a git context gets github_clone_token
+// in its SecretRefs and the checkout step has a CICADO_GITHUB_TOKEN env var
+// that the runner resolves via GetJobSecrets.
+func TestConvertJobSpecs_NonForkInjectsGitCloneToken(t *testing.T) {
+	wf := &workflow.Workflow{
+		Name: "ci",
+		Jobs: map[string]*workflow.Job{
+			"build": {
+				Steps: []*workflow.Step{
+					{Name: "test", Run: "go test ./..."},
+				},
+			},
+		},
+	}
+	dag, err := workflow.BuildDAG(wf)
+	if err != nil {
+		t.Fatal("BuildDAG:", err)
+	}
+	specs := convertJobSpecs(wf, dag, "https://github.com/org/repo.git", "refs/heads/main", "abc123", false)
+	if len(specs) != 1 {
+		t.Fatalf("got %d specs, want 1", len(specs))
+	}
+	spec := specs[0]
+	// The checkout step is prepended; total steps = 1 checkout + 1 user = 2.
+	if len(spec.Steps) < 1 {
+		t.Fatalf("no steps in spec")
+	}
+	checkout := spec.Steps[0]
+	if checkout.Name != "checkout" {
+		t.Fatalf("step 0 name = %q, want 'checkout'", checkout.Name)
+	}
+	// Non-fork: checkout step has CICADO_GITHUB_TOKEN in its env.
+	if checkout.Env == nil {
+		t.Error("non-fork checkout step should have Env with CICADO_GITHUB_TOKEN")
+	}
+	if !strings.Contains(string(checkout.Env), "github_clone_token") {
+		t.Errorf("checkout.Env = %s, want it to reference github_clone_token", checkout.Env)
+	}
+	// github_clone_token must be in SecretRefs.
+	var found bool
+	for _, ref := range spec.SecretRefs {
+		if ref == "github_clone_token" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("SecretRefs = %v, want github_clone_token among them", spec.SecretRefs)
+	}
+}
+
+// TestConvertJobSpecs_ForkRun_NoGithubCloneToken verifies the security-critical
+// case: a fork PR run must NOT get github_clone_token in its SecretRefs or in
+// the checkout step's env.
+func TestConvertJobSpecs_ForkRun_NoGithubCloneToken(t *testing.T) {
+	wf := &workflow.Workflow{
+		Name: "ci",
+		Jobs: map[string]*workflow.Job{
+			"build": {
+				Steps: []*workflow.Step{
+					{Name: "test", Run: "go test ./..."},
+				},
+			},
+		},
+	}
+	dag, err := workflow.BuildDAG(wf)
+	if err != nil {
+		t.Fatal("BuildDAG:", err)
+	}
+	specs := convertJobSpecs(wf, dag, "https://github.com/org/repo.git", "refs/heads/main", "abc123", true)
+	if len(specs) != 1 {
+		t.Fatalf("got %d specs, want 1", len(specs))
+	}
+	spec := specs[0]
+	// The checkout step is prepended but has no env (fork run — no token).
+	checkout := spec.Steps[0]
+	if checkout.Env != nil {
+		t.Errorf("fork PR checkout step has Env = %s, want nil (no token for fork runs)", checkout.Env)
+	}
+	// github_clone_token must NOT be in SecretRefs.
+	for _, ref := range spec.SecretRefs {
+		if ref == "github_clone_token" {
+			t.Error("fork PR SecretRefs contains github_clone_token; fork runs must not receive GitHub tokens")
+		}
 	}
 }

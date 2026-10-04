@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
 )
 
@@ -205,5 +207,132 @@ func TestGitEnvInjectedInShellStep(t *testing.T) {
 		"CICADO_GIT_SHA=deadbeefcafef00d\n"
 	if got := string(data); got != want {
 		t.Errorf("git env capture:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// B3c: runner-level executeJob tests for CIC-148 B2 optional-token behaviour.
+//
+// When a job's step env references ${{ secrets.github_clone_token }} but
+// the secrets store returns nothing (absent or whitespace-only), the
+// runner must NOT fail the step. resolveOptionalSecrets blanks
+// CICADO_GITHUB_TOKEN to "", so the clone script's [ -n "$CICADO_GITHUB_TOKEN" ]
+// guard takes the else branch (anonymous fetch).
+//
+// TestGithubCloneTokenNoSecretJobSucceeds:
+//   - Step env: CICADO_GITHUB_TOKEN = ${{ secrets.github_clone_token }}
+//   - secrets = {} (no client configured; newTestAgent uses nil)
+//   - Step command: sh -c 'test -z "$CICADO_GITHUB_TOKEN" && echo ok || echo FAIL'
+//   - Job MUST succeed.
+//   - Capture the output to verify the assertion ran.
+//
+// TestGithubCloneTokenWhitespaceJobSucceeds:
+//   - Step env: CICADO_GITHUB_TOKEN = ${{ secrets.github_clone_token }}
+//   - secrets fake returns github_clone_token = "    " (whitespace)
+//   - Same step command; job MUST succeed.
+//   - Captures output.
+//
+// These tests exercise the full path: executeJob -> fetchJobSecrets ->
+// resolveOptionalSecrets -> stepEnv -> runner exec.  M1 (delete
+// runner/job.go:203 resolveOptionalSecrets call): the test would
+// fail because CICADO_GITHUB_TOKEN would be the literal template text
+// (non-empty), so `test -z` would FAIL.
+func TestGithubCloneTokenNoSecretJobSucceeds(t *testing.T) {
+	ag := newTestAgent(t)
+	// newTestAgent uses nil secrets; fetchJobSecrets returns empty map.
+	// github_clone_token is absent.
+
+	outDir := t.TempDir()
+	outfile := filepath.Join(outDir, "tokcheck.txt")
+
+	assignment := &runnerv1.JobAssignment{
+		JobId:   "job-ghct-no-token",
+		LeaseId: "lease-ghct-no-token",
+		Spec: &runnerv1.JobSpec{
+			Executor:   "shell",
+			SecretRefs: []string{"github_clone_token"},
+			Steps: []*runnerv1.StepSpec{
+				{
+					Index: 0,
+					Name:  "check-ghct",
+					Command: []string{"sh", "-c",
+						"test -z \"$CICADO_GITHUB_TOKEN\" && echo ok > " + outfile + " || echo FAIL >> " + outfile},
+					Env: map[string]string{
+						"CICADO_GITHUB_TOKEN": "${{ secrets.github_clone_token }}",
+					},
+				},
+			},
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &captureTerminalStatus{}
+	ag.executeJob(ctx, assignment, sink.Send)
+
+	if !sink.sawTerminal() {
+		t.Fatal("no terminal StatusUpdate received")
+	}
+	if got := sink.terminalState(); got != runnerv1.StatusUpdate_SUCCEEDED {
+		t.Fatalf("expected SUCCEEDED, got %v — resolveOptionalSecrets B2 not applied", got)
+	}
+	data, err := os.ReadFile(outfile)
+	if err != nil {
+		t.Fatalf("could not read output %s: %v", outfile, err)
+	}
+	if string(data) != "ok\n" {
+		t.Errorf("expected 'ok\\n', got %q", string(data))
+	}
+}
+
+// fakeSecretsWhitespace returns a github_clone_token value that is
+// whitespace-only.  This exercises the B2 normalisation.
+type fakeSecretsWhitespace struct{}
+
+func (f *fakeSecretsWhitespace) GetJobSecrets(_ context.Context, _ *runnerv1.GetJobSecretsRequest, _ ...grpc.CallOption) (*runnerv1.GetJobSecretsResponse, error) {
+	return &runnerv1.GetJobSecretsResponse{Secrets: map[string]string{"github_clone_token": "   \t\n "}}, nil
+}
+
+func TestGithubCloneTokenWhitespaceJobSucceeds(t *testing.T) {
+	ag := newTestAgent(t)
+	ag.secrets = &fakeSecretsWhitespace{}
+
+	outDir := t.TempDir()
+	outfile := filepath.Join(outDir, "wscheck.txt")
+
+	assignment := &runnerv1.JobAssignment{
+		JobId:   "job-ghct-ws",
+		LeaseId: "lease-ghct-ws",
+		Spec: &runnerv1.JobSpec{
+			Executor:   "shell",
+			SecretRefs: []string{"github_clone_token"},
+			Steps: []*runnerv1.StepSpec{
+				{
+					Index: 0,
+					Name:  "check-ws",
+					Command: []string{"sh", "-c",
+						"test -z \"$CICADO_GITHUB_TOKEN\" && echo ok > " + outfile + " || echo FAIL >> " + outfile},
+					Env: map[string]string{
+						"CICADO_GITHUB_TOKEN": "${{ secrets.github_clone_token }}",
+					},
+				},
+			},
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &captureTerminalStatus{}
+	ag.executeJob(ctx, assignment, sink.Send)
+
+	if !sink.sawTerminal() {
+		t.Fatal("no terminal StatusUpdate received")
+	}
+	if got := sink.terminalState(); got != runnerv1.StatusUpdate_SUCCEEDED {
+		t.Fatalf("expected SUCCEEDED for whitespace token, got %v", got)
+	}
+	data, err := os.ReadFile(outfile)
+	if err != nil {
+		t.Fatalf("could not read output %s: %v", outfile, err)
+	}
+	if string(data) != "ok\n" {
+		t.Errorf("for whitespace-only token, expected 'ok\\n', got %q", string(data))
 	}
 }

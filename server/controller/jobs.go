@@ -169,7 +169,7 @@ func (l *StoreLoader) LoadAll(ctx context.Context, repoID uuid.UUID, _ string) (
 	return out, nil
 }
 
-// ── workflow → JobSpec conversion ───────────────────────────────────────────────
+// ── Workflow→JobSpec conversion ───────────────────────────────────────────────
 
 // convertJobSpecs converts a parsed workflow into a slice of store.JobSpec
 // suitable for store.CreateJobSpecs.
@@ -201,7 +201,7 @@ func convertJobSpecs(w *workflow.Workflow, dag *workflow.DAG, gitCloneURL, gitRe
 		// workdir always sees an empty directory.
 		steps := convertSteps(j.Steps)
 		if gitCloneURL != "" {
-			steps = append([]store.StepSpec{cloneStepSpec(gitCloneURL, gitRef, gitSha)}, steps...)
+			steps = append([]store.StepSpec{cloneStepSpec(gitCloneURL, gitRef, gitSha, isFork)}, steps...)
 		}
 		spec := store.JobSpec{
 			Name:         name,
@@ -212,7 +212,7 @@ func convertJobSpecs(w *workflow.Workflow, dag *workflow.DAG, gitCloneURL, gitRe
 			MaxAttempts:  3,
 			Priority:     100,
 			Env:          envToJSON(j.Env),
-			SecretRefs:   secretRefsFor(j, isFork),
+			SecretRefs:   secretRefsFor(j, isFork, gitCloneURL),
 			GitCloneURL:  gitCloneURL,
 			GitRef:       gitRef,
 			GitSha:       gitSha,
@@ -242,15 +242,42 @@ func envToJSON(env map[string]string) []byte {
 	return b
 }
 
+// gitCredentialHelper is the git credential helper string used to
+// inject CICADO_GITHUB_TOKEN into git's HTTP credential flow (CIC-148 B3).
+//
+// Exposed as a package constant so that B3 tests can drive
+// `git -c credential.helper=<const> credential fill` without
+// parsing the generated script.
+//
+// The `!f() { ... }; f` syntax tells git to run /bin/sh -c on the
+// helper text, sourcing the function and calling it.  The
+// password field reads CICADO_GITHUB_TOKEN from the step env.
+const gitCredentialHelper = `!f() { echo username=x-access-token; echo password="$CICADO_GITHUB_TOKEN"; }; f`
+
+// githubCloneTokenSecretName is the secrets-store key under which a GitHub
+// installation access token (used to clone a private repo) is stored by the
+// operator and fetched via GetJobSecrets, injected into the runner's
+// CICADO_GITHUB_TOKEN step env, and consumed by the git credential helper
+// in buildCloneScript.  The token value is NEVER stored on the step, in
+// the job row's `env` column, or in the clone URL; it flows to the runner
+// only via the lease-scoped GetJobSecrets RPC and is registered in the
+// redaction masker so it never appears in job logs.
+const githubCloneTokenSecretName = "github_clone_token"
+
 // secretRefsFor returns the distinct, sorted list of secret NAMES a job
-// references, extracted from the job-level env AND every step's env. Each
+// references, extracted from the job-level env AND every step's env.  Each
 // step's env is evaluated independently so two steps that happen to use the
 // same key with different secret refs both contribute their name.  Secret
 // VALUES are never stored here; only the NAME list is, persisted in
 // `secret_refs` and authorized by GetJobSecrets against the live lease.
-// A fork-PR job (isFork=true) returns nil unconditionally, regardless of the
-// workflow text — the defense-in-depth backstop on top of ForkPolicy.Apply.
-func secretRefsFor(j *workflow.Job, isFork bool) []string {
+//
+// CIC-148: when gitCloneURL is non-empty (job has a git context) and the
+// run is a non-fork PR, `github_clone_token` is added so the server can
+// deliver a per-repo GitHub token to the runner via GetJobSecrets.  Fork
+// PR runs get NO secrets unconditionally — the defense-in-depth backstop
+// on top of ForkPolicy.Apply: `secretRefsFor` returns nil for fork jobs
+// regardless of the workflow text.
+func secretRefsFor(j *workflow.Job, isFork bool, gitCloneURL string) []string {
 	if isFork {
 		return nil
 	}
@@ -262,6 +289,14 @@ func secretRefsFor(j *workflow.Job, isFork bool) []string {
 		for _, n := range secretexpr.Refs(step.Env) {
 			seen[n] = struct{}{}
 		}
+	}
+	// CIC-148: when the job has a git context (gitCloneURL != "") and is not
+	// a fork, the runner needs a per-repo GitHub token.  The token value
+	// is NEVER stored in the step command or the job row's env column;
+	// it is fetched only via GetJobSecrets and injected as
+	// CICADO_GITHUB_TOKEN into the checkout step's env.
+	if gitCloneURL != "" {
+		seen[githubCloneTokenSecretName] = struct{}{}
 	}
 	if len(seen) == 0 {
 		return nil
@@ -277,36 +312,55 @@ func secretRefsFor(j *workflow.Job, isFork bool) []string {
 // cloneStepSpec builds a synthetic store.StepSpec that fetches and checks out
 // the commit to build as the first step of a job when git context is available.
 //
-// CIC-148: without this, JobAssignment.Git was ignored by the runner and every
+// CIC-148: for a non-fork PR with a git context, a CICADO_GITHUB_TOKEN step
+// env is injected pointing at the github_clone_token secret.  The runner's
+// fetchJobSecrets resolves it via the lease-scoped GetJobSecrets RPC; the
+// git credential helper in buildCloneScript reads it from $CICADO_GITHUB_
+// TOKEN.  Fork PR runs get NO token — the step env is nil.
+//
+// CIC-147: without this, JobAssignment.Git was ignored by the runner and every
 // workflow step ran in an empty workdir.  We emit one shell command that runs
 // the whole checkout so the output streams directly to the job logs via the
 // normal RunStep path.
 //
-// Credentials: the URL is a plain https clone URL with no token in it.  Steps
-// are persisted in the `steps` table and sent in the assignment, so a token
-// must never be embedded in Command; secrets reach the runner only through the
-// lease-scoped GetJobSecrets.  Private-repo clones therefore need a follow-up
-// that feeds an installation token from the lease to a git credential helper.
-func cloneStepSpec(cloneURL, ref, sha string) store.StepSpec {
-	return store.StepSpec{
+// Credentials: the URL is a plain https clone URL with no token in it.  The
+// token is stored as a job secret (github_clone_token) and reached via
+// GetJobSecrets RPC — NEVER embedded in Command (the steps table is
+// readable by all runners, so a token there would leak on any job
+// assignment).  See CLAUDE.md "Security invariants".
+func cloneStepSpec(cloneURL, ref, sha string, isFork bool) store.StepSpec {
+	spec := store.StepSpec{
 		Name:    "checkout",
 		Command: []string{"/bin/sh", "-ec", buildCloneScript(cloneURL, ref, sha)},
 	}
+	// Fork PR runs: no token, no credential — the clone uses whatever
+	// public access the repo has.
+	if !isFork && cloneURL != "" {
+		spec.Env = []byte(`{"CICADO_GITHUB_TOKEN":"${{ secrets.github_clone_token }}"}`)
+	}
+	return spec
 }
 
 // buildCloneScript generates the POSIX /bin/sh script for the checkout step:
 //
 //	git init -q .
 //	git remote add origin <url>
+//	git credential.helper '!f() { echo username="x-access-token"; echo password="$CICADO_GITHUB_TOKEN"; }; f'
 //	git fetch --depth 1 origin <sha, else ref>
 //	git checkout -q FETCH_HEAD
 //
+// CIC-148: if the step's env contains CICADO_GITHUB_TOKEN (injected by the
+// controller for non-fork runs with a GitHub context, resolved by the
+// runner via GetJobSecrets), the clone uses it as a credential via
+// `git credential.helper`.  For fork PR runs the step has no
+// CICADO_GITHUB_TOKEN; the credential-helper line still runs but the
+// password field will be empty, and the fetch will fail on private
+// repos — this is the desired behaviour (fork runs get no secrets).
+//
 // It fetches exactly the commit to build instead of cloning the default
-// branch and then checking out <ref>: `git clone --depth 1` implies
-// --single-branch, so a later `git checkout <ref>` of any non-default branch
-// or PR ref fails.  The SHA is preferred because it pins the exact commit the
-// event named; the ref is the fallback, then HEAD.  Every argument is
-// single-quoted via shellQuote to prevent shell injection.
+// branch: `git clone --depth 1` implies `--single-branch`, so a later
+// `git checkout <ref>` of any non-default branch or PR ref fails.
+// Every argument is single-quoted via shellQuote to prevent shell injection.
 func buildCloneScript(url, ref, sha string) string {
 	target := sha
 	if target == "" {
@@ -315,10 +369,20 @@ func buildCloneScript(url, ref, sha string) string {
 	if target == "" {
 		target = "HEAD"
 	}
+	// CIC-148 N1+B2: build the conditional clone script.  N1: git -c
+	// credential.helper (not git config).  B2: guard on CICADO_GITHUB_TOKEN
+	// being non-empty so that absent/whitespace tokens fall through to the
+	// anonymous git fetch path.  fetchSubcmd omits the leading git so that
+	// the then-branch is git -c ... fetch ... (not git ... git ... fetch ...).
+	fetchSubcmd := "fetch --depth 1 origin " + shellQuote(target)
 	var sb strings.Builder
 	sb.WriteString("git init -q .\n")
 	sb.WriteString("git remote add origin " + shellQuote(url) + "\n")
-	sb.WriteString("git fetch --depth 1 origin " + shellQuote(target) + "\n")
+	sb.WriteString("if [ -n \"$CICADO_GITHUB_TOKEN\" ]; then\n")
+	sb.WriteString("\tgit -c credential.helper='" + gitCredentialHelper + "' " + fetchSubcmd + "\n")
+	sb.WriteString("else\n")
+	sb.WriteString("\tgit " + fetchSubcmd + "\n")
+	sb.WriteString("fi\n")
 	sb.WriteString("git checkout -q FETCH_HEAD\n")
 	return sb.String()
 }

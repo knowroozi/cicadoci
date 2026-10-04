@@ -13,14 +13,26 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"cicadoci.com/cicado/internal/secretexpr"
+
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
 )
+
+// githubCloneTokenSecretName is the canonical secrets-store key for the
+// per-repo GitHub token used to clone private repositories (CIC-148).
+//
+// This name is treated as a reserved *optional* secret: if it is absent
+// from the secrets map, the runner sets CICADO_GITHUB_TOKEN to "" and
+// the step does NOT fail as secret_unavailable.  This prevents every
+// non-fork run against a public repository from failing at checkout when
+// the operator has not provisioned a token.
+const githubCloneTokenSecretName = "github_clone_token"
 
 // secretsClient is the narrow surface the runner needs from the gRPC client to
 // deliver secrets. The generated RunnerServiceClient satisfies it; extracting
@@ -86,10 +98,19 @@ func unresolvedSecrets(raw, secrets map[string]string) []string {
 	seen := make(map[string]struct{})
 	for _, v := range raw {
 		// NamesIn reports every reference in a value, including embedded
-		// `${{ secrets.NAME }}` occurrences (CIC-135) and the bare whole-value
-		// form. A name that is present in secrets was delivered and is dropped.
+		// ${{ secrets.NAME }} occurrences (CIC-135) and the bare whole-value
+		// form. A name that is present in secrets was delivered and is
+		// dropped.
+		//
+		// CIC-148: github_clone_token is a reserved *optional* secret.
+		// When absent it is NOT flagged as unresolved: the runner sets
+		// CICADO_GITHUB_TOKEN to "" so the clone falls back to anonymous
+		// access (public repos, or unconfigured private repos fail naturally).
 		for _, name := range secretexpr.NamesIn(v) {
 			if _, delivered := secrets[name]; !delivered {
+				if name == githubCloneTokenSecretName {
+					continue
+				}
 				seen[name] = struct{}{}
 			}
 		}
@@ -102,5 +123,53 @@ func unresolvedSecrets(raw, secrets map[string]string) []string {
 		out = append(out, n)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// resolveOptionalSecrets normalises the reserved optional secret
+// github_clone_token in stepEnv.  See CIC-148 B2 and B4.
+//
+// stepRaw is the PRE-resolution env map (templates as written by the
+// controller); stepEnv is the POST-resolution map (values delivered by
+// GetJobSecrets).  The function blanks CICADO_GITHUB_TOKEN to "" ONLY
+// when the raw value references github_clone_token AND the token is not
+// present (absent or whitespace-only) in secrets.  A user's own
+// CICADO_GITHUB_TOKEN that references a different secret name or is a
+// literal must survive unchanged (B4).
+//
+// Returns a new map; neither stepEnv nor stepRaw is mutated.
+func resolveOptionalSecrets(stepEnv, stepRaw map[string]string, secrets map[string]string) map[string]string {
+	_, hasKey := stepEnv["CICADO_GITHUB_TOKEN"]
+	if !hasKey {
+		return stepEnv // no CICADO_GITHUB_TOKEN key — leave everything alone
+	}
+	rawVal, ok := stepRaw["CICADO_GITHUB_TOKEN"]
+	if !ok {
+		return stepEnv // no raw template — resolved from job-level env, leave as-is
+	}
+	// B4: only blank when the raw value actually references the reserved
+	// github_clone_token name.  A user's own CICADO_GITHUB_TOKEN that
+	// references a different secret (e.g. my_pat) or a literal string
+	// must survive.
+	hasCloneRef := false
+	for _, n := range secretexpr.NamesIn(rawVal) {
+		if n == githubCloneTokenSecretName {
+			hasCloneRef = true
+			break
+		}
+	}
+	if !hasCloneRef {
+		return stepEnv
+	}
+	// The raw value DOES reference github_clone_token.  Check presence.
+	val, present := secrets[githubCloneTokenSecretName]
+	if present && strings.TrimSpace(val) != "" {
+		return stepEnv // real token delivered — pass through
+	}
+	out := make(map[string]string, len(stepEnv)+1)
+	for k, v := range stepEnv {
+		out[k] = v
+	}
+	out["CICADO_GITHUB_TOKEN"] = ""
 	return out
 }

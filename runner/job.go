@@ -212,6 +212,12 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 		// of spec.GetEnv() so each step's raw env carries the git coordinates.
 		stepRaw := mergeEnv(job.Env, step.GetEnv())
 		stepEnv := secretexpr.Resolve(stepRaw, secrets)
+		// CIC-148: normalise optional reserved secrets (github_clone_token).
+		// When the token is absent or whitespace-only, the runner sets
+		// CICADO_GITHUB_TOKEN to "" so the clone script falls back to
+		// anonymous access (public repos, or unconfigured private repos
+		// fail naturally).
+		stepEnv = resolveOptionalSecrets(stepEnv, stepRaw, secrets)
 		// (should-fix #3, Dwight #91): a missing/unavailable secret must surface as a
 		// clear error, not a confusing downstream auth failure at step runtime.
 		if missing := unresolvedSecrets(stepRaw, secrets); len(missing) > 0 {
