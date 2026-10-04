@@ -45,6 +45,7 @@ Without Docker, `make test-e2e` runs the same end-to-end path natively against a
 Start at [`project-docs/README.md`](project-docs/README.md), which indexes:
 
 - [Project plan](project-docs/01-project-plan.md) — scope, milestones, estimates, risks, MVP exit criteria
+- [Development & operator config](docs/development.md#required-server-configuration-fail-closed) — fail-closed env vars and API Bearer auth for running the stack
 - [Architecture](project-docs/02-architecture.md) — components, data model, queue, security baseline
 - [Frontend approach](project-docs/03-frontend-approach.md) — the no-build strategy
 - [Runner protocol](project-docs/04-runner-protocol.md) — streams, leases, reconnect/resume, versioning

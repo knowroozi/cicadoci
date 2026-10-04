@@ -73,6 +73,36 @@ land (CIC-13). That is deliberate: the protocol is gRPC over TLS with no
 plaintext fallback, and a misconfigured production runner should fail loudly
 rather than stream job output and credentials in the clear.
 
+## Required server configuration (fail-closed)
+
+As of the fail-closed hardening (re: CIC-150 / PR #116; re: CIC-159 / PR #119), a
+production `cicado-server` **refuses to start** unless each secret below is supplied via its
+environment variable. The matching flags are **development-only opt-outs** with **empty
+defaults**: since re: CIC-159 every secret/token value is read from the environment
+(`envSecret`, after `flag.Parse()`) so it never leaks into the flag usage text or the
+process listing, so the flags themselves carry no value and you should not set them in
+production.
+
+| Concern | Env var (required in production) | Dev-only opt-out | Behavior when unset & opt-out not passed |
+|---|---|---|---|
+| Webhook signature verification | `CICADO_WEBHOOK_SECRET` | `--insecure-webhook` (env `CICADO_INSECURE_WEBHOOK`) | refuses startup — see [Webhook signing](#webhook-signing) |
+| API bearer authentication | `CICADO_API_TOKEN` | `--insecure-api` (env `CICADO_INSECURE_API`) | refuses startup |
+| Secrets-store encryption | `CICADO_SECRET_KEY` (64 hex chars = 32-byte AES-256 key) | `--allow-ephemeral-key` (env `CICADO_ALLOW_EPHEMERAL_KEY`) | refuses startup unless you accept a non-persistent random key |
+
+Two consequences for operators:
+
+- **API auth now requires a Bearer token.** Every `/api/v1/*` call — *including the
+  live-logs SSE stream* (re: CIC-82) — must carry `Authorization: Bearer <token>`. Only
+  `/healthz`, `/readyz`, and the webhook delivery route stay exempt. An empty/absent token
+  is fail-open **only** when `--insecure-api` is set explicitly; otherwise the server
+  refuses to start.
+- **Read the three secrets from the environment in production.** Set `CICADO_WEBHOOK_SECRET`,
+  `CICADO_API_TOKEN`, and `CICADO_SECRET_KEY`; pass `--insecure-webhook`, `--insecure-api`,
+  or `--allow-ephemeral-key` (or the `CICADO_INSECURE_*` / `CICADO_ALLOW_EPHEMERAL_KEY`
+  env vars) **only** in local `make dev`, where the signing secrets are not configured.
+  `-dev-seed` additionally permits the ephemeral key, so dev-mode secrets do **not** survive
+  a restart; set `CICADO_SECRET_KEY` for a persistent key.
+
 ## Webhook signing
 
 A production `cicado-server` always reads `CICADO_WEBHOOK_SECRET` and verifies
