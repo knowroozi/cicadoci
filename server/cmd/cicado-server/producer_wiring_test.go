@@ -23,11 +23,14 @@ import (
 // TestNewWorkflowProducer_EmptyTokenIsNil: no --github-workflow-token means no
 // producer, as an untyped nil so the controller's `Producer != nil` gate is off.
 func TestNewWorkflowProducer_EmptyTokenIsNil(t *testing.T) {
-	if p := newWorkflowProducer("", nil, nil, nil); p != nil {
-		t.Fatalf("empty token: producer = %#v, want nil", p)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// No minter, empty token => untyped nil.
+	if p := newWorkflowProducer(nil, "", nil, log, nil); p != nil {
+		t.Fatalf("no minter, empty token: producer = %#v, want nil", p)
 	}
-	if p := newWorkflowProducer("github_pat_x", nil, nil, nil); p == nil {
-		t.Fatal("non-empty token: producer is nil")
+	// No minter, non-empty token => CIC-120 PAT path.
+	if p := newWorkflowProducer(nil, "github_pat_x", nil, log, nil); p == nil {
+		t.Fatal("no minter, non-empty token: producer is nil")
 	}
 }
 
@@ -104,7 +107,7 @@ func TestWorkflowProducerWiring_DefaultBranchPushSyncs(t *testing.T) {
 	cfg := controller.DefaultConfig()
 	cfg.DefaultBranch = "main"
 	cfg.WorkflowLoader = controller.NewStoreLoader(st, log)
-	cfg.Producer = newWorkflowProducer(token, st, log,
+	cfg.Producer = newWorkflowProducer(nil, token, st, log,
 		&http.Client{Transport: redirectTransport{target: target}})
 	if cfg.Producer == nil {
 		t.Fatal("producer is nil with a token set")
@@ -191,7 +194,7 @@ func TestWorkflowProducerWiring_ListingNotFoundKeepsRows(t *testing.T) {
 	cfg := controller.DefaultConfig()
 	cfg.DefaultBranch = "main"
 	cfg.WorkflowLoader = controller.NewStoreLoader(st, log)
-	cfg.Producer = newWorkflowProducer("github_pat_test", st, log,
+	cfg.Producer = newWorkflowProducer(nil, "github_pat_test", st, log,
 		&http.Client{Transport: redirectTransport{target: target}})
 	ctrl := controller.New(st, controller.NoOpForge{}, cfg, log)
 
@@ -218,5 +221,158 @@ func TestWorkflowProducerWiring_ListingNotFoundKeepsRows(t *testing.T) {
 	}
 	if len(rows) != 2 {
 		t.Fatalf("repo workflows after listing 404 = %d, want 2 (nothing pruned)", len(rows))
+	}
+}
+
+// TestWorkflowProducerWiring_MinterPathSyncs drives the CIC-180 minter path:
+// a minterFunc that returns a per-call token is used to fetch workflow YAMLs,
+// and the controller's Producer gate is set via NewGitHubWorkflowProducerWithMinter.
+func TestWorkflowProducerWiring_MinterPathSyncs(t *testing.T) {
+	st := testdb.New(t)
+	ctx := context.Background()
+
+	const mintedToken = "ghs_minter_x"
+	const ciYAML = "name: ci\non:\n  push: {}\njobs:\n  build:\n    runs-on: shell\n    steps: [run: \"echo minter\"]\n"
+	var authOK atomic.Int32
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer "+mintedToken {
+			authOK.Add(1)
+		}
+		if r.URL.Query().Get("ref") != "deadbeef" {
+			http.Error(w, "wrong ref", http.StatusBadRequest)
+			return
+		}
+		switch r.URL.Path {
+		case "/repos/acme/widgets/contents/.cicado/workflows":
+			_ = json.NewEncoder(w).Encode([]map[string]string{
+				{"name": "ci.yaml", "path": ".cicado/workflows/ci.yaml", "type": "file"},
+			})
+		case "/repos/acme/widgets/contents/.cicado/workflows/ci.yaml":
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"name": "ci.yaml", "path": ".cicado/workflows/ci.yaml", "type": "file",
+				"content": base64.StdEncoding.EncodeToString([]byte(ciYAML)),
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gh.Close()
+	target, _ := url.Parse(gh.URL)
+
+	orgID, err := st.UpsertOrg(ctx, "acme", "Acme")
+	if err != nil {
+		t.Fatalf("upsert org: %v", err)
+	}
+	repoID, err := st.FindOrCreateRepo(ctx, orgID, "github", "acme", "widgets", "main")
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := controller.DefaultConfig()
+	cfg.DefaultBranch = "main"
+	cfg.WorkflowLoader = controller.NewStoreLoader(st, log)
+	// CIC-180: per-call minter returns the minted token for any repoID.
+	cfg.Producer = controller.NewGitHubWorkflowProducerWithMinter(
+		controller.MinterFunc(func(_ context.Context, _ string) (string, error) {
+			return mintedToken, nil
+		}),
+		st, log, &http.Client{Transport: redirectTransport{target: target}})
+	if cfg.Producer == nil {
+		t.Fatal("producer is nil with minter set")
+	}
+	ctrl := controller.New(st, controller.NoOpForge{}, cfg, log)
+
+	var push webhook.PushPayload
+	if err := json.Unmarshal([]byte(`{
+        "ref": "refs/heads/main",
+        "after": "deadbeef",
+        "head_commit": {"id": "deadbeef"},
+        "repository": {"full_name": "acme/widgets", "default_branch": "main"},
+        "pusher": {"email": "u@acme.com"}
+      }`), &push); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if err := ctrl.HandlePush(push); err != nil {
+		t.Fatalf("HandlePush: %v", err)
+	}
+
+	if authOK.Load() == 0 {
+		t.Error("no request to GitHub carried the minted token")
+	}
+	rows, err := st.ListWorkflowsForRepo(ctx, repoID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Path != ".cicado/workflows/ci.yaml" {
+		t.Fatalf("repo workflows = %d, want 1 (ci.yaml)", len(rows))
+	}
+	if !strings.Contains(rows[0].Source, "echo minter") {
+		t.Errorf("ci.yaml source not stored: %q", rows[0].Source)
+	}
+}
+
+// TestWorkflowProducerWiring_MinterEmptyTokenSkips: when the minter returns
+// an empty string (repo has no GitHub App installation), the producer is a
+// no-op — the existing store rows are left untouched and no HTTP call is made.
+func TestWorkflowProducerWiring_MinterEmptyTokenSkips(t *testing.T) {
+	st := testdb.New(t)
+	ctx := context.Background()
+
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("minter returned empty token; no HTTP call should be made (got %s)", r.URL.Path)
+	}))
+	defer gh.Close()
+	target, _ := url.Parse(gh.URL)
+
+	orgID, err := st.UpsertOrg(ctx, "acme", "Acme")
+	if err != nil {
+		t.Fatalf("upsert org: %v", err)
+	}
+	repoID, err := st.FindOrCreateRepo(ctx, orgID, "github", "acme", "widgets", "main")
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	def, _ := json.Marshal(&workflow.Workflow{Name: "old"})
+	if _, err := st.UpsertWorkflow(ctx, store.WorkflowInput{
+		RepoID:     repoID,
+		Name:       "old-deploy",
+		Path:       ".cicado/workflows/old-deploy.yml",
+		Definition: def,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := controller.DefaultConfig()
+	cfg.DefaultBranch = "main"
+	cfg.WorkflowLoader = controller.NewStoreLoader(st, log)
+	// Minter returns "" → no fetch.
+	cfg.Producer = controller.NewGitHubWorkflowProducerWithMinter(
+		controller.MinterFunc(func(_ context.Context, _ string) (string, error) {
+			return "", nil
+		}),
+		st, log, &http.Client{Transport: redirectTransport{target: target}})
+	ctrl := controller.New(st, controller.NoOpForge{}, cfg, log)
+
+	var push webhook.PushPayload
+	_ = json.Unmarshal([]byte(`{
+        "ref": "refs/heads/main",
+        "after": "deadbeef",
+        "head_commit": {"id": "deadbeef"},
+        "repository": {"full_name": "acme/widgets", "default_branch": "main"},
+        "pusher": {"email": "u@acme.com"}
+      }`), &push)
+	if err := ctrl.HandlePush(push); err != nil {
+		t.Fatalf("HandlePush: %v", err)
+	}
+
+	// Existing row is untouched.
+	rows, err := st.ListWorkflowsForRepo(ctx, repoID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row (old-deploy.yml untouched), got %d", len(rows))
 	}
 }

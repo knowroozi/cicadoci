@@ -9,6 +9,13 @@
 // workflows.  A nil producer is a no-op: the controller uses whatever
 // workflows are already in the store (the dev-seed path).
 //
+// CIC-180: GitHubWorkflowProducer now supports per-call installation
+// token minting (MinterFunc). When the GitHub App path is configured
+// (--github-app-id + --github-app-key-file), each Produce mints a
+// short-lived installation access token via github.InstallationTokenMinter,
+// resolving the per-repo installation ID from repos.installation_id
+// (stamped by CIC-146 P2 / PR #131).
+//
 // #89 provides store.UpsertWorkflow(ctx, store.WorkflowInput{...}). The
 // producer uses that method via the narrow store.Interface it needs.
 package controller
@@ -36,27 +43,47 @@ import (
 // and skips the fetch, relying on the store loader.
 type WorkflowProducer interface {
 	// Produce fetches workflow YAML for owner/repo at ref (SHA or branch),
-	// parses each file, and upserts it.  When the workflow directory 404s,
+	// parses each file, and upserts it. When the workflow directory 404s,
 	// Produce returns nil without error and leaves stored rows untouched.
 	Produce(ctx context.Context, owner, repo, ref string, repoID uuid.UUID) error
 }
 
+// MinterFunc mints a GitHub installation access token for a specific repo
+// on demand. It is called once per Produce call.
+//
+// Returns ("", nil) when the repo has no GitHub App installation
+// (no GitHub App installation for this repo).
+//
+// The function must be safe for concurrent calls.
+type MinterFunc func(ctx context.Context, repoID string) (string, error)
+
 // GitHubWorkflowProducer is the GitHub-backed WorkflowProducer.
 //
-// It uses a github.WorkflowFetcher with a Bearer token to fetch
-// .cicado/workflows/*.yaml at the given ref, parses each file with
-// server/workflow/parse, and upserts the JSON-encoded workflow.
+// It fetches .cicado/workflows/*.yaml at a given ref, parses each file
+// with server/workflow/parse, and upserts the JSON-encoded workflow.
+//
+// Token source:
+//   - When MinterFunc is non-nil, a fresh per-installation token is minted
+//     per call (CIC-180 / CIC-146). See github.InstallationTokenMinter.
+//     The HTTPClient field is used to construct the per-call fetcher.
+//   - Otherwise a static BearerToken fetcher (fetcher) is reused (CIC-120:
+//     a long-lived fine-grained PAT, suitable for short-lived dev servers).
 type GitHubWorkflowProducer struct {
 	fetcher      *github.WorkflowFetcher
+	httpClient   *http.Client
 	store        store.WorkflowStore
 	log          *slog.Logger
 	MaxFetchTime time.Duration
+	// MinterFunc, when non-nil, mints a fresh GitHub installation
+	// access token per Produce call using per-repo installation IDs.
+	MinterFunc MinterFunc
 }
 
 // NewGitHubWorkflowProducer creates a producer that fetches from GitHub
-// using the given static token. cicado-server passes a long-lived
-// fine-grained PAT (CIC-120); a GitHub App installation token would expire
-// after 1 h. Per-call installation-token minting is CIC-146.
+// using a static Bearer token (CIC-120). A GitHub App installation token
+// expires after ~1 h, so this constructor is for environments that
+// configure a long-lived fine-grained PAT. Per-call token minting is
+// available via NewGitHubWorkflowProducerWithMinter (CIC-180).
 //
 // httpClient may be nil (a default client is used).
 func NewGitHubWorkflowProducer(
@@ -70,9 +97,37 @@ func NewGitHubWorkflowProducer(
 	}
 	return &GitHubWorkflowProducer{
 		fetcher:      github.NewWorkflowFetcher(token, httpClient),
+		httpClient:   httpClient,
 		store:        st,
 		log:          log,
 		MaxFetchTime: 15 * time.Second,
+	}
+}
+
+// NewGitHubWorkflowProducerWithMinter creates a producer that mints a
+// fresh GitHub App installation access token per Produce call via
+// minterFunc. The per-repo installation ID is resolved by minterFunc
+// using repos.installation_id (stamped by CIC-146 P2 / PR #131).
+//
+// A new github.WorkflowFetcher is constructed for each call (the
+// minter may return a different token each time), using httpClient.
+//
+// httpClient may be nil (a default client is used).
+func NewGitHubWorkflowProducerWithMinter(
+	minterFunc MinterFunc,
+	st store.WorkflowStore,
+	log *slog.Logger,
+	httpClient *http.Client,
+) *GitHubWorkflowProducer {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &GitHubWorkflowProducer{
+		httpClient:   httpClient,
+		store:        st,
+		log:          log,
+		MaxFetchTime: 15 * time.Second,
+		MinterFunc:   minterFunc,
 	}
 }
 
@@ -80,22 +135,29 @@ func NewGitHubWorkflowProducer(
 
 // Produce fetches, parses, and upserts workflow YAML for the given repo.
 //
+// Token resolution:
+//   - If MinterFunc is non-nil, a fresh installation token is minted per
+//     call and a new WorkflowFetcher is constructed for that token.
+//   - If MinterFunc is nil and fetcher is non-nil, the static-token fetcher
+//     is reused (CIC-120 PAT path).
+//   - If both MinterFunc and fetcher are nil, Produce is a no-op.
+//
 // A 404 at .cicado/workflows/ returns nil and changes nothing (no prune).
 // A parse error on one file is logged but does not abort the others.
-// ref should be the SHA from the push event.  Empty ref => "main".
+// ref should be the SHA from the push event. Empty ref => "main".
 func (p *GitHubWorkflowProducer) Produce(
 	ctx context.Context,
 	owner, repo, ref string,
 	repoID uuid.UUID,
 ) error {
-	if p.fetcher == nil || p.store == nil {
+	if p.store == nil {
 		return nil
 	}
+	// Caller responsibility: ref must be the commit SHA from the
+	// push event. A fallback to "main" would fetch the latest master
+	// regardless of the actual ref, so we skip rather than silently
+	// using the wrong content.
 	if ref == "" {
-		// Caller responsibility: ref must be the commit SHA from the
-		// push event.  A fallback to "main" would fetch the latest
-		// master regardless of the actual ref, so we log a warning and
-		// skip rather than silently using the wrong content.
 		p.log.Warn("producer: empty ref; skipping — caller must pass a SHA",
 			"owner", owner, "repo", repo)
 		return nil
@@ -106,12 +168,40 @@ func (p *GitHubWorkflowProducer) Produce(
 		defer cancel()
 	}
 
-	files, err := p.fetcher.FetchWorkflowFiles(ctx, owner, repo, ref)
+	// ── resolve token ───────────────────────────────────────────────────
+	var fetcher *github.WorkflowFetcher
+
+	if p.MinterFunc != nil {
+		// CIC-180: mint a fresh per-call installation token.
+		token, mErr := p.MinterFunc(ctx, repoID.String())
+		if mErr != nil {
+			p.log.Warn("producer: token mint failed; skipping",
+				"owner", owner, "repo", repo, "err", mErr)
+			return nil
+		}
+		if token == "" {
+			// No GitHub App installation for this repo: skip fetch, keep existing.
+			p.log.Debug("producer: no installation token for repo; keeping existing",
+				"owner", owner, "repo", repo)
+			return nil
+		}
+		// Construct a fresh fetcher with the minted token and stored
+		// HTTPClient (so tests can redirect to a local httptest server).
+		fetcher = github.NewWorkflowFetcher(token, p.httpClient)
+		p.log.Debug("producer: minted installation token",
+			"owner", owner, "repo", repo, "ref", ref)
+	} else if p.fetcher != nil {
+		// CIC-120: use the static-token fetcher.
+		fetcher = p.fetcher
+	} else {
+		return nil
+	}
+
+	files, err := fetcher.FetchWorkflowFiles(ctx, owner, repo, ref)
+	// A listing 404 is not proof the repo has no workflows: GitHub also
+	// returns 404 for a private repo the token cannot read. Pruning here
+	// would delete every row for the repo, so leave the rows alone.
 	if errors.Is(err, github.ErrWorkflowDirNotFound) {
-		// A listing 404 is not proof the repo has no workflows: GitHub also
-		// returns 404 for a private repo the token cannot read. Pruning here
-		// would delete every row for the repo, so leave the rows alone. A
-		// genuinely removed directory leaves stale rows until CIC-146.
 		p.log.Info("producer: workflow dir not found or not readable; keeping existing workflows",
 			"owner", owner, "repo", repo, "ref", ref)
 		return nil
@@ -122,13 +212,12 @@ func (p *GitHubWorkflowProducer) Produce(
 		return nil
 	}
 
-	// CIC-120: prune rows for workflow files that are gone at this ref, so a
-	// file deleted from the repo stops triggering runs. The listing was read
-	// (not a 404), so files is the complete set present at the ref. A file
-	// that is listed but empty, or 404s on its own fetch, is not in files,
-	// so its row is pruned too. Every fetched path is
-	// kept, including files that fail to parse below: the file still exists,
-	// and its last good definition stays until it parses again.
+	// CIC-120: prune rows for workflow files that are gone at this ref, so
+	// a file deleted from the repo stops triggering runs. The listing was
+	// read (not a 404), so files is the complete set present at the ref.
+	// Every fetched path is kept, including files that fail to parse below:
+	// the file still exists and its last good definition stays until it
+	// parses again or the next fetch at a new ref prunes it.
 	present := make([]string, 0, len(files))
 	for _, f := range files {
 		present = append(present, f.Path)
@@ -167,7 +256,7 @@ func (p *GitHubWorkflowProducer) Produce(
 			Path:       wfFile.Path,
 			Source:     string(wfFile.Content),
 			Definition: jsonBytes,
-			ContentSHA: ref, // use the fetch ref as content_sha for dedup
+			ContentSHA: ref, // use the fetch ref as content_sha for dedup (CIC-120)
 		}
 		if _, err := p.store.UpsertWorkflow(ctx, in); err != nil {
 			p.log.Warn("producer: upsert failure; skipping",

@@ -359,22 +359,19 @@ func run() error {
 	// the safe default.
 	ctrlOpts.WorkflowLoader = controller.NewStoreLoader(st, log)
 
-	// CIC-120: wire the production workflow producer. When a token is
-	// configured, a push to the default branch syncs the repo's workflow files
-	// from the code host into the workflows table (upsert present files, delete
-	// removed ones) *before* the loader reads them. The #95 gates live in the
-	// controller (push on the default branch only; PRs never invoke the
-	// producer, so no fork-supplied definition reaches the shared repo row). An
-	// empty token leaves the producer nil and keeps the store/dev-seed path.
-	//
-	// TODO(CIC-146): the token is one static, long-lived fine-grained PAT.
-	// Mint GitHub App installation tokens per call and decode installation.id
-	// from the webhook instead.
-	if p := newWorkflowProducer(*githubWorkflowToken, st, log, &http.Client{Timeout: 20 * time.Second}); p != nil {
-		ctrlOpts.Producer = p
-		log.Info("workflow producer active",
-			"source", "github", "token_source", "CICADO_GITHUB_WORKFLOW_TOKEN")
-	}
+	// CIC-180: wire the per-call installation-token minter into the workflow
+	// producer (CIC-146 P2). When --github-app-id and --github-app-key-file
+	// are configured, each Produce call mints a short-lived installation
+	// access token scoped to the pushed-to repo via
+	// github.InstallationTokenMinter + repos.installation_id. The static
+	// fine-grained PAT (--github-workflow-token / CICADO_GITHUB_WORKFLOW_TOKEN)
+	// is a fallback for environments that do not use the GitHub App. PRs
+	// never invoke the producer (gates live in the push/PR handler), so no
+	// fork-supplied definition reaches the shared repo row. An unavailable
+	// minter + empty token leaves the producer nil (store/dev-seed path).
+	// B2: single builder — minter wins, PAT is fallback, untyped nil when neither.
+	httpClientProd := &http.Client{Timeout: 20 * time.Second}
+	ctrlOpts.Producer = newWorkflowProducer(minter, *githubWorkflowToken, st, log, httpClientProd)
 
 	ctrl = controller.New(st, newForge(*githubAppToken, log), ctrlOpts, log)
 
@@ -635,26 +632,46 @@ func envBool(key string, fallback bool) bool {
 	}
 }
 
-// newWorkflowProducer builds the GitHub workflow producer from the
-// --github-workflow-token value, or returns nil when the token is empty. The
-// return is an untyped nil in that case, so the controller's
-// `cfg.Producer != nil` check sees no producer (a typed nil *GitHubWorkflowProducer
-// in the interface would not compare equal to nil).
-func newWorkflowProducer(token string, st store.WorkflowStore, log *slog.Logger, httpClient *http.Client) controller.WorkflowProducer {
-	if token == "" {
-		return nil
-	}
-	return controller.NewGitHubWorkflowProducer(token, st, log, httpClient)
-}
-
 // newForge returns the forge the controller reports runs to: the GitHub
-// Checks API when token is set, otherwise a NoOp forge (CIC-81). No token
-// minter is wired yet, so the GitHub forge cannot mint clone credentials
-// (CIC-146).
+// Checks API when a token is set, otherwise a NoOp forge (CIC-81).  Clone
+// credential minting (CIC-151 / CIC-180) is handled by runnersvc, not the
+// forge.
 func newForge(token string, log *slog.Logger) forge.Forge {
 	if token == "" {
 		log.Warn("no --github-app-token: runs will not be reported to GitHub as checks")
 		return controller.NoOpForge{}
 	}
 	return forge.NewGitHubForge(githubpkg.NewChecksReporterAdapter(githubpkg.NewChecksClient(token, nil)))
+}
+
+// newWorkflowProducer wires the controller's workflow producer.
+// If a CloneMinterFunc (GitHub App installer) is supplied, it creates a producer that uses the minter (CIC‑180).
+// Otherwise, if a static token is given, it falls back to a static‑PAT producer (CIC‑120).
+func newWorkflowProducer(
+	minter runnersvc.CloneMinterFunc,
+	token string,
+	st store.WorkflowStore,
+	log *slog.Logger,
+	httpClient *http.Client,
+) controller.WorkflowProducer {
+	// CIC-180: per-call GitHub App installation-token minter.
+	// The runner's CloneMinterFunc is adapted to the controller's
+	// MinterFunc signature (repoID only; orgID and isFork are dropped
+	// since the resolver looks up installation_id by repoID and the
+	// producer is only called for non-fork push events).
+	if minter != nil {
+		prodMinter := controller.MinterFunc(func(ctx context.Context, repoID string) (string, error) {
+			return minter(ctx, "", repoID, false)
+		})
+		log.Info("workflow producer active (GitHub App minter)",
+			"source", "github", "token_source", "CICADO_GITHUB_APP_ID")
+		return controller.NewGitHubWorkflowProducerWithMinter(prodMinter, st, log, httpClient)
+	}
+	// CIC-120: static-PAT fallback.
+	if token == "" {
+		return nil
+	}
+	log.Info("workflow producer active (static PAT)",
+		"source", "github", "token_source", "CICADO_GITHUB_WORKFLOW_TOKEN")
+	return controller.NewGitHubWorkflowProducer(token, st, log, httpClient)
 }
