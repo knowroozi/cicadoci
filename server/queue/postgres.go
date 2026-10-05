@@ -740,7 +740,7 @@ UPDATE runs r
    SET status      = s.state,
        started_at  = coalesce(r.started_at, now()),
        finished_at = now()
-  FROM (SELECT bool_and(status IN ('succeeded', 'failed', 'cancelled', 'dead_letter')) AS done,
+  FROM (SELECT bool_and(status IN ('succeeded', 'failed', 'cancelled', 'skipped', 'dead_letter')) AS done,
                CASE WHEN bool_or(status IN ('failed', 'dead_letter')) THEN 'failed'
                     WHEN bool_or(status = 'cancelled')                THEN 'cancelled'
                     ELSE 'succeeded' END AS state

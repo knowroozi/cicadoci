@@ -404,7 +404,7 @@ func TestLoadAndCreateJobs_NilLoader(t *testing.T) {
 	// With no WorkflowLoader, LoadAndCreateJobs should be a no-op
 	// that returns nil.
 	c := New(nil, nil, Config{}, discardLogger)
-	err := c.LoadAndCreateJobs(context.Background(), uuid.New(), uuid.New(), "push", "main", "abc", "", false, "", "refs/heads/main")
+	err := c.LoadAndCreateJobs(context.Background(), uuid.New(), uuid.New(), "push", "main", "abc", "", false, "", "refs/heads/main", false)
 	if err != nil {
 		t.Error("LoadAndCreateJobs with nil loader should return nil, got:", err)
 	}
@@ -980,5 +980,339 @@ func TestMaybeOpenGate_F2_No_Call_When_Channel_Empty(t *testing.T) {
 	c.maybeOpenGate(context.Background(), uuid.New(), "acme", "widgets", payload)
 	if len(prov.calls) != 0 {
 		t.Fatalf("Expected 0 RequestApproval calls when channel empty, got %d", len(prov.calls))
+	}
+}
+
+// ── CIC-182: Gate dispatch blocking ────────────────────────────────────────────
+
+// TestGateHoldJobs_PendingBeforeApproval verifies that when CreateJobSpecs
+// with hold=true (the gate path), top-level jobs stay in "pending" and only
+// PromoteTopLevelJobs moves them to "queued", while dependent jobs are
+// never promoted (their status is driven by job_dependencies NOTIFY on
+// predecessor completion).
+func TestGateHoldJobs_PendingBeforeApproval(t *testing.T) {
+	st := testdb.New(t)
+	defer st.Close()
+	ctx := context.Background()
+
+	orgID, err := st.UpsertOrg(ctx, "acme", "Acme")
+	if err != nil {
+		t.Fatalf("upsert org: %v", err)
+	}
+	repoID, err := st.FindOrCreateRepo(ctx, orgID, "github", "acme", "widgets", "main")
+	if err != nil {
+		t.Fatalf("find or create repo: %v", err)
+	}
+	runID, _, err := st.CreateRun(ctx, store.CreateRunOptions{
+		RepoID:        repoID,
+		Event:         "pull_request",
+		Ref:           "main",
+		Sha:           "abc123",
+		Actor:         "pr-7",
+		TriggerSource: store.TriggerForge,
+		IsFork:        false,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	specs := []store.JobSpec{
+		{Name: "build", Executor: "shell", Priority: 100, TimeoutSec: 60},
+		{Name: "test", Executor: "shell", Needs: []string{"build"}, Priority: 100, TimeoutSec: 60},
+	}
+
+	// hold=true path: top-level jobs stay in "pending".
+	jobIDs, err := st.CreateJobSpecs(ctx, runID, specs, true)
+	if err != nil {
+		t.Fatalf("CreateJobSpecs(hold=true): %v", err)
+	}
+	if len(jobIDs) != 2 {
+		t.Fatalf("expected 2 job IDs, got %d", len(jobIDs))
+	}
+
+	var status string
+
+	// build should be "pending", not "queued".
+	if err := st.Pool().QueryRow(ctx,
+		`SELECT status FROM jobs WHERE id = $1`, jobIDs[0]).Scan(&status); err != nil {
+		t.Fatalf("query build job: %v", err)
+	}
+	if status != "pending" {
+		t.Errorf("gated top-level job status = %q; want %q", status, "pending")
+	}
+
+	// PromoteTopLevelJobs: build becomes "queued".
+	if err := st.PromoteTopLevelJobs(ctx, runID); err != nil {
+		t.Fatalf("PromoteTopLevelJobs: %v", err)
+	}
+	if err := st.Pool().QueryRow(ctx,
+		`SELECT status FROM jobs WHERE id = $1`, jobIDs[0]).Scan(&status); err != nil {
+		t.Fatalf("re-query build job: %v", err)
+	}
+	if status != "queued" {
+		t.Errorf("after PromoteTopLevelJobs, build status = %q; want %q", status, "queued")
+	}
+
+	// "test" (jobIDs[1]) has a dependency, so PromoteTopLevelJobs skips it.
+	if err := st.Pool().QueryRow(ctx,
+		`SELECT status FROM jobs WHERE id = $1`, jobIDs[1]).Scan(&status); err != nil {
+		t.Fatalf("query test job: %v", err)
+	}
+	if status != "pending" {
+		t.Errorf("dependent job status = %q; want %q", status, "pending")
+	}
+}
+
+// TestMaybeOpenGate_ReturnsTrueOnSuccess verifies that maybeOpenGate
+// returns true when a gate is opened successfully, and false when the
+// manager is nil or the channel is empty.
+func TestMaybeOpenGate_ReturnsTrueOnSuccess(t *testing.T) {
+	st := testdb.New(t)
+	defer st.Close()
+	prov := &recordingProvider{}
+	mgr := approvalgates.NewManager(prov, nil)
+	c := New(st, NoOpForge{}, Config{
+		ApprovalGates:    mgr,
+		ApprovalChannel:  "C12345",
+		ApprovalTimeout:  time.Hour,
+		AllowedApprovers: []string{"U001"},
+	}, discardLogger)
+	payload := webhook.PullRequestPayload{
+		PullRequest: webhook.PullRequest{Number: 42},
+		Action:      "opened",
+	}
+	if got := c.maybeOpenGate(context.Background(), uuid.New(), "acme", "widgets", payload); !got {
+		t.Errorf("maybeOpenGate should return true when gate is opened")
+	}
+}
+
+// TestDispatchAfterGate_DenyFailsJobs verifies that dispatchAfterGate with
+// GateDenied fails all held jobs and the run itself.
+func TestDispatchAfterGate_DenyFailsJobs(t *testing.T) {
+	st := testdb.New(t)
+	defer st.Close()
+	ctx := context.Background()
+
+	orgID, err := st.UpsertOrg(ctx, "acme", "Acme")
+	if err != nil {
+		t.Fatalf("upsert org: %v", err)
+	}
+	repoID, err := st.FindOrCreateRepo(ctx, orgID, "github", "acme", "widgets", "main")
+	if err != nil {
+		t.Fatalf("find or create repo: %v", err)
+	}
+	runID, _, err := st.CreateRun(ctx, store.CreateRunOptions{
+		RepoID:        repoID,
+		Event:         "pull_request",
+		Ref:           "main",
+		Sha:           "abc123",
+		Actor:         "pr-9",
+		TriggerSource: store.TriggerForge,
+		IsFork:        false,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	// Create jobs held (pending) for the run.
+	specs := []store.JobSpec{
+		{Name: "build", Executor: "shell", Priority: 100, TimeoutSec: 60},
+	}
+	_, err = st.CreateJobSpecs(ctx, runID, specs, true) // hold=true
+	if err != nil {
+		t.Fatalf("CreateJobSpecs(hold=true): %v", err)
+	}
+
+	// dispatchAfterGate with GateDenied should fail the job and the run.
+	c := New(st, NoOpForge{}, DefaultConfig(), discardLogger)
+	c.dispatchAfterGate(runID, approvalgates.GateDenied)
+
+	// Verify job is now "failed".
+	var status string
+	if err := st.Pool().QueryRow(ctx,
+		`SELECT status FROM jobs WHERE run_id = $1`, runID).Scan(&status); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "failed" {
+		t.Errorf("after deny, job status = %q; want %q", status, "failed")
+	}
+
+	// Verify run is failed.
+	run, err := st.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "failed" {
+		t.Errorf("after deny, run status = %q; want %q", run.Status, "failed")
+	}
+}
+
+// TestDispatchAfterGate_ApprovePromotesJobs verifies that dispatchAfterGate
+// with GateApproved promotes top-level jobs to "queued".
+func TestDispatchAfterGate_ApprovePromotesJobs(t *testing.T) {
+	st := testdb.New(t)
+	defer st.Close()
+	ctx := context.Background()
+
+	orgID, err := st.UpsertOrg(ctx, "acme", "Acme")
+	if err != nil {
+		t.Fatalf("upsert org: %v", err)
+	}
+	repoID, err := st.FindOrCreateRepo(ctx, orgID, "github", "acme", "widgets", "main")
+	if err != nil {
+		t.Fatalf("find or create repo: %v", err)
+	}
+	runID, _, err := st.CreateRun(ctx, store.CreateRunOptions{
+		RepoID:        repoID,
+		Event:         "pull_request",
+		Ref:           "main",
+		Sha:           "abc123",
+		Actor:         "pr-10",
+		TriggerSource: store.TriggerForge,
+		IsFork:        false,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	// Create jobs held (pending).
+	specs := []store.JobSpec{
+		{Name: "build", Executor: "shell", Priority: 100, TimeoutSec: 60},
+	}
+	_, err = st.CreateJobSpecs(ctx, runID, specs, true) // hold=true
+	if err != nil {
+		t.Fatalf("CreateJobSpecs(hold=true): %v", err)
+	}
+
+	c := New(st, NoOpForge{}, DefaultConfig(), discardLogger)
+	c.dispatchAfterGate(runID, approvalgates.GateApproved)
+
+	var status string
+	if err := st.Pool().QueryRow(ctx,
+		`SELECT status FROM jobs WHERE run_id = $1`, runID).Scan(&status); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "queued" {
+		t.Errorf("after approval, job status = %q; want %q", status, "queued")
+	}
+}
+
+// TestAwaitGateAndDispatch_ApprovalTimeoutZero verifies B1 fix: when
+// ApprovalTimeout is 0, awaitGateAndDispatch uses context.Background()
+// and blocks until the gate is manually resolved.
+func TestAwaitGateAndDispatch_ApprovalTimeoutZero(t *testing.T) {
+	st := testdb.New(t)
+	defer st.Close()
+	ctx := context.Background()
+
+	orgID, err := st.UpsertOrg(ctx, "acme", "Acme")
+	if err != nil {
+		t.Fatalf("upsert org: %v", err)
+	}
+	repoID, err := st.FindOrCreateRepo(ctx, orgID, "github", "acme", "widgets", "main")
+	if err != nil {
+		t.Fatalf("find or create repo: %v", err)
+	}
+	runID, _, err := st.CreateRun(ctx, store.CreateRunOptions{
+		RepoID:        repoID,
+		Event:         "pull_request",
+		Ref:           "main",
+		Sha:           "abc123",
+		Actor:         "pr-11",
+		TriggerSource: store.TriggerForge,
+		IsFork:        false,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	// Create a held job.
+	specs := []store.JobSpec{
+		{Name: "build", Executor: "shell", Priority: 100, TimeoutSec: 60},
+	}
+	_, _ = st.CreateJobSpecs(ctx, runID, specs, true) // hold=true
+
+	prov := &recordingProvider{}
+	mgr := approvalgates.NewManager(prov, nil)
+	c := New(st, NoOpForge{}, Config{
+		ApprovalGates:    mgr,
+		ApprovalChannel:  "C0001",
+		ApprovalTimeout:  0, // no auto-timeout
+		AllowedApprovers: []string{"U001"},
+	}, discardLogger)
+
+	// Open the gate.
+	c.maybeOpenGate(ctx, runID, "acme", "widgets", webhook.PullRequestPayload{
+		PullRequest: webhook.PullRequest{Number: 11},
+		Action:      "opened",
+	})
+
+	// Wait for the gate via the async path.
+	done := make(chan struct{})
+	go func() {
+		c.awaitGateAndDispatch(runID)
+		close(done)
+	}()
+
+	// Approve the gate manually via Resolve.
+	_ = mgr.Resolve(context.Background(), runID.String(), "U001", "approve")
+
+	// Wait for the gate handler to finish.
+	select {
+	case <-done:
+		// OK.
+	case <-time.After(5 * time.Second):
+		t.Fatal("awaitGateAndDispatch did not finish after Resolve(approve)")
+	}
+
+	// Verify the job was promoted to "queued" after approval.
+	var status string
+	if err2 := st.Pool().QueryRow(ctx,
+		`SELECT status FROM jobs WHERE run_id = $1`, runID).Scan(&status); err2 != nil {
+		t.Fatalf("query job: %v", err2)
+	}
+	if status != "queued" {
+		t.Errorf("after approval, job status = %q; want %q", status, "queued")
+	}
+}
+func TestHandlePullRequest_HoldsJobsWhenGate(t *testing.T) {
+	st := testdb.New(t)
+	defer st.Close()
+	ctx := context.Background()
+
+	// Seed org + repo so HandlePullRequest succeeds through resolveRepo.
+	orgID, err := st.UpsertOrg(ctx, "acme", "Acme")
+	if err != nil {
+		t.Fatalf("upsert org: %v", err)
+	}
+	_, err = st.FindOrCreateRepo(ctx, orgID, "github", "acme", "widgets", "main")
+	if err != nil {
+		t.Fatalf("find or create repo: %v", err)
+	}
+
+	prov := &recordingProvider{}
+	mgr := approvalgates.NewManager(prov, nil)
+	c := New(st, NoOpForge{}, Config{
+		ApprovalGates:    mgr,
+		ApprovalChannel:  "C0002",
+		ApprovalTimeout:  time.Hour,
+		AllowedApprovers: []string{"U001"},
+	}, discardLogger)
+
+	payload := webhook.PullRequestPayload{
+		PullRequest: webhook.PullRequest{Number: 12},
+		Action:      "opened",
+		Repository:  webhook.Repo{FullName: "acme/widgets"},
+	}
+
+	// HandlePullRequest should open a gate and the jobs should be held.
+	err = c.HandlePullRequest(payload)
+	if err != nil {
+		t.Fatalf("HandlePullRequest: %v", err)
+	}
+
+	// Verify the gate was opened (provider was called).
+	if len(prov.calls) == 0 {
+		t.Fatal("expected RequestApproval call in prov.calls, got none")
 	}
 }

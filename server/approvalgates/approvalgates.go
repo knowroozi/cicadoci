@@ -98,6 +98,11 @@ type GateRecord struct {
 	// Timeout is set. It is stopped by any terminal transition (a manual Resolve
 	// or CloseAll) so it can never resolve a gate that was resolved first.
 	timer *time.Timer
+
+	// signal is closed exactly once when the gate reaches a terminal state.
+	// Await selects on it to unblock a goroutine that should stop holding
+	// jobs pending.
+	signal chan struct{}
 }
 
 // NewManager creates a gate manager.
@@ -148,6 +153,7 @@ func (m *Manager) Open(ctx context.Context, g *Gate) error {
 		Gate:      *g,
 		State:     GatePending,
 		CreatedAt: time.Now(),
+		signal:    make(chan struct{}),
 	}
 	m.gates[rec.Gate.RunID] = rec
 
@@ -232,6 +238,7 @@ func (m *Manager) Resolve(_ context.Context, runID, actorID, actionID string) er
 		m.mu.Unlock()
 		return fmt.Errorf("approvalgates: unknown action %q", actionID)
 	}
+	close(rec.signal)
 
 	// Stop the auto-timeout now that we own the resolution, and copy the
 	// terminal state out under the lock so the callback below reads only
@@ -296,6 +303,40 @@ func (m *Manager) ActorID(runID string) string {
 	return ""
 }
 
+// Await blocks until the gate for runID reaches a terminal state, then
+// returns that state.  It returns GatePending (immediately) when the
+// runID is not yet open.
+//
+// When ctx is cancelled before the gate resolves, Await returns
+// GateTimedOut so the caller can fail the run rather than hang.
+func (m *Manager) Await(ctx context.Context, runID string) GateState {
+	m.mu.Lock()
+	rec, ok := m.gates[runID]
+	if !ok {
+		m.mu.Unlock()
+		return GatePending
+	}
+	// Copy the signal channel (it is never replaced).
+	sig := rec.signal
+	state := rec.State
+	m.mu.Unlock()
+
+	if state != GatePending {
+		return state
+	}
+	select {
+	case <-sig:
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if cur, ok := m.gates[runID]; ok {
+			return cur.State
+		}
+		return state
+	case <-ctx.Done():
+		return GateTimedOut
+	}
+}
+
 // onTimeout moves a still-pending gate to GateTimedOut. It is the auto-timeout
 // callback wired by Open and is also reachable in spirit from CloseAll; it is
 // idempotent because it only acts on a gate still at GatePending, so it races
@@ -315,6 +356,7 @@ func (m *Manager) onTimeout(rec *GateRecord) {
 	if rec.timer != nil {
 		rec.timer.Stop()
 	}
+	close(rec.signal)
 	gateCopy := *rec
 	m.mu.Unlock()
 
@@ -346,6 +388,7 @@ func (m *Manager) CloseAll(runID string) {
 	if rec.timer != nil {
 		rec.timer.Stop()
 	}
+	close(rec.signal)
 	gateCopy := *rec
 	m.mu.Unlock()
 

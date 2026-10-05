@@ -207,6 +207,7 @@ func (s *Store) CreateJobSpecs(
 	ctx context.Context,
 	runID uuid.UUID,
 	specs []JobSpec,
+	hold bool, // CIC-182 B2/S3: keep top-level pending when true
 ) ([]uuid.UUID, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -314,14 +315,16 @@ func (s *Store) CreateJobSpecs(
 			}
 			continue
 		}
-		// Top-level: flip to 'queued' (fires NOTIFY trigger).
-		_, err := tx.Exec(ctx,
-			`UPDATE jobs SET status = 'queued' WHERE id = $1`,
-			ids[i],
-		)
-		if err != nil {
-			_ = tx.Rollback(ctx)
-			return nil, fmt.Errorf("flip job %q to queued: %w", sp.Name, err)
+		if !hold {
+			// Top-level: flip to 'queued' unless hold=true (CIC-182 B2/S3).
+			_, err := tx.Exec(ctx,
+				`UPDATE jobs SET status = 'queued' WHERE id = $1`,
+				ids[i],
+			)
+			if err != nil {
+				_ = tx.Rollback(ctx)
+				return nil, fmt.Errorf("flip job %q to queued: %w", sp.Name, err)
+			}
 		}
 	}
 

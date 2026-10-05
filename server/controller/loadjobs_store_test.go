@@ -75,7 +75,7 @@ func TestLoadAndCreateJobsViaStoreLoader(t *testing.T) {
 	}
 
 	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "push", "refs/heads/master", "deadbeef", "", false,
-		"https://github.com/org/repo.git", "refs/heads/master"); err != nil {
+		"https://github.com/org/repo.git", "refs/heads/master", false); err != nil {
 		t.Fatalf("LoadAndCreateJobs: %v", err)
 	}
 
@@ -149,7 +149,7 @@ func TestLoadAndCreateJobs_PersistsSteps(t *testing.T) {
 		t.Fatalf("create run: %v", err)
 	}
 
-	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "push", "refs/heads/master", "cishas", "", false, "", ""); err != nil {
+	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "push", "refs/heads/master", "cishas", "", false, "", "", false); err != nil {
 		t.Fatalf("LoadAndCreateJobs: %v", err)
 	}
 
@@ -212,7 +212,7 @@ func TestLoadAndCreateJobs_NilLoader_FinalisesRun(t *testing.T) {
 	}
 	// Controller with real store but nil loader.
 	c := New(st, nil, Config{}, discardLogger)
-	err = c.LoadAndCreateJobs(ctx, repoID, runID, "push", "main", "abc123", "", false, "", "")
+	err = c.LoadAndCreateJobs(ctx, repoID, runID, "push", "main", "abc123", "", false, "", "", false)
 	if err != nil {
 		t.Fatalf("LoadAndCreateJobs: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestLoadAndCreateJobs_MatchedButFailedFinalisesFailed(t *testing.T) {
 
 	// LoadAndCreateJobs matches push:{} to any event, then BuildDAG fails
 	// because 'build' needs 'nonexistent'. Run finalises as 'failed'.
-	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "push", "refs/heads/master", "bad-dag-sha", "", false, "", ""); err != nil {
+	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "push", "refs/heads/master", "bad-dag-sha", "", false, "", "", false); err != nil {
 		t.Fatalf("LoadAndCreateJobs: %v", err)
 	}
 
@@ -450,7 +450,7 @@ func TestLoadAndCreateJobs_ZeroMatchFinalisesSucceeded(t *testing.T) {
 		t.Fatalf("create run: %v", err)
 	}
 
-	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "push", "master", "zero-match-sha", "", false, "", ""); err != nil {
+	if err := c.LoadAndCreateJobs(ctx, repoID, runID, "push", "master", "zero-match-sha", "", false, "", "", false); err != nil {
 		t.Fatalf("LoadAndCreateJobs: %v", err)
 	}
 

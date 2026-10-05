@@ -458,6 +458,7 @@ func (c *Controller) LoadAndCreateJobs(
 	eventType, ref, eventSHA, prAction string,
 	isFork bool,
 	gitCheckoutURL, gitCheckoutRef string,
+	hold bool,
 ) error {
 	// gitCheckoutURL is the clone URL for the checkout ref;
 	// gitCheckoutRef is the actual git ref to check out
@@ -549,7 +550,7 @@ func (c *Controller) LoadAndCreateJobs(
 			continue
 		}
 
-		_, err = c.store.CreateJobSpecs(ctx, runID, specs)
+		_, err = c.store.CreateJobSpecs(ctx, runID, specs, hold)
 		if err != nil {
 			c.log.Warn("job creation failed; skipping workflow",
 				"workflow", wf.Name, "run", runID, "err", err)

@@ -67,7 +67,7 @@ jobs:
 	c := controller.New(h.store, stub, controller.Config{WorkflowLoader: loader}, nil)
 
 	// Trigger LoadAndCreateJobs as a push event.
-	if err := c.LoadAndCreateJobs(context.Background(), repoID, runID, "push", "main", "abc123", "", false, "", ""); err != nil {
+	if err := c.LoadAndCreateJobs(context.Background(), repoID, runID, "push", "main", "abc123", "", false, "", "", false); err != nil {
 		t.Fatalf("LoadAndCreateJobs: %v", err)
 	}
 

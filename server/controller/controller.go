@@ -35,6 +35,9 @@ import (
 	"cicadoci.com/cicado/server/webhook"
 )
 
+// pullRequestEvent is the GitHub webhook event type for PRs.
+const pullRequestEvent = "pull_request"
+
 // errNoApprovalChannel is returned by validateApprovalChannel when
 // Config.ApprovalChannel is empty.  It signals that a gate should
 // not be opened rather than falling back to a default channel (B2).
@@ -231,7 +234,7 @@ func (c *Controller) HandlePush(payload webhook.PushPayload) error {
 	pushCloneURL := "https://github.com/" + payload.Repository.FullName + ".git"
 	loadErr := c.LoadAndCreateJobs(ctx, repoID, runID, "push", branch, sha,
 		"" /* prAction */, false, /* isFork */
-		pushCloneURL, "refs/heads/"+branch)
+		pushCloneURL, "refs/heads/"+branch, false) // hold=false for push
 	if loadErr != nil {
 		c.log.Warn("job creation failed for push run", "run", runID, "err", loadErr)
 		// A load failure is a server error, not a zero-match: finalise the
@@ -318,7 +321,7 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 	}
 	c.holdSlot(runID, repoID, orgID)
 	c.log.Info("run created", "run", runID, "number", number,
-		"event", "pull_request", "pr", payload.PullRequest.Number, "repo", payload.Repository.FullName)
+		"event", pullRequestEvent, "pr", payload.PullRequest.Number, "repo", payload.Repository.FullName)
 
 	// Prepare the forge check before any job exists (see HandlePush).
 	c.report(ctx, owner, repoName, payload.PullRequest.Head.SHA, runID, branch)
@@ -338,24 +341,42 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 		baseCloneURL = "https://github.com/" + payload.Repository.FullName + ".git"
 	}
 	checkoutRef := fmt.Sprintf("refs/pull/%d/head", payload.PullRequest.Number)
-	loadErr := c.LoadAndCreateJobs(ctx, repoID, runID, "pull_request", branch, payload.PullRequest.Head.SHA, payload.Action, isFork,
-		baseCloneURL, checkoutRef)
+	// CIC-182 B2: open the gate BEFORE job creation so that
+	// LoadAndCreateJobs can hold top-level jobs in pending from the
+	// start, avoiding the TOCTOU window between create and hold.
+	gateOpened := c.maybeOpenGate(ctx, runID, owner, repoName, payload)
+	loadErr := c.LoadAndCreateJobs(ctx, repoID, runID, pullRequestEvent, branch, payload.PullRequest.Head.SHA, payload.Action, isFork,
+		baseCloneURL, checkoutRef, gateOpened)
 	if loadErr != nil {
 		c.log.Warn("job creation failed for PR run", "run", runID, "err", loadErr)
 		// A load failure is a server error, not a zero-match: finalise the
-		// run as failed so it does not stay 'pending' forever.
+		// run as failed so it does not stay pending forever.
 		if ferr := c.store.FinalizeRunToFailed(ctx, runID); ferr != nil {
-			c.log.Warn("failed to finalise PR run after job creation error",
+			c.log.Error("controller: failed to finalise PR run after job creation error",
 				"run", runID, "err", ferr)
 		}
+
+		if gateOpened {
+			// CIC-182 N2: gate opened but load failed -- close it
+			// so the approvalgates Manager stops tracking it.
+			c.log.Info("approvalgates: load failed; closing gated run", "run", runID)
+			c.cfg.ApprovalGates.CloseAll(runID.String())
+		}
+		c.finishIfNoJobs(ctx, runID, loadErr)
+		c.emitAudit(ctx, runID, pullRequestEvent, actor, owner, repoName, branch)
+		return nil
 	}
 	c.finishIfNoJobs(ctx, runID, loadErr)
 
-	// Audit the run creation with the PR author's login as the actor.
-	c.emitAudit(ctx, runID, "pull_request", actor, owner, repoName, branch)
+	// Audit the run creation with the PR author login as the actor.
+	c.emitAudit(ctx, runID, pullRequestEvent, actor, owner, repoName, branch)
 
-	// Open a deployment-approval gate if the run requires approval.
-	c.maybeOpenGate(ctx, runID, owner, repoName, payload)
+	// If a gate was opened, start the async waiter that promotes or
+	// fails the held jobs when the gate resolves (CIC-182 B3).
+	if gateOpened {
+		c.log.Info("approval gate open; top-level jobs held in pending", "run", runID)
+		go c.awaitGateAndDispatch(runID)
+	}
 	return nil
 }
 
@@ -455,7 +476,7 @@ func (c *Controller) rerun(fullName, sha, source string) error {
 	// a re-run of the same head commit is replayed as "synchronize", the
 	// action GitHub itself sends when a PR's head changes.
 	prAction := ""
-	if orig.Event == "pull_request" {
+	if orig.Event == pullRequestEvent {
 		prAction = "synchronize"
 	}
 	// Check out what the original run's jobs checked out (for a PR, the base
@@ -468,16 +489,27 @@ func (c *Controller) rerun(fullName, sha, source string) error {
 	if checkoutRef == "" && orig.Event == "push" {
 		checkoutRef = "refs/heads/" + orig.Ref
 	}
+	// CIC-182 N3: re-open the approval gate on a PR rerun so a denied
+	// original is not bypassed. Reuses maybeOpenGate so the ApprovalChannel
+	// and AllowedApprovers checks apply identically.
+	gateRerun := c.openGateForRerun(ctx, runID, owner, repoName, orig)
 	loadErr := c.LoadAndCreateJobs(ctx, repoID, runID, orig.Event, orig.Ref, sha,
-		prAction, orig.IsFork, cloneURL, checkoutRef)
+		prAction, orig.IsFork, cloneURL, checkoutRef, gateRerun)
 	if loadErr != nil {
 		c.log.Warn("job creation failed for re-run", "run", runID, "err", loadErr)
-		// As on push and pull_request: finalise the run as failed so it
-		// does not stay 'pending' forever.
 		if ferr := c.store.FinalizeRunToFailed(ctx, runID); ferr != nil {
-			c.log.Warn("failed to finalise re-run after job creation error",
+			c.log.Warn("controller: failed to finalise re-run after job creation error",
 				"run", runID, "err", ferr)
 		}
+		// R1: if a gate was opened, close it so it stops tracking this run.
+		if gateRerun && c.cfg.ApprovalGates != nil {
+			c.cfg.ApprovalGates.CloseAll(runID.String())
+		}
+	}
+	// R1: start the gate waiter after the jobs are loaded so an early
+	// approval cannot promote zero jobs before they exist.
+	if gateRerun && loadErr == nil {
+		go c.awaitGateAndDispatch(runID)
 	}
 	c.finishIfNoJobs(ctx, runID, loadErr)
 	c.emitAudit(ctx, runID, source, "github-rerequest", owner, repoName, orig.Ref)
@@ -512,6 +544,51 @@ func (c *Controller) RunCompleted(ctx context.Context, runID uuid.UUID, state st
 		RunID:  runID.String(),
 		Branch: ref.Ref,
 	}, conclusionFor(state), nil)
+}
+
+// openGateForRerun opens a new approval gate for a PR rerun.
+// It reuses maybeOpenGate so the ApprovalChannel and AllowedApprovers
+// checks are identical to the primary path.
+//
+// Returns true when the gate was opened; the caller then holds the top-level
+// jobs pending and starts awaitGateAndDispatch.
+func (c *Controller) openGateForRerun(
+	ctx context.Context,
+	runID uuid.UUID,
+	owner, repo string,
+	orig store.RerunSource,
+) bool {
+	if orig.Event != pullRequestEvent {
+		return false
+	}
+	// R2: derive the PR number from the checkout ref (refs/pull/N/head)
+	// so the approval message names the right PR instead of "PR #0".
+	prNumber := extractPRNumberFromRef(orig.CheckoutRef)
+	payload := webhook.PullRequestPayload{PullRequest: webhook.PullRequest{Number: prNumber}}
+	return c.maybeOpenGate(ctx, runID, owner, repo, payload)
+}
+
+// extractPRNumberFromRef returns the N of a GitHub checkout ref of the form
+// "refs/pull/NNN/head" as an int. Returns 0 when the ref does not match or
+// N does not parse. N6: uses strings.CutPrefix/CutSuffix + strconv.Atoi so
+// non-digit and overflow cases are handled correctly.
+func extractPRNumberFromRef(ref string) int {
+	rest, ok := strings.CutPrefix(ref, "refs/pull/")
+	if !ok {
+		return 0
+	}
+	rest, ok = strings.CutSuffix(rest, "/head")
+	if !ok {
+		return 0
+	}
+	n, err := strconv.Atoi(rest)
+	if err != nil {
+		return 0
+	}
+	if n <= 0 {
+		return 0
+	}
+	return n
 }
 
 // finishIfNoJobs finishes a run that got no jobs: no workflow matched, no
@@ -712,41 +789,40 @@ func report(
 
 // ── approval gates ────────────────────────────────────────────────────────────
 
-// maybeOpenGate opens a deployment-approval gate for a pull-request run if
-// the controller is configured with an approvalgates.Manager.
+// maybeOpenGate opens a deployment-approval gate for a pull-request run
+// when the controller is configured with an approvalgates.Manager.
 //
-// The gate is opened non-fatally: if the provider does not support
-// approvals (nil ChatProvider) or if the gate creation fails, a Warn is logged
-// and the run proceeds unblocked.  This is the MVP behaviour — a policy layer
-// that determines which workflows require approval is a future ticket.
+// The gate is opened non-fatally: on nil provider or empty
+// ApprovalChannel a Warn is logged and the run proceeds unblocked.
+//
+// Returns true when the gate was opened. The caller then holds the
+// top-level jobs pending and starts awaitGateAndDispatch.
 func (c *Controller) maybeOpenGate(
 	ctx context.Context,
 	runID uuid.UUID,
 	owner, repo string,
 	payload webhook.PullRequestPayload,
-) {
+) bool {
 	mgr := c.cfg.ApprovalGates
 	if mgr == nil {
-		return
+		return false
 	}
 	// MVP: open a gate for every PR run as a placeholder.
 	// The manager itself decides whether to block based on policy.
 	// A Gate must carry the allow-list of user IDs that may resolve it
-	// (Gate.Allowed / authorized()); an empty list = deny by default.  Warn
-	// so an operator can tell when a gate is open but inert.
-	// B2: fail closed — do not open a gate when no channel
-	// is configured.   A #general fallback would leak approval
+	// (Gate.Allowed / authorized()); an empty list = deny by default.
+	// B2: fail closed — do not open a gate when no channel is
+	// configured. A #general fallback would leak approval
 	// requests to a public or default channel.
 	if err := validateApprovalChannel(c.cfg.ApprovalChannel); err != nil {
-		c.log.Warn("approvalgates: gate NOT opened — ApprovalChannel is empty; wire Config.ApprovalChannel so gates can be posted",
+		c.log.Warn("approvalgates: gate NOT opened -- ApprovalChannel is empty; wire Config.ApprovalChannel so gates can be posted",
 			"run", runID)
-		return
+		return false
 	}
 	if len(c.cfg.AllowedApprovers) == 0 {
 		c.log.Warn("approvalgates: gate opened with empty allow-list; wire Config.AllowedApprovers so a user can resolve it",
 			"run", runID)
 	}
-	// B1: wire Gate.Channel and Gate.Timeout from Config.
 	g := &approvalgates.Gate{
 		RunID:   runID.String(),
 		Channel: c.cfg.ApprovalChannel,
@@ -757,16 +833,16 @@ func (c *Controller) maybeOpenGate(
 		Allowed: c.cfg.AllowedApprovers,
 	}
 	if err := mgr.Open(ctx, g); err != nil {
-		c.log.Warn("approvalgates: failed to open gate",
-			"run", runID, "err", err)
+		c.log.Warn("approvalgates: failed to open gate", "run", runID, "err", err)
+		return false
 	}
+	return true
 }
 
-// validateApprovalChannel returns an error when the channel is not
-// configured.   B2 (CIC-160 / god decision): no #general fallback —
-// a missing channel means the gate is NOT opened and a warning is
-// logged instead of posting a potentially sensitive approval
-// request to a public or default channel.
+// validateApprovalChannel returns an error when the configured approval
+// channel is empty. This is the B2 fail-closed check: a missing channel
+// prevents a gate from opening, so no held jobs can be silently dispatched
+// without a human in the loop.
 func validateApprovalChannel(channel string) error {
 	if channel == "" {
 		return errNoApprovalChannel
@@ -892,5 +968,84 @@ func (c *Controller) emitAudit(
 	})
 	if err != nil {
 		c.log.Warn("audit append failed", "run", runID, "action", "create_run", "err", err)
+	}
+}
+
+// awaitGateAndDispatch blocks until the approval gate for runID reaches a
+// terminal state, then promotes top-level jobs on approval or fails the run
+// and all held jobs on denial or timeout.
+//
+// Called in a goroutine from HandlePullRequest.
+//
+// B1 fix: when ApprovalTimeout is 0 (no auto-timeout), await uses
+// context.Background() so the gate is not preemptively timed out.
+// Store calls after the gate resolve use a fresh context.Background() so
+// an expired gate-wait ctx never poisons them.
+//
+// CIC-182: gate dispatch blocking.
+func (c *Controller) awaitGateAndDispatch(runID uuid.UUID) {
+	mgr := c.cfg.ApprovalGates
+	if mgr == nil {
+		return
+	}
+	if c.cfg.ApprovalTimeout <= 0 {
+		// No auto-timeout: block until manually resolved.
+		c.dispatchAfterGate(runID, mgr.Await(context.Background(), runID.String()))
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), c.cfg.ApprovalTimeout)
+		defer cancel()
+		c.dispatchAfterGate(runID, mgr.Await(ctx, runID.String()))
+	}
+}
+
+// dispatchAfterGate acts on a resolved gate using a fresh context for
+// all store I/O, so an expired gate-wait context never poisons it.
+//
+// B3 fix: on deny/timeout, both the run row and all held jobs
+// (including dependents) are failed, not just the run.
+// S4: GatePending (unknown runID) is treated as fail-closed.
+func (c *Controller) dispatchAfterGate(runID uuid.UUID, state approvalgates.GateState) {
+	ctx := context.Background()
+	switch state {
+	case approvalgates.GateApproved:
+		if err := c.store.PromoteTopLevelJobs(ctx, runID); err != nil {
+			c.log.Error("approvalgates: PromoteTopLevelJobs failed after approval", "run", runID, "err", err)
+			if ferr2 := c.store.FinalizeRunToFailed(ctx, runID); ferr2 != nil {
+				c.log.Warn("approvalgates: FinalizeRunToFailed after PromoteTopLevelJobs failure",
+					"run", runID, "err", ferr2)
+			}
+		} else {
+			c.log.Info("approval gate approved; top-level jobs promoted", "run", runID)
+		}
+	case approvalgates.GateDenied, approvalgates.GateTimedOut, approvalgates.GatePending:
+		reason := "approval timeout"
+		switch state {
+		case approvalgates.GateDenied:
+			reason = "approval denied"
+		case approvalgates.GatePending:
+			reason = "no gate (fail-closed)"
+		}
+		c.log.Info("approval gate resolved; failing run and held jobs", "run", runID, "reason", reason)
+		if err := c.store.FailAllJobs(ctx, runID, reason); err != nil {
+			c.log.Error("approvalgates: FailAllJobs failed", "run", runID, "err", err)
+		}
+		if err := c.store.FinalizeRunToFailed(ctx, runID); err != nil {
+			c.log.Error("approvalgates: FinalizeRunToFailed failed", "run", runID, "err", err)
+		}
+		// CIC-182 N4: release the backpressure slot and report the
+		// check as cancelled, otherwise the slot leaks forever and
+		// the forge check stays in_progress.
+		c.ReleaseRun(runID)
+		c.reportFailed(ctx, runID)
+	}
+}
+
+// reportFailed reports the run forge check as failed so it is not
+// left in the in_progress state. CIC-182 N4: the backpressure slot is
+// released separately by ReleaseRun.
+func (c *Controller) reportFailed(ctx context.Context, runID uuid.UUID) {
+	if err := c.RunCompleted(ctx, runID, "failed"); err != nil {
+		c.log.Warn("approvalgates: RunCompleted failed on deny/timeout",
+			"run", runID, "err", err)
 	}
 }
