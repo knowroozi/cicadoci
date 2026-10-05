@@ -2,10 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"flag"
+	"io"
+	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"cicadoci.com/cicado/server/approvalgates"
+	"cicadoci.com/cicado/server/audit"
 )
 
 // TestWebhookStartupGuardFailsClosedOnEmptySecret is the operational half of
@@ -188,5 +195,124 @@ func TestResolveApprovalTimeout(t *testing.T) {
 					tc.flagVal, tc.override, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestApprovalgatesFlagsAreWired registers the real flag set on a fresh
+// FlagSet and verifies the CIC-162 flags are present with fail-closed
+// defaults. The channel and timeout are CIC-160's --approval-channel /
+// --approval-timeout; there is no separate approvalgates channel flag.
+func TestApprovalgatesFlagsAreWired(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	f := registerFlags(fs)
+
+	if *f.approvalgatesEnabled {
+		t.Errorf("--approvalgates-enabled default = true, want false")
+	}
+	if *f.approvalgatesAllowed != "" {
+		t.Errorf("--approvalgates-allowed default = %q, want \"\" (fail closed)", *f.approvalgatesAllowed)
+	}
+	if *f.insecureApprovalgatesNoop {
+		t.Errorf("--insecure-approvalgates-noop default = true, want false")
+	}
+	if fs.Lookup("approvalgates-channel") != nil {
+		t.Errorf("--approvalgates-channel is registered; the channel must come from --approval-channel (CIC-160)")
+	}
+}
+
+func TestSplitAllowList(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"", nil},
+		{" , ,", nil},
+		{"U1", []string{"U1"}},
+		{" U1 ,U2,, U3 ", []string{"U1", "U2", "U3"}},
+	}
+	for _, tc := range cases {
+		got := splitAllowList(tc.in)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("splitAllowList(%q) = %#v, want %#v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestBuildApprovalGates(t *testing.T) {
+	ctx := context.Background()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("disabled builds nothing", func(t *testing.T) {
+		mgr, approvers, err := buildApprovalGates(ctx, false, true, "U1", audit.NewMemoryLog(), log)
+		if err != nil || mgr != nil || approvers != nil {
+			t.Fatalf("got (%v, %v, %v), want (nil, nil, nil)", mgr, approvers, err)
+		}
+	})
+	t.Run("enabled without noop ack refuses startup", func(t *testing.T) {
+		mgr, _, err := buildApprovalGates(ctx, true, false, "U1", audit.NewMemoryLog(), log)
+		if err == nil || mgr != nil {
+			t.Fatalf("got (%v, %v), want (nil, error)", mgr, err)
+		}
+	})
+	t.Run("enabled with noop ack builds manager and parses allow-list", func(t *testing.T) {
+		mgr, approvers, err := buildApprovalGates(ctx, true, true, " U1, ,U2 ", audit.NewMemoryLog(), log)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if mgr == nil {
+			t.Fatal("manager is nil")
+		}
+		if want := []string{"U1", "U2"}; !reflect.DeepEqual(approvers, want) {
+			t.Errorf("approvers = %#v, want %#v", approvers, want)
+		}
+	})
+	t.Run("resolution writes an audit row with the outcome action and actor", func(t *testing.T) {
+		al := audit.NewMemoryLog()
+		mgr, approvers, err := buildApprovalGates(ctx, true, true, "U1", al, log)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if err := mgr.Open(ctx, &approvalgates.Gate{RunID: "run-1", Channel: "C1", Allow: "approve", Deny: "deny", Allowed: approvers}); err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		if err := mgr.Resolve(ctx, "run-1", "U1", "deny"); err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		entries, err := al.List(ctx, 0, 0)
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		if len(entries) == 0 {
+			t.Fatal("no audit entry written")
+		}
+		last := entries[len(entries)-1]
+		if last.Action != audit.ActionDeny || last.Actor != "U1" || last.Target != "run-1" {
+			t.Errorf("audit entry = %+v, want action=deny actor=U1 target=run-1", last)
+		}
+	})
+}
+
+// TestGateAuditEntry pins the state -> audit action mapping (#135 B2): only an
+// approved gate is recorded as ActionApprove.
+func TestGateAuditEntry(t *testing.T) {
+	cases := []struct {
+		state     approvalgates.GateState
+		actorID   string
+		wantAct   audit.Action
+		wantActor string
+	}{
+		{approvalgates.GateApproved, "U1", audit.ActionApprove, "U1"},
+		{approvalgates.GateDenied, "U2", audit.ActionDeny, "U2"},
+		{approvalgates.GateTimedOut, "", audit.ActionGateTimeout, "system"},
+		{approvalgates.GateTimedOut, "U3", audit.ActionGateTimeout, "system"},
+	}
+	for _, tc := range cases {
+		e := gateAuditEntry("run-1", tc.state, tc.actorID)
+		if e.Action != tc.wantAct || e.Actor != tc.wantActor || e.Target != "run-1" {
+			t.Errorf("gateAuditEntry(%v, %q) = %+v, want action=%s actor=%s", tc.state, tc.actorID, e, tc.wantAct, tc.wantActor)
+		}
+		if e.Reason != "gate "+tc.state.String() {
+			t.Errorf("gateAuditEntry(%v).Reason = %q", tc.state, e.Reason)
+		}
 	}
 }

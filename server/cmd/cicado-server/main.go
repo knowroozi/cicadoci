@@ -34,9 +34,11 @@ import (
 
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
 	"cicadoci.com/cicado/server/api"
+	"cicadoci.com/cicado/server/approvalgates"
 	"cicadoci.com/cicado/server/archive"
 	"cicadoci.com/cicado/server/audit"
 	"cicadoci.com/cicado/server/blobstore"
+	"cicadoci.com/cicado/server/chat"
 	"cicadoci.com/cicado/server/controller"
 	"cicadoci.com/cicado/server/dispatch"
 	"cicadoci.com/cicado/server/forge"
@@ -87,6 +89,11 @@ type serverFlags struct {
 	approvalChannel *string
 	// CIC-160 B1/F1: gate auto-timeout; 0s = no auto-timeout.
 	approvalTimeout *time.Duration
+	// CIC-162: approvalgates Manager wiring. The channel and timeout come from
+	// CIC-160's --approval-channel / --approval-timeout above.
+	approvalgatesEnabled      *bool
+	approvalgatesAllowed      *string
+	insecureApprovalgatesNoop *bool
 }
 
 // registerFlags registers all of cicado-server's command-line flags on fs and
@@ -124,6 +131,15 @@ func registerFlags(fs *flag.FlagSet) *serverFlags {
 		// CIC-160 B1: approvalgates Slack channel + gate auto-timeout.
 		approvalChannel: fs.String("approval-channel", envOr("CICADO_APPROVAL_CHANNEL", ""), "Slack channel for approval-gate messages; empty means no gate is opened (B2 fail-closed)"),
 		approvalTimeout: fs.Duration("approval-timeout", 0, "gate auto-timeout; 0s = no auto-timeout; CICADO_APPROVAL_TIMEOUT env overrides"),
+		// CIC-162 (part 1): build the approvalgates Manager. No real ChatProvider
+		// exists yet, so enabling it also requires the explicit development
+		// acknowledgement below (B4: fail closed in production).
+		approvalgatesEnabled: fs.Bool("approvalgates-enabled", envBool("CICADO_APPROVALGATES_ENABLED", false),
+			"build the approval-gate manager and open a gate for every PR run (CIC-162 part 1; gates do not yet block dispatch); requires --insecure-approvalgates-noop until a real chat provider exists"),
+		approvalgatesAllowed: fs.String("approvalgates-allowed", envOr("CICADO_APPROVALGATES_ALLOWED", ""),
+			"comma-separated user IDs authorized to resolve approval gates; empty = fail closed, no one authorized (CIC-162)"),
+		insecureApprovalgatesNoop: fs.Bool("insecure-approvalgates-noop", envBool("CICADO_INSECURE_APPROVALGATES_NOOP", false),
+			"permit --approvalgates-enabled with the no-op chat provider: gates post nothing and nothing can resolve them (DEVELOPMENT ONLY -- CIC-162)"),
 	}
 }
 
@@ -372,6 +388,21 @@ func run() error {
 	// B2: single builder — minter wins, PAT is fallback, untyped nil when neither.
 	httpClientProd := &http.Client{Timeout: 20 * time.Second}
 	ctrlOpts.Producer = newWorkflowProducer(minter, *githubWorkflowToken, st, log, httpClientProd)
+
+	// CIC-162 (part 1): approval gates. buildApprovalGates refuses
+	// --approvalgates-enabled without --insecure-approvalgates-noop, because the
+	// only ChatProvider today is the no-op one (a real Slack provider is
+	// CIC-138). Channel and timeout come from CIC-160's ApprovalChannel /
+	// ApprovalTimeout above.
+	approvalMgr, approvers, err := buildApprovalGates(ctx, *f.approvalgatesEnabled,
+		*f.insecureApprovalgatesNoop, *f.approvalgatesAllowed, auditLog, log)
+	if err != nil {
+		return err
+	}
+	if approvalMgr != nil {
+		ctrlOpts.ApprovalGates = approvalMgr
+		ctrlOpts.AllowedApprovers = approvers
+	}
 
 	ctrl = controller.New(st, newForge(*githubAppToken, log), ctrlOpts, log)
 
@@ -674,4 +705,82 @@ func newWorkflowProducer(
 	log.Info("workflow producer active (static PAT)",
 		"source", "github", "token_source", "CICADO_GITHUB_WORKFLOW_TOKEN")
 	return controller.NewGitHubWorkflowProducer(token, st, log, httpClient)
+}
+
+// splitAllowList parses a comma-separated CSV of user IDs into a slice.
+// Empty csv => nil, so the gate open-list is empty = fail closed (CIC-162).
+func splitAllowList(csv string) []string {
+	if csv == "" {
+		return nil
+	}
+	var out []string
+	for _, s := range strings.Split(csv, ",") {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// buildApprovalGates constructs the approvalgates Manager for
+// --approvalgates-enabled (CIC-162 part 1). It returns (nil, nil, nil) when
+// gates are disabled.
+//
+// Only a no-op ChatProvider exists today, so gates post nothing and nothing
+// can resolve them before they time out. Enabling gates therefore also
+// requires noopAck (--insecure-approvalgates-noop): without it startup is
+// refused, so a production deploy cannot silently run inert gates (#135 B4).
+func buildApprovalGates(ctx context.Context, enabled, noopAck bool, allowedCSV string,
+	auditLog audit.Log, log *slog.Logger) (*approvalgates.Manager, []string, error) {
+	if !enabled {
+		return nil, nil, nil
+	}
+	if !noopAck {
+		return nil, nil, errors.New("--approvalgates-enabled has no real chat provider yet (CIC-138); " +
+			"gates would post nothing and could never be resolved. Pass --insecure-approvalgates-noop " +
+			"(CICADO_INSECURE_APPROVALGATES_NOOP=true) to run them inert for development")
+	}
+	var mgr *approvalgates.Manager
+	onResolved := func(runID string, state approvalgates.GateState) {
+		e := gateAuditEntry(runID, state, mgr.ActorID(runID))
+		log.Info("approval gate resolved", "run", runID, "state", state, "actor", e.Actor)
+		if auditLog != nil {
+			if _, err := auditLog.Append(ctx, e); err != nil {
+				log.Error("approvalgates: audit append failed", "run", runID, "err", err)
+			}
+		}
+	}
+	mgr = approvalgates.NewManager(chat.NewNoOpProvider(), onResolved)
+	approvers := splitAllowList(allowedCSV)
+	if len(approvers) == 0 {
+		log.Warn("approvalgates: enabled but --approvalgates-allowed is empty; gates open but no one is authorized to resolve them")
+	}
+	log.Warn("approvalgates enabled with the NO-OP chat provider: gates are inert (nothing is posted, nothing resolves them, dispatch is not blocked)",
+		"allow", approvers)
+	return mgr, approvers, nil
+}
+
+// gateAuditEntry maps a terminal gate transition to its audit entry. The
+// Action reflects the outcome, so a consumer filtering on action = 'approve'
+// sees approvals only (#135 B2). A timeout has no acting user and is recorded
+// as "system".
+func gateAuditEntry(runID string, state approvalgates.GateState, actorID string) audit.Entry {
+	action := audit.ActionGateTimeout
+	switch state {
+	case approvalgates.GateApproved:
+		action = audit.ActionApprove
+	case approvalgates.GateDenied:
+		action = audit.ActionDeny
+	}
+	actor := actorID
+	if actor == "" || state == approvalgates.GateTimedOut {
+		actor = "system"
+	}
+	return audit.Entry{
+		Action: action,
+		Actor:  actor,
+		Target: runID,
+		Reason: "gate " + state.String(),
+	}
 }

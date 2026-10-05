@@ -284,6 +284,18 @@ func (m *Manager) State(runID string) GateState {
 	return GatePending
 }
 
+// ActorID returns the user who resolved the run's gate, or "" when the gate
+// is unknown, still pending, or timed out. onResolved callbacks run outside
+// the lock, so they may call it to attribute the audit entry (CIC-162).
+func (m *Manager) ActorID(runID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if rec, ok := m.gates[runID]; ok {
+		return rec.ActorID
+	}
+	return ""
+}
+
 // onTimeout moves a still-pending gate to GateTimedOut. It is the auto-timeout
 // callback wired by Open and is also reachable in spirit from CloseAll; it is
 // idempotent because it only acts on a gate still at GatePending, so it races
@@ -342,5 +354,21 @@ func (m *Manager) CloseAll(runID string) {
 	_ = m.provider.CloseApproval(context.Background(), gateCopy.Gate.Channel, string(gateCopy.Gate.MessageID), chat.ApprovalTimedOut)
 	if m.onResolved != nil {
 		m.onResolved(runID, gateCopy.State)
+	}
+}
+
+// String returns a human-readable name for the gate state.
+func (s GateState) String() string {
+	switch s {
+	case GateApproved:
+		return "approved"
+	case GateDenied:
+		return "denied"
+	case GateTimedOut:
+		return "timed_out"
+	case GatePending:
+		return "pending"
+	default:
+		return fmt.Sprintf("GateState(%d)", int(s))
 	}
 }

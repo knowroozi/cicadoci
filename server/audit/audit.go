@@ -24,7 +24,12 @@ type Action string
 
 // Known actions.
 const (
-	ActionApprove      Action = "approve"
+	ActionApprove Action = "approve"
+	// ActionDeny records an approval gate denied by an authorized user (CIC-162).
+	ActionDeny Action = "deny"
+	// ActionGateTimeout records an approval gate that timed out or was closed
+	// unresolved (CIC-162).
+	ActionGateTimeout  Action = "gate_timeout"
 	ActionCancel       Action = "cancel"
 	ActionRerun        Action = "rerun"
 	ActionDeploy       Action = "deploy"
