@@ -44,10 +44,10 @@ const workspaceMountPoint = "/cicado/workspace"
 // isolation guarantee for untrusted job code running on a shared runner.
 //
 // A known M1 limitation, deferred to CIC-16: on timeout or cancellation we kill
-// the `docker run` client (via exec.CommandContext), but we do not yet track the
-// container id to tear the container down with it. A killed client can leave its
-// `--rm` container running under the daemon. CIC-16 adds that path: cancel the
-// step and destroy its container. Today we only prevent the leak on the happy and
+// the docker client process group via the Cancel function, but we do not yet track the
+// container ID to tear the container down. A killed client can leave its `--rm`
+// container running under the daemon. CIC-16 adds that path: cancel the step and
+// destroy its container. Today we only prevent the leak on the happy and
 // non-zero paths where the client exits cleanly.
 //
 // Env is passed as repeated `-e KEY=VALUE` flags. Those values are briefly
@@ -134,6 +134,14 @@ func (d *Docker) RunStep(ctx context.Context, step Step, sink OutputSink) (Resul
 
 	//nolint:gosec // Building the container run from a workflow's own fields is this package's job.
 	cmd := exec.CommandContext(stepCtx, dockerBin, dockerRunArgs(d.Workspace(), step)...)
+	// Run docker client in its own process group and define a Cancel function to kill it on timeout/cancel.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -148,10 +156,9 @@ func (d *Docker) RunStep(ctx context.Context, step Step, sink OutputSink) (Resul
 		return Result{}, fmt.Errorf("docker: start %q: %w", step.Image, err)
 	}
 
-	// Unlike Shell we do not kill a process group on the way out: the child is a
-	// `docker run` client, a leaf process with no host children of its own to
-	// leak. The container it started is the daemon's responsibility, and
-	// destroying that on cancel is exactly what CIC-16 adds; see the type doc.
+	// Docker does not defer a kill on every return like Shell does. It relies on the Cancel
+	// function to terminate the process group only when the step times out or is cancelled.
+	// Container teardown is still pending (CIC-16).
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); pump(stdout, StreamStdout, sink) }()
