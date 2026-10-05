@@ -46,7 +46,7 @@ ENTRYPOINT ["/cicado-server"]
 ## Target: runner — debian-slim, carries git + shell for the executor
 # The shell executor (runner/executor/shell.go) invokes sh -c for each job
 # step. distroless/static has no shell at all, so the runner image must use
-# a base that ships a shell. git is required for CloneCredentialsForRun to
+# a base that ships a shell. git is required for git clone to
 # actually clone a repo. debian:12-slim is the smallest Debian image with
 # both, and it can run as non-root.
 FROM debian:12-slim AS runner

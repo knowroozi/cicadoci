@@ -197,52 +197,6 @@ func (m *InstallationTokenMinter) auth(ctx context.Context, cfg InstallationConf
 	return m.Auth(ctx, cfg)
 }
 
-// CloneCredentialsForRunOnClient replaces the stub in ChecksClient.
-// When an InstallationTokenMinter is present, it mints a token and
-// embeds it into a clone URL.
-//
-// The resulting URL has the form:
-//
-//	https://x-access-token:GITHUB_TOKEN@gitHub.com/org/repo.git
-//
-// This URL is NEVER logged or persisted in plaintext. It is consumed
-// once by the runner's `git clone` and then discarded.
-func CloneCredentialsForRunOnClient(
-	ctx context.Context,
-	client *ChecksClient,
-	minter *InstallationTokenMinter,
-	installationID int64,
-	ref RunRef,
-) (string, error) {
-	// client is reserved for the future wiring where ChecksClient
-	// exposes a CloneCredentialsForRun method that delegates here.
-	// See CLAUDE.md CIC-26 entry: the Forge-interface method currently
-	// returns a stub; this free function is the real path.
-	_ = client
-	token, err := minter.Mint(ctx, installationID, ref.Org, ref.Repo)
-	if err != nil {
-		return "", err
-	}
-	if ref.Sha == "" {
-		return cloneURLWithToken(token, ref.Org, ref.Repo, "HEAD"), nil
-	}
-	return cloneURLWithToken(token, ref.Org, ref.Repo, ref.Sha), nil
-}
-
-// cloneURLWithToken embeds a GitHub installation token into a
-// git clone URL.
-//
-// GitHub documents "x-access-token" as the username for installation
-// access tokens (not "x-oauth-basic", which is for OAuth tokens).
-// See https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token.
-// The SHA/ref is appended as a path fragment so `git clone -b <ref>`
-// is unnecessary — the runner can clone the exact SHA.
-func cloneURLWithToken(token, org, repo, sha string) string {
-	// Format: https://x-access-token:TOKEN@github.com/org/repo.git
-	const base = "https://x-access-token:"
-	return fmt.Sprintf("%s%s@github.com/%s/%s.git", base, token, org, repo)
-}
-
 // JSON key constants for installation token request.
 const (
 	tkPerRepo     = "repositories" // GitHub expects "repositories" not "per_repo"

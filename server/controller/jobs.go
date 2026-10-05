@@ -271,19 +271,20 @@ const githubCloneTokenSecretName = "github_clone_token"
 // VALUES are never stored here; only the NAME list is, persisted in
 // `secret_refs` and authorized by GetJobSecrets against the live lease.
 //
-// CIC-148: when gitCloneURL is non-empty (job has a git context) and the
-// run is a non-fork PR, `github_clone_token` is added so the server can
-// deliver a per-repo GitHub token to the runner via GetJobSecrets.  Fork
-// PR runs get NO secrets unconditionally — the defense-in-depth backstop
-// on top of ForkPolicy.Apply: `secretRefsFor` returns nil for fork jobs
-// regardless of the workflow text.
+// CIC-148 / CIC-151: when gitCloneURL is non-empty (job has a git context),
+// `github_clone_token` is added so the server can deliver a per-repo
+// GitHub installation token to the runner via GetJobSecrets. The token is
+// minted at lease time by runnersvc.CloneMinterFunc. Fork runs get NO
+// other secrets unconditionally — the defense-in-depth backstop on top of
+// ForkPolicy.Apply: `secretRefsFor` returns nil static-secret refs for fork
+// jobs regardless of the workflow text.
 func secretRefsFor(j *workflow.Job, isFork bool, gitCloneURL string) []string {
 	seen := make(map[string]struct{})
-	// CIC-148 / CIC-151 B1: when the job has a git context, the runner needs
-	// a per-repo GitHub token for the checkout step. Fork PR runs get a
-	// contents:read-scoped token via the minter; non-fork runs get the
-	// static installation token. GetJobSecrets enforces the fork carve-out
-	// for all OTHER secret refs (CIC-27 defense-in-depth).
+	// CIC-148 / CIC-151: when the job has a git context, the runner needs
+	// a per-repo GitHub installation token for the checkout step.
+	// The token is minted at lease time by runnersvc.CloneMinterFunc
+	// and delivered via GetJobSecrets. Fork runs get the fork carve-out
+	// applied to all OTHER static-secret refs (CIC-27 defense-in-depth).
 	if gitCloneURL != "" {
 		seen[githubCloneTokenSecretName] = struct{}{}
 	}

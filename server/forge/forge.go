@@ -34,10 +34,6 @@ type Forge interface {
 
 	// Rerun handles a "Rerun checks" request.
 	Rerun(ctx context.Context, ref RerunRef) (runID string, err error)
-
-	// CloneCredentialsForRun returns a short-lived token usable in a
-	// git clone URL. NEVER persisted or logged.
-	CloneCredentialsForRun(ctx context.Context, ref RunRef) (token string, err error)
 }
 
 // RunRef identifies a run for status reporting.

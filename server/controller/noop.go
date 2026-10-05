@@ -2,14 +2,12 @@
 //
 // NoOpForge satisfies forge.Forge but does nothing.  It is used in
 // production main.go when the operator has not yet configured a
-// real forge backend (no GitHub App webhook secret set, no installation
-// token subsystem).
+// real forge backend (no GitHub App webhook secret set).
 //
 // The controller's report() function already tolerates a NoOp forge:
 // Prepare returns 0/nil and nothing is logged.
 //
-// CIC-81 adds the real githubForge with a ChecksReporter and
-// TokenMinter.  At that point NoOpForge is no longer needed in main.go.
+// CIC-81 adds the real githubForge with a ChecksReporter.
 package controller
 
 import (
@@ -42,10 +40,6 @@ func (NoOpForge) Complete(_ context.Context, _ int64, _ forge.RunRef,
 }
 
 func (NoOpForge) Rerun(_ context.Context, _ forge.RerunRef) (string, error) {
-	return "", nil
-}
-
-func (NoOpForge) CloneCredentialsForRun(_ context.Context, _ forge.RunRef) (string, error) {
 	return "", nil
 }
 

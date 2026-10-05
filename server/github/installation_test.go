@@ -88,48 +88,6 @@ func TestInstallationTokenMinter_Error(t *testing.T) {
 	}
 }
 
-// TestCloneCredentialsForRunOnClient embeds a token in a clone URL.
-func TestCloneCredentialsForRunOnClient(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		_, _ = fmt.Fprintf(w, `{"token":"ghs_CLONE","expiration":"2026-01-01T00:00:00Z"}`)
-	}))
-	defer srv.Close()
-
-	minter := &InstallationTokenMinter{
-		Config: InstallationConfig{
-			AppID:      1,
-			HTTPClient: srv.Client(),
-			BaseURL:    srv.URL,
-			Expiry:     5 * time.Minute,
-			Now:        func() time.Time { return time.Unix(0, 0) },
-		},
-		Auth: func(_ context.Context, _ InstallationConfig) (string, error) {
-			return "stub", nil
-		},
-	}
-	url, err := CloneCredentialsForRunOnClient(context.Background(), nil, minter, 77,
-		RunRef{Org: "myorg", Repo: "myrepo", Sha: "abc123"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(url, "myorg/myrepo.git") {
-		t.Fatalf("url = %q, want contains myorg/myrepo.git", url)
-	}
-	if !strings.Contains(url, ":") {
-		t.Fatalf("url = %q, want embedded token", url)
-	}
-}
-
-// TestCloneURLWithToken constructs a clone URL with a token.
-func TestCloneURLWithToken(t *testing.T) {
-	u := cloneURLWithToken("ghs_TOKEN", "org", "repo", "abc")
-	if !strings.Contains(u, "x-access-token:ghs_TOKEN@github.com/org/repo.git") {
-		t.Fatalf("url = %q, want x-access-token:...", u)
-	}
-}
-
 // TestMint_ScopesTokenPerRepo pins the least-privilege requirement
 // from PR #25's review: the POST /app/installations/{id}/access_tokens
 // body must include "repositories": [repo] so GitHub scopes the

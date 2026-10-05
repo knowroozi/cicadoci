@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -149,7 +150,9 @@ func run() error {
 	// resolveSecretFlags is caught by TestResolveSecretFlags. No behaviour change
 	// for a non-empty env value: it was read at registration time before this
 	// change.
-	resolveSecretFlags(f)
+	if err := resolveSecretFlags(f); err != nil {
+		return err
+	}
 
 	log := newLogger(*logLevel)
 	slog.SetDefault(log)
@@ -567,13 +570,21 @@ func resolveAPIToken(flagVal string) string {
 // site sees a different value than before: envSecret returns the operator's
 // CICADO_* value verbatim (interior spaces preserved), or "" when the env var
 // is absent.
-func resolveSecretFlags(f *serverFlags) {
+func resolveSecretFlags(f *serverFlags) error {
 	*f.apiToken = resolveAPIToken(*f.apiToken)
 	*f.databaseURL = envSecret(*f.databaseURL, "CICADO_DATABASE_URL")
 	*f.webhookSecret = envSecret(*f.webhookSecret, "CICADO_WEBHOOK_SECRET")
 	*f.secretKeyHex = envSecret(*f.secretKeyHex, "CICADO_SECRET_KEY")
 	*f.githubWorkflowToken = envSecret(*f.githubWorkflowToken, "CICADO_GITHUB_WORKFLOW_TOKEN")
 	*f.githubAppToken = envSecret(*f.githubAppToken, "CICADO_GITHUB_APP_TOKEN")
+	// CIC-181: per-job App-JWT minter env fallbacks.
+	appID, err := envInt64Or(*f.githubAppID, "CICADO_GITHUB_APP_ID")
+	if err != nil {
+		return err
+	}
+	*f.githubAppID = appID
+	*f.githubAppKeyFile = envSecret(*f.githubAppKeyFile, "CICADO_GITHUB_APP_KEY_FILE")
+	return nil
 }
 
 // apiStartupGuard refuses to start when no API token is configured and the
@@ -589,6 +600,28 @@ func apiStartupGuard(apiToken string, insecureAPI bool) error {
 			"(fail-open; for local development only)")
 	}
 	return nil
+}
+
+// envInt64Or resolves a flag value with a CICADO_* env-var fallback.
+// If the flag value is non-zero it wins as typed. Otherwise the env var
+// is parsed via strconv.ParseInt; a parse error or a negative value is
+// returned as an error so run() can fail-closed (CIC-181 B3).
+func envInt64Or(flagVal int64, key string) (int64, error) {
+	if flagVal != 0 {
+		return flagVal, nil
+	}
+	v := os.Getenv(key)
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s=%q: %w", key, v, err)
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("invalid %s=%d: must be non-negative", key, n)
+	}
+	return n, nil
 }
 
 func envBool(key string, fallback bool) bool {
@@ -623,5 +656,5 @@ func newForge(token string, log *slog.Logger) forge.Forge {
 		log.Warn("no --github-app-token: runs will not be reported to GitHub as checks")
 		return controller.NoOpForge{}
 	}
-	return forge.NewGitHubForge(githubpkg.NewChecksReporterAdapter(githubpkg.NewChecksClient(token, nil)), nil)
+	return forge.NewGitHubForge(githubpkg.NewChecksReporterAdapter(githubpkg.NewChecksClient(token, nil)))
 }

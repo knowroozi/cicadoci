@@ -1,22 +1,21 @@
 // Package github provides the GitHub-integration half of CICaDo's Forge
-// adapter: the Checks API reporter and, in CIC-26, installation-token
-// minting. It is deliberately transport-agnostic for the reporter — all
+// adapter: the Checks API reporter and installation-token minting.
+// It is deliberately transport-agnostic for the reporter — all
 // it asks of a concrete implementation is the ability to create and
 // update check runs given a run identifier.
 //
-// ChecksReporterAdapter and InstallationTokenMinterAdapter (forge_adapter.go)
-// are what actually satisfy server/forge's Reporter/TokenMinter
-// interfaces — the concrete ChecksClient/InstallationTokenMinter types
-// don't, on their own, since Go interface satisfaction is nominal and
-// their RunRef/RerunRef/CheckConclusion/Annotation types are distinct
-// from forge's (CIC-67).
+// ChecksReporterAdapter (forge_adapter.go) is what actually satisfies
+// server/forge's Reporter interface — the concrete ChecksClient type
+// doesn't, on its own, since Go interface satisfaction is nominal and
+// its RunRef/RerunRef/CheckConclusion/Annotation types are distinct
+// from forge's (CIC-67). InstallationTokenMinter is used directly by
+// runnersvc.CloneMinterFunc at lease time (CIC-151).
 package github
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -257,10 +256,6 @@ func (c *ChecksClient) Rerun(_ context.Context, _ RerunRef) (string, error) {
 	return "", nil
 }
 
-// errNoCloneCreds is the sentinel returned by the CloneCredentialsForRun
-// stub. A plain errors.New is sufficient here (PR #24 review).
-var errNoCloneCreds = errors.New("github: clone credentials not yet implemented (CIC-26)")
-
 // readBodySnippet reads up to 512 bytes from a response body for
 // inclusion in error messages. It does not close the body; callers that
 // own the body still defer its Close().
@@ -274,12 +269,6 @@ func readBodySnippet(resp *http.Response) string {
 		return ""
 	}
 	return string(buf)
-}
-
-// CloneCredentialsForRun is a stub for CIC-26; the real implementation
-// lives on InstallationTokenMinter (installation.go).
-func (c *ChecksClient) CloneCredentialsForRun(_ context.Context, _ RunRef) (string, error) {
-	return "", errNoCloneCreds
 }
 
 var (

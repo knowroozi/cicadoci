@@ -34,11 +34,6 @@ func (s *stubForge) Rerun(_ context.Context, ref RerunRef) (string, error) {
 	_ = ref
 	return "run-123", nil
 }
-func (s *stubForge) CloneCredentialsForRun(_ context.Context, ref RunRef) (string, error) {
-	// no-op
-	_ = ref
-	return "stub-token", nil
-}
 
 func TestRegistry_RegisterAndGet(t *testing.T) {
 	reg := NewRegistry()

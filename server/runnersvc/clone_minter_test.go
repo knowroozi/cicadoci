@@ -18,7 +18,6 @@ import (
 	"github.com/google/uuid"
 
 	"cicadoci.com/cicado/internal/testdb"
-	"cicadoci.com/cicado/server/github"
 	"cicadoci.com/cicado/server/redact"
 	"cicadoci.com/cicado/server/runnersvc"
 )
@@ -186,12 +185,4 @@ func TestNewCloneMinterFunc_B5ZeroInstallationID(t *testing.T) {
 	if token != "" {
 		t.Fatalf("B5: expected empty token, got %q", token)
 	}
-}
-
-// TestClonePermissionsReadConstant is a sanity check that the "read"
-// constant used for clone tokens is referenced (compilation-level check).
-func TestClonePermissionsReadConstant(t *testing.T) {
-	// The constant is used inside clone_minter.go; this just ensures the
-	// import graph is correct.
-	_ = github.CloneCredentialsForRunOnClient
 }

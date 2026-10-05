@@ -60,10 +60,6 @@ func (s *stubForge) Rerun(_ context.Context, _ forge.RerunRef) (string, error) {
 	return "", nil
 }
 
-func (s *stubForge) CloneCredentialsForRun(_ context.Context, _ forge.RunRef) (string, error) {
-	return "", nil
-}
-
 var _ forge.Forge = (*stubForge)(nil)
 
 // ── helper tests ─────────────────────────────────────────────────────────────────
