@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -161,7 +162,10 @@ func (c *Controller) HandlePush(payload webhook.PushPayload) error {
 	}
 
 	ctx := context.Background()
-	orgID, repoID, err := c.resolveRepo(ctx, owner, repoName)
+	// CIC-146 P2: pass the installation ID through resolveRepo
+	// so repos.installation_id is stamped without a separate call.
+	orgID, repoID, err := c.resolveRepo(ctx, owner, repoName,
+		installationIDString(payload.Installation.ID))
 	if err != nil {
 		c.log.Warn("controller push: store lookup failed",
 			"repo", payload.Repository.FullName, "err", err)
@@ -268,7 +272,9 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 	}
 
 	ctx := context.Background()
-	orgID, repoID, err := c.resolveRepo(ctx, owner, repoName)
+	// CIC-146 P2: pass the installation ID through resolveRepo.
+	orgID, repoID, err := c.resolveRepo(ctx, owner, repoName,
+		installationIDString(payload.Installation.ID))
 	if err != nil {
 		c.log.Warn("controller pr: store lookup failed",
 			"repo", payload.Repository.FullName, "err", err)
@@ -397,7 +403,7 @@ func (c *Controller) rerun(fullName, sha, source string) error {
 	}
 
 	ctx := context.Background()
-	orgID, repoID, err := c.resolveRepo(ctx, owner, repoName)
+	orgID, repoID, err := c.resolveRepo(ctx, owner, repoName, "")
 	if err != nil {
 		c.log.Warn("controller "+source+": store lookup failed",
 			"repo", fullName, "err", err)
@@ -635,14 +641,23 @@ func (c *Controller) ReleaseRun(runID uuid.UUID) {
 // with no allowlist check. CIC-71d should add a registered-orgs gate
 // or the operator must ensure their webhook receiver only handles
 // events from known installation tokens.
-func (c *Controller) resolveRepo(ctx context.Context, owner, repoName string) (
+func (c *Controller) resolveRepo(ctx context.Context, owner, repoName, installationID string) (
 	orgID uuid.UUID,
 	repoID uuid.UUID,
 	err error,
 ) {
-	// installationID is empty for now; it will be populated when the
-	// webhook receiver provides the App installation ID (CIC-81).
-	return c.store.ResolveRepo(ctx, owner, repoName, c.cfg.DefaultBranch, "")
+	return c.store.ResolveRepo(ctx, owner, repoName, c.cfg.DefaultBranch, installationID)
+}
+
+// installationIDString renders a GitHub installation ID as the string form
+// stored in repos.installation_id.  A zero (unset) ID is represented by
+// "" so that ResolveRepo skips the UPSERT — matching the "unset means
+// no-op" semantics of store.ResolveRepo.
+func installationIDString(id int64) string {
+	if id == 0 {
+		return ""
+	}
+	return strconv.FormatInt(id, 10)
 }
 
 func splitRepo(fullName string) (owner, repo string, ok bool) {
@@ -780,11 +795,14 @@ func (c *Controller) HandleInstallation(payload webhook.InstallationPayload) err
 		return nil
 	}
 
+	if payload.Installation.ID == 0 {
+		return nil // no-op: unset installation ID
+	}
 	accountLogin := payload.Installation.Account.Login
 	if accountLogin == "" {
 		return nil // malformed payload; skip, GitHub will retry on next event
 	}
-	instID := fmt.Sprintf("%d", payload.Installation.ID)
+	instID := installationIDString(payload.Installation.ID)
 
 	// B2 fix (#128): stamp installation_id only for repos
 	// listed in the event's payload.Repositories, NOT all
@@ -812,7 +830,7 @@ func (c *Controller) HandleInstallation(payload webhook.InstallationPayload) err
 // repos added to or removed from an installation.  Used when a repo is
 // explicitly added to a GitHub App installation before its first push.
 func (c *Controller) HandleInstallationRepos(payload webhook.InstallationRepositoriesPayload) error {
-	instID := fmt.Sprintf("%d", payload.Installation.ID)
+	instID := installationIDString(payload.Installation.ID)
 	accountLogin := payload.Installation.Account.Login
 	if accountLogin == "" || payload.Installation.ID == 0 {
 		return nil

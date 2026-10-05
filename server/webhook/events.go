@@ -40,6 +40,10 @@ type PushPayload struct {
 		Name  string `json:"name"`
 		Email string `json:"email"`
 	} `json:"pusher"`
+	// Installation carries the GitHub App installation that delivered this
+	// event.  Its ID is used to stamp repos.installation_id for the clone
+	// minter (CIC-146 P2).
+	Installation Installation `json:"installation"`
 }
 
 //  pull_request 
@@ -90,6 +94,9 @@ type PullRequestPayload struct {
 	Sender struct {
 		Login string `json:"login"`
 	} `json:"sender"`
+	// Installation carries the GitHub App installation that delivered this
+	// event.  Its ID is used to stamp repos.installation_id (CIC-146 P2).
+	Installation Installation `json:"installation"`
 }
 
 // IsFork returns true when the pull request should be treated as a fork PR.
@@ -158,37 +165,36 @@ type CheckRunPayload struct {
 // this event. The handler stores/updates repos.installation_id so that
 // the clone minter can resolve the right installation.
 type InstallationPayload struct {
-	Action       string `json:"action"`
-	Installation struct {
-		ID      int64 `json:"id"`
-		Account struct {
-			Login string `json:"login"`
-			Type  string `json:"type"` // "User" or "Organization"
-		} `json:"account"`
-	} `json:"installation"`
+	Action       string       `json:"action"`
+	Installation Installation `json:"installation"`
 	// Repositories are TOP-LEVEL in the GitHub 'installation' event (CIC-146 B3).
 	// Each entry has 'name' (not 'full_name'); the handler uses that.
 	Repositories []GitRepo `json:"repositories"`
 }
 
+// Installation is the GitHub App installation object embedded in
+// PushPayload, PullRequestPayload, and every App-delivered webhook.
+// GitHub sends it on every installation-delivered event.  Its ID is
+// used to stamp repos.installation_id for the clone minter (CIC-146 P2).
+type Installation struct {
+	ID      int64 `json:"id"`
+	Account struct {
+		Login string `json:"login"`
+		Type  string `json:"type"` // "User" or "Organization"
+	} `json:"account"`
+}
+
 // InstallationRepositoriesPayload is GitHub's "installation_repositories"
 // webhook event, delivered when repositories are added to or removed
-// from an installation.
+// from an installation.  Actions (GitHub docs): "added", "removed".
 //
-// action: "added_target", "removed_target", "added", "removed",
-// "added", "removed". The added/removed lists contain minimal repo
-// metadata; only full_name is consumed by the handler.
+// The added/removed lists contain minimal repo metadata; only the
+// repo name is consumed by the handler.
 type InstallationRepositoriesPayload struct {
-	Action       string `json:"action"`
-	Installation struct {
-		ID      int64 `json:"id"`
-		Account struct {
-			Login string `json:"login"`
-			Type  string `json:"type"`
-		} `json:"account"`
-	} `json:"installation"`
-	RepositoriesAdded   []GitRepo `json:"repositories_added"` // CIC-146: new
-	RepositoriesRemoved []GitRepo `json:"repositories_removed"`
+	Action              string       `json:"action"`
+	Installation        Installation `json:"installation"`
+	RepositoriesAdded   []GitRepo    `json:"repositories_added"` // CIC-146: new
+	RepositoriesRemoved []GitRepo    `json:"repositories_removed"`
 }
 
 // GitRepo is the minimal GitHub repository representation used by
