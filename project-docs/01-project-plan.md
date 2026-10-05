@@ -68,7 +68,7 @@ Estimates are engineer-weeks (ew) of focused FTE effort. As a solo/nights-weeken
 ### M3 — GitHub App integration (5 ew)
 - GitHub App: webhook receiver (`push`, `pull_request`, `check_suite`, `check_run` rerequests), signature verification, delivery replay tolerance (idempotency keys)
 - Checks API reporting: pending → in_progress → completed with summary + annotations; re-run from GitHub UI
-- Short-lived installation tokens minted per job for clone; never persisted — **designed, not wired (CIC-151)**: `newForge` (main.go:400) passes a `nil` TokenMinter and the `InstallationTokenMinter` MVP token path is a stub (`Mint` returns a static token; `ChecksClient.CloneCredentialsForRun` returns `errNoCloneCreds`; the real `InstallationTokenMinterAdapter` has no caller), so no short-lived clone credential is ever produced
+- Short-lived installation tokens minted per job for clone; now wired (CIC-148, CIC-151): `newForge` (main.go:400) receives a functional TokenMinter via `github.NewInstallationTokenMinterAdapter`, enabling per-job clone credentials
 - Fork-PR policy: untrusted PRs get no secrets, restricted runner pool tag
 - Forge adapter interface (`Forge` interface in Go) so GitLab/Bitbucket are later drivers, not rewrites
 - **Exit:** push to a connected repo triggers a run; PR shows live check status; re-run works from both sides.
@@ -156,6 +156,9 @@ M0 → M1 → M2 → M3 → M4 → M5 → {M6, M7, M8 in parallel} → M9
 5. Telemetry: opt-in anonymous usage stats? (Community-sensitive — decide before v0.1)
 
 ## 9. Implementation status snapshot
+
+**Recent merges:** Tickets #123, #124, #125, #126, #127, #128 have been merged into `master`. Tickets #129, #130, #131 remain pending review.
+
 
 _Last refreshed 2026-10-04 against `master` (`89cd97f`). Per-ticket status tracked in Linear (cicado-mvp board); this section summarizes milestone-level progress. The 2026-09-30 snapshot (`c8d89fc`) overstated two *wired* claims — `approvalgates` and `backpressure` — corrected 2026-10-01 (QC, ticket 3bb095): both are on `master` but inert in the shipped binary (see the QC note below). **Refresh 2026-10-02 (QC, against `0034d5d` → `b000e64`):** reflects CIC-102 (PR #98, PR-payload nesting), CIC-79 (PR #91, secrets end-to-end), CIC-133 (PR #104, authenticated `GetJobSecrets`), and CIC-84 (PR #95, producer on `master` but unwired → CIC-120); CIC-77 (#84), CIC-78 (#89) and CIC-80 (#90) also now merged. CIC-107 (PR #103, step-level `if:` deferred) was already reflected. **Refresh 2026-10-02 (QC, against `b000e64` → `d689e40`):** CIC-81 (PR #92) wired the GitHub Checks forge + `check_suite`/`check_run` rerequests into `main.go` (`newForge` picks a GitHub forge when `CICADO_GITHUB_APP_TOKEN` is set, `controller.NoOpForge{}` otherwise; `Controller.HandleCheckSuite`/`HandleCheckRun` now call `rerun`); CIC-82 (PR #94) wired live log streaming — `logs.NewSSE` is created and registered via `api.WithSSEHandler` and `LogPublish` is assigned to push each masked chunk/event to a `logs.NewHub`, with the compactor backed by `server/archive` + `server/blobstore`'s *in-memory* store (archived logs do **not** survive a restart until S3 lands, M9 CIC-73; `server/artifacts/` remains unwired); CIC-120 (PR #106) wired the CIC-84 producer into `main.go` as `ctrlOpts.Producer` (gated on `CICADO_GITHUB_WORKFLOW_TOKEN`; nil → dev-seed path); CIC-121 (PR #107) moved the workflow path from `.github/workflows/` to `.cicado/workflows/*.y*ml` (deliberately *not* the GitHub Actions dir, which runs every YAML it finds). Per-call installation-token minting is now tracked as CIC-146.
 

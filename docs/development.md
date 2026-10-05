@@ -122,6 +122,16 @@ export CICADO_WEBHOOK_SECRET=cicado_whsec_$(openssl rand -hex 32)
 ```
 
 
+## App config
+
+The GitHub App integration now reads its configuration from environment variables and flags defined in code:
+
+- `CICADO_GITHUB_APP_TOKEN` – the GitHub App installation token used for Checks reporting and clone credential minting. Provided via environment or `--github-app-token` flag; required for production reporting.
+- `CICADO_GITHUB_WORKFLOW_TOKEN` – token for the workflow producer (optional for dev). Supplied via `--github-workflow-token` flag or env var.
+- `CICADO_GITHUB_APP_ID` – the App ID (optional, used for token exchange).
+
+These variables are parsed at startup; missing required variables cause the server to refuse to start (fail‑closed). Development mode can opt‑out with `--insecure-api` etc.
+
 ## Tests
 
 | Command | What it runs |
