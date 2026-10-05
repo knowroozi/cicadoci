@@ -111,7 +111,21 @@ jobs:
         # readable log: the JSON event stream is `go test`'s own stable
         # machine format, so this survives changes to how skips are printed
         # for humans.
-        run: go test ./... -race -count=1 -timeout 15m -json | tee /tmp/test-output.json | jq -r 'select(.Action == "output") | .Output' | sed '/^$/d'
+        # Enable pipefail so any failure in the pipeline (go test, tee, jq)
+        # makes the step exit non‑zero.
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./... -race -count=1 -timeout 15m -json |
+            tee /tmp/test-output.json |
+            jq -r 'select(.Action == "output") | .Output' |
+            sed '/^$/d'
+          # Fail if any test emitted an Action:"fail" entry (e.g. a stalled
+          # pipe that hid the failure).
+          if grep -q '"Action":"fail"' /tmp/test-output.json; then
+            echo "::error::go test reported failures"
+            exit 1
+          fi
       - name: Fail if any test was skipped
         # A database-backed test is the one that would actually catch a
         # regression in the queue or the wire protocol; if the database was
