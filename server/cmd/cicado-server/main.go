@@ -82,6 +82,10 @@ type serverFlags struct {
 	insecureAPI          *bool
 	githubAppID          *int64
 	githubAppKeyFile     *string
+	// CIC-160 B1: Slack channel for approval-gate messages (empty = no gate, B2 fail-closed).
+	approvalChannel *string
+	// CIC-160 B1/F1: gate auto-timeout; 0s = no auto-timeout.
+	approvalTimeout *time.Duration
 }
 
 // registerFlags registers all of cicado-server's command-line flags on fs and
@@ -116,6 +120,9 @@ func registerFlags(fs *flag.FlagSet) *serverFlags {
 		// path is NEVER logged or written to the database.
 		githubAppID:      fs.Int64("github-app-id", int64(0), "GitHub App ID for App-JWT minting (CIC-151); 0 disables per-job token minting"),
 		githubAppKeyFile: fs.String("github-app-key-file", "", "path to GitHub App PEM private key (RSA only, PKCS#1 or PKCS#8); used with --github-app-id; NEVER logged or persisted"),
+		// CIC-160 B1: approvalgates Slack channel + gate auto-timeout.
+		approvalChannel: fs.String("approval-channel", envOr("CICADO_APPROVAL_CHANNEL", ""), "Slack channel for approval-gate messages; empty means no gate is opened (B2 fail-closed)"),
+		approvalTimeout: fs.Duration("approval-timeout", 0, "gate auto-timeout; 0s = no auto-timeout; CICADO_APPROVAL_TIMEOUT env overrides"),
 	}
 }
 
@@ -126,11 +133,12 @@ func run() error {
 	f := registerFlags(flag.CommandLine)
 	grpcAddr, httpAddr, databaseURL, migrate, devSeedFlag, logLevel, webhookSecret,
 		insecureWebhook, webhookMaxConcurrent, secretKeyHex, allowEphemeralKey,
-		githubWorkflowToken, githubAppToken, apiToken, insecureAPI, githubAppID, githubAppKeyFile :=
+		githubWorkflowToken, githubAppToken, apiToken, insecureAPI,
+		githubAppID, githubAppKeyFile, approvalChannel, approvalTimeout :=
 		f.grpcAddr, f.httpAddr, f.databaseURL, f.migrate, f.devSeedFlag, f.logLevel,
 		f.webhookSecret, f.insecureWebhook, f.webhookMaxConcurrent, f.secretKeyHex,
 		f.allowEphemeralKey, f.githubWorkflowToken, f.githubAppToken, f.apiToken, f.insecureAPI,
-		f.githubAppID, f.githubAppKeyFile
+		f.githubAppID, f.githubAppKeyFile, f.approvalChannel, f.approvalTimeout
 
 	flag.Parse()
 
@@ -329,6 +337,15 @@ func run() error {
 	// trail rather than process memory that vanishes on restart.
 	auditLog := audit.NewPostgresLog(st.Pool())
 	ctrlOpts := controller.DefaultConfig().WithAudit(auditLog)
+	// CIC-160 B1/F1: wire approvalgates channel + timeout.
+	// CICADO_APPROVAL_TIMEOUT env overrides the flag; unparseable or
+	// negative values refuse startup (Dwight F1 last-fix).
+	ctrlOpts.ApprovalChannel = *approvalChannel
+	timeout, err := resolveApprovalTimeout(*approvalTimeout, os.Getenv("CICADO_APPROVAL_TIMEOUT"))
+	if err != nil {
+		return err
+	}
+	ctrlOpts.ApprovalTimeout = timeout
 	// Wire the store-backed workflow loader so runs produce job DAGs.
 	// With no loader, LoadAndCreateJobs is a silent no-op and the server accepts
 	// webhooks but never creates jobs (the finding CIC-78 closed). StoreLoader
@@ -477,6 +494,27 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// resolveApprovalTimeout applies the CICADO_APPROVAL_TIMEOUT env override
+// over the flag default.  An unparseable or negative value — whether
+// from the env var or the flag — returns an error so run() can refuse
+// to start (Dwight F1 last-fix: a silent "never time out" is a safety issue).
+func resolveApprovalTimeout(flagVal time.Duration, override string) (time.Duration, error) {
+	if override != "" {
+		d, err := time.ParseDuration(override)
+		if err != nil {
+			return 0, fmt.Errorf("CICADO_APPROVAL_TIMEOUT=%q: %w", override, err)
+		}
+		if d < 0 {
+			return 0, fmt.Errorf("CICADO_APPROVAL_TIMEOUT=%q: must not be negative", override)
+		}
+		return d, nil
+	}
+	if flagVal < 0 {
+		return 0, fmt.Errorf("--approval-timeout=%q: must not be negative", flagVal)
+	}
+	return flagVal, nil
 }
 
 // webhookStartupGuard refuses to start when no webhook signing secret is

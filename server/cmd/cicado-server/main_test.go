@@ -5,6 +5,7 @@ import (
 	"flag"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestWebhookStartupGuardFailsClosedOnEmptySecret is the operational half of
@@ -145,5 +146,47 @@ func TestAPIStartupGuardWhitespaceFailsClosed(t *testing.T) {
 	}
 	if err := apiStartupGuard(resolveViaEnv(""), true); err != nil {
 		t.Fatalf("empty CICADO_API_TOKEN with --insecure-api should pass (dev path), got %v", err)
+	}
+}
+
+// TestResolveApprovalTimeout is the table test for the CIC-160 F1 last-fix:
+// the env var path must refuse startup on unparseable or negative values,
+// not silently fall back to "never time out".
+func TestResolveApprovalTimeout(t *testing.T) {
+	tCases := []struct {
+		name     string
+		flagVal  time.Duration
+		override string
+		want     time.Duration
+		wantErr  bool
+	}{
+		{"valid env override", 0, "1h30m", time.Hour + 30*time.Minute, false},
+		{"bare number in env", 0, "24", 0, true},
+		{"unparseable in env", 0, "abc", 0, true},
+		{"negative in env", 0, "-1h", 0, true},
+		{"negative flag", -time.Hour, "", 0, true},
+		{"zero flag", 0, "", 0, false},
+		{"nonzero flag, no env", time.Hour, "", time.Hour, false},
+		{"env overrides flag", time.Hour, "30m", 30 * time.Minute, false},
+	}
+	for _, tc := range tCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveApprovalTimeout(tc.flagVal, tc.override)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("resolveApprovalTimeout(%d, %q): wanted error, got nil (result=%v)",
+						tc.flagVal, tc.override, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveApprovalTimeout(%d, %q): unexpected error: %v",
+					tc.flagVal, tc.override, err)
+			}
+			if got != tc.want {
+				t.Errorf("resolveApprovalTimeout(%d, %q): got %v, want %v",
+					tc.flagVal, tc.override, got, tc.want)
+			}
+		})
 	}
 }

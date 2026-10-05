@@ -34,6 +34,11 @@ import (
 	"cicadoci.com/cicado/server/webhook"
 )
 
+// errNoApprovalChannel is returned by validateApprovalChannel when
+// Config.ApprovalChannel is empty.  It signals that a gate should
+// not be opened rather than falling back to a default channel (B2).
+var errNoApprovalChannel = fmt.Errorf("approvalgates: no approval channel configured")
+
 // Config tunes the controller.
 type Config struct {
 	// Backpressure, when non-nil, gates run creation on per-repo
@@ -69,6 +74,20 @@ type Config struct {
 	// buttons are inert (a future ticket should map GitHub roles to
 	// CICaDo user IDs).
 	AllowedApprovers []string
+
+	// ApprovalChannel is the chat channel (Slack channel ID or name)
+	// where approval-gate messages are posted (CIC-160).   When
+	// maybeOpenGate is called with an empty ApprovalChannel, the gate
+	// is NOT opened (B2: fail-closed — no #general fallback; posting
+	// approval requests to a public channel would leak them).
+	// CIC-160: previously this field was absent and the Channel was
+	// set to the PR number string, which is not a valid channel.
+	ApprovalChannel string
+
+	// ApprovalTimeout controls how long a gate stays open before
+	// auto-timing out.  A zero Timeout means no automatic timeout
+	// (CIC-160 B1: Gate.Timeout was never set; default is no timeout).
+	ApprovalTimeout time.Duration
 	// Producer fetches and upserts workflow YAMLs from a code host.
 	//
 	// When non-nil, HandlePush (on the default branch) calls
@@ -700,13 +719,23 @@ func (c *Controller) maybeOpenGate(
 	// A Gate must carry the allow-list of user IDs that may resolve it
 	// (Gate.Allowed / authorized()); an empty list = deny by default.  Warn
 	// so an operator can tell when a gate is open but inert.
+	// B2: fail closed — do not open a gate when no channel
+	// is configured.   A #general fallback would leak approval
+	// requests to a public or default channel.
+	if err := validateApprovalChannel(c.cfg.ApprovalChannel); err != nil {
+		c.log.Warn("approvalgates: gate NOT opened — ApprovalChannel is empty; wire Config.ApprovalChannel so gates can be posted",
+			"run", runID)
+		return
+	}
 	if len(c.cfg.AllowedApprovers) == 0 {
 		c.log.Warn("approvalgates: gate opened with empty allow-list; wire Config.AllowedApprovers so a user can resolve it",
 			"run", runID)
 	}
+	// B1: wire Gate.Channel and Gate.Timeout from Config.
 	g := &approvalgates.Gate{
 		RunID:   runID.String(),
-		Channel: fmt.Sprintf("%d", payload.PullRequest.Number),
+		Channel: c.cfg.ApprovalChannel,
+		Timeout: c.cfg.ApprovalTimeout,
 		Allow:   "approve",
 		Reason:  fmt.Sprintf("PR #%d on %s/%s", payload.PullRequest.Number, owner, repo),
 		Deny:    "deny",
@@ -716,6 +745,18 @@ func (c *Controller) maybeOpenGate(
 		c.log.Warn("approvalgates: failed to open gate",
 			"run", runID, "err", err)
 	}
+}
+
+// validateApprovalChannel returns an error when the channel is not
+// configured.   B2 (CIC-160 / god decision): no #general fallback —
+// a missing channel means the gate is NOT opened and a warning is
+// logged instead of posting a potentially sensitive approval
+// request to a public or default channel.
+func validateApprovalChannel(channel string) error {
+	if channel == "" {
+		return errNoApprovalChannel
+	}
+	return nil
 }
 
 // ── installation events (CIC-146) ────────────────────────────────────

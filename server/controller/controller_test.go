@@ -12,8 +12,10 @@ import (
 	"github.com/google/uuid"
 
 	"cicadoci.com/cicado/internal/testdb"
+	"cicadoci.com/cicado/server/approvalgates"
 	"cicadoci.com/cicado/server/audit"
 	"cicadoci.com/cicado/server/backpressure"
+	"cicadoci.com/cicado/server/chat"
 	"cicadoci.com/cicado/server/forge"
 	"cicadoci.com/cicado/server/store"
 	"cicadoci.com/cicado/server/webhook"
@@ -847,5 +849,140 @@ func TestHandleInstallation_JSONDecodeB3(t *testing.T) {
 	}
 	if p.Installation.ID != 12345 {
 		t.Errorf("installation.ID = %d, want 12345", p.Installation.ID)
+	}
+}
+
+// ---- CIC-160 B1/B2 fixes ----
+
+// TestValidateApprovalChannel_EmptyFails: B2 fail-closed.
+func TestValidateApprovalChannel_EmptyFails(t *testing.T) {
+	err := validateApprovalChannel("")
+	if err == nil {
+		t.Error("validateApprovalChannel(\"\") = nil; want error (B2 fail-closed)")
+	}
+}
+
+// TestValidateApprovalChannel_NonEmptyOK
+func TestValidateApprovalChannel_NonEmptyOK(t *testing.T) {
+	chs := []string{"C12345", "#deploy-approvals"}
+	for _, ch := range chs {
+		if err := validateApprovalChannel(ch); err != nil {
+			t.Errorf("validateApprovalChannel(%q) = %v; want nil", ch, err)
+		}
+	}
+}
+
+// TestMaybeOpenGate_SkipsWhenNoChannel: B2 fail-closed in maybeOpenGate.
+func TestMaybeOpenGate_SkipsWhenNoChannel(t *testing.T) {
+	st := testdb.New(t)
+	defer st.Close()
+	mgr := approvalgates.NewManager(nil, nil)
+	c := New(st, NoOpForge{}, Config{
+		ApprovalGates:    mgr,
+		ApprovalChannel:  "",
+		ApprovalTimeout:  time.Hour,
+		AllowedApprovers: []string{"U001"},
+	}, discardLogger)
+	ctx := context.Background()
+	payload := webhook.PullRequestPayload{
+		PullRequest: webhook.PullRequest{Number: 42},
+		Action:      "opened",
+	}
+	// B2: gate NOT opened; no panic.
+	c.maybeOpenGate(ctx, uuid.New(), "acme", "widgets", payload)
+	_ = mgr
+}
+
+// ── F2: recording fake ChatProvider for maybeOpenGate ──────────────────────────
+
+// recordingProvider records each RequestApproval call.
+type recordingProvider struct {
+	calls []recordedApproval
+}
+
+type recordedApproval struct {
+	Channel string
+	MsgID   string
+	Req     chat.ApprovalRequest
+}
+
+func (p *recordingProvider) RequestApproval(
+	_ context.Context,
+	channel, msgID string,
+	req chat.ApprovalRequest,
+) (string, string, error) {
+	p.calls = append(p.calls, recordedApproval{Channel: channel, MsgID: msgID, Req: req})
+	return "trigger-1", "callback-1", nil
+}
+
+func (p *recordingProvider) SendMessage(_ context.Context, _ string, _ chat.MessagePayload) (chat.MessageID, error) {
+	return chat.MessageID("msg-1"), nil
+}
+
+func (p *recordingProvider) UpdateMessage(_ context.Context, _, _ string, _ chat.MessagePayload) error {
+	return nil
+}
+
+func (p *recordingProvider) OpenThread(_ context.Context, _, _ string, _ chat.MessagePayload) (chat.MessageID, error) {
+	return chat.MessageID("msg-2"), nil
+}
+
+func (p *recordingProvider) CloseApproval(_ context.Context, _, _ string, _ chat.ApprovalStatus) error {
+	return nil
+}
+
+// TestMaybeOpenGate_F2_Calls_Provider_With_Channel_And_Timeout:
+// B1/F2: when a channel and timeout are configured, maybeOpenGate calls
+// RequestApproval with the channel and ApprovalRequest.TimeoutSec.
+func TestMaybeOpenGate_F2_Calls_Provider_With_Channel_And_Timeout(t *testing.T) {
+	st := testdb.New(t)
+	defer st.Close()
+	prov := &recordingProvider{}
+	mgr := approvalgates.NewManager(prov, nil)
+	c := New(st, NoOpForge{}, Config{
+		ApprovalGates:    mgr,
+		ApprovalChannel:  "C12345",
+		ApprovalTimeout:  time.Hour,
+		AllowedApprovers: []string{"U001"},
+	}, discardLogger)
+	payload := webhook.PullRequestPayload{
+		PullRequest: webhook.PullRequest{Number: 42},
+		Action:      "opened",
+	}
+	c.maybeOpenGate(context.Background(), uuid.New(), "acme", "widgets", payload)
+	if len(prov.calls) != 1 {
+		t.Fatalf("Expected 1 RequestApproval call, got %d", len(prov.calls))
+	}
+	call := prov.calls[0]
+	if call.Channel != "C12345" {
+		t.Errorf("RequestApproval channel = %q; want %q", call.Channel, "C12345")
+	}
+	wantSec := int((time.Hour).Seconds())
+	if call.Req.TimeoutSec != wantSec {
+		t.Errorf("RequestApproval TimeoutSec = %d; want %d", call.Req.TimeoutSec, wantSec)
+	}
+}
+
+// TestMaybeOpenGate_F2_No_Call_When_Channel_Empty:
+// B2/F2: when the channel is empty, maybeOpenGate does NOT call
+// RequestApproval (fail-closed).
+func TestMaybeOpenGate_F2_No_Call_When_Channel_Empty(t *testing.T) {
+	st := testdb.New(t)
+	defer st.Close()
+	prov := &recordingProvider{}
+	mgr := approvalgates.NewManager(prov, nil)
+	c := New(st, NoOpForge{}, Config{
+		ApprovalGates:    mgr,
+		ApprovalChannel:  "",
+		ApprovalTimeout:  time.Hour,
+		AllowedApprovers: []string{"U001"},
+	}, discardLogger)
+	payload := webhook.PullRequestPayload{
+		PullRequest: webhook.PullRequest{Number: 42},
+		Action:      "opened",
+	}
+	c.maybeOpenGate(context.Background(), uuid.New(), "acme", "widgets", payload)
+	if len(prov.calls) != 0 {
+		t.Fatalf("Expected 0 RequestApproval calls when channel empty, got %d", len(prov.calls))
 	}
 }
