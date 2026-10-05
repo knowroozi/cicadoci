@@ -82,6 +82,7 @@ jobs:
 	if status != "succeeded" {
 		t.Fatalf("job status %s, logs:\n%s", status, jobLogs(t, h.store.Pool(), jobID))
 	}
+	awaitJobLogs(t, h.store.Pool(), jobID, 1, 10*time.Second)
 	logs := jobLogs(t, h.store.Pool(), jobID)
 	// Both commands of the && chain must have run, each printing its own
 	// line: the quoted "a b" survives as one argument, then "c".

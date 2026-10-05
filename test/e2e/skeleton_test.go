@@ -301,6 +301,136 @@ func jobLogs(t *testing.T, pool *pgxpool.Pool, jobID uuid.UUID) string {
 	return sb.String()
 }
 
+// jobLogsReady reports whether jobID has a terminal event
+// (step_finished at step_index = last, or error_classified).
+// It is extracted so it can be tested in isolation without a real runner.
+//
+// Returns (false, nil) when log_entries has no matching row — the
+// normal "not yet" case (empty job or job still running). A real
+// query error returns (false, err).
+func jobLogsReady(ctx context.Context, pool *pgxpool.Pool, jobID uuid.UUID, last int32) (bool, error) {
+	var exists bool
+	err := pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM log_entries
+             WHERE job_id = $1 AND kind = 'event'
+               AND (event_kind = 'step_finished' AND step_index = $2
+                    OR event_kind = 'error_classified'))`,
+		jobID, last,
+	).Scan(&exists)
+	return exists, err
+}
+
+// awaitJobLogs polls jobLogsReady until a terminal event appears or
+// the timeout expires.
+//
+// Without this wait, jobLogs can return empty output for a job whose
+// status has already reached terminal because StatusUpdate and LogStream
+// are independent gRPC streams with no cross-stream ordering guarantee.
+//
+// expectedSteps is the number of steps that ran. A job that fails at
+// step 0 of a 2-step workflow expects 1, not 2.
+func awaitJobLogs(t *testing.T, pool *pgxpool.Pool, jobID uuid.UUID, expectedSteps int, timeout time.Duration) {
+	t.Helper()
+	if expectedSteps <= 0 {
+		t.Fatalf("awaitJobLogs: expectedSteps must be positive, got %d", expectedSteps)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	last := int32(expectedSteps - 1)
+	for {
+		ready, err := jobLogsReady(ctx, pool, jobID, last)
+		if err != nil {
+			// A context deadline during QueryRow surfaces as a ctx deadline
+			// error; report the helper's own message, not context.DeadlineExceeded.
+			if ctx.Err() != nil {
+				t.Fatalf("awaitJobLogs(%s): step %d did not terminalize within %v", jobID, last, timeout)
+			}
+			t.Fatalf("awaitJobLogs: query: %v", err)
+		}
+		if ready {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("awaitJobLogs(%s): step %d did not terminalize within %v", jobID, last, timeout)
+		default:
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestJobLogsReady_EmptyJobIsNotReady covers CIC-179 in both directions:
+//  1. Empty job: SELECT EXISTS returns false -> (false, nil).
+//  2. Job with a step_finished event at step 0: (true, nil) for last=0,
+//     (false, nil) for last=1.
+func TestJobLogsReady_EmptyJobIsNotReady(t *testing.T) {
+	if testing.Short() {
+		t.Skip("needs a database")
+	}
+	st := testdb.New(t)
+	defer st.Close()
+	ctx := context.Background()
+
+	// --- 1. Empty job: no log_entries rows, SELECT EXISTS returns false ---
+	emptyJobID := uuid.New()
+	ready, err := jobLogsReady(ctx, st.Pool(), emptyJobID, 0)
+	if err != nil {
+		t.Fatalf("jobLogsReady on empty job: %v", err)
+	}
+	if ready {
+		t.Fatalf("jobLogsReady returned ready=true for an empty job")
+	}
+
+	// --- 2. Job with a step_finished event at step 0 ---
+	var orgID uuid.UUID
+	if err := st.Pool().QueryRow(ctx,
+		`INSERT INTO orgs (slug, name) VALUES ('acme', 'Acme') RETURNING id`).
+		Scan(&orgID); err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	var repoID uuid.UUID
+	if err := st.Pool().QueryRow(ctx,
+		`INSERT INTO repos (org_id, owner, name) VALUES ($1, 'cicadoci', 'core') RETURNING id`,
+		orgID).Scan(&repoID); err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	var runID uuid.UUID
+	if err := st.Pool().QueryRow(ctx,
+		`INSERT INTO runs (repo_id, number, event, ref, sha, actor, status)
+			    VALUES ($1, 1, 'push', 'refs/heads/main', 'abc', 'tester', 'pending') RETURNING id`,
+		repoID).Scan(&runID); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var jobID uuid.UUID
+	if err := st.Pool().QueryRow(ctx,
+		`INSERT INTO jobs (run_id, name, status) VALUES ($1, 'job1', 'queued') RETURNING id`,
+		runID).Scan(&jobID); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	// Insert a step_finished event at step_index 0.
+	if _, err := st.Pool().Exec(ctx,
+		`INSERT INTO log_entries (job_id, seq, kind, step_index, event_kind, event_json)
+			    VALUES ($1, 1, 'event', 0, 'step_finished', '{}')`,
+		jobID); err != nil {
+		t.Fatalf("insert log entry: %v", err)
+	}
+	// step_finished at step 0: last=0 -> true, last=1 -> false.
+	ready, err = jobLogsReady(ctx, st.Pool(), jobID, 0)
+	if err != nil {
+		t.Fatalf("jobLogsReady(last=0): %v", err)
+	}
+	if !ready {
+		t.Errorf("jobLogsReady(last=0) = false, want true (step_finished at step 0)")
+	}
+	ready, err = jobLogsReady(ctx, st.Pool(), jobID, 1)
+	if err != nil {
+		t.Fatalf("jobLogsReady(last=1): %v", err)
+	}
+	if ready {
+		t.Errorf("jobLogsReady(last=1) = true, want false (only step 0 finished)")
+	}
+}
+
 // TestWalkingSkeleton is the M0 exit criterion: a hardcoded job in the database
 // runs on a runner over the real gRPC stream and reports back.
 //
@@ -331,6 +461,7 @@ func TestWalkingSkeleton(t *testing.T) {
 		t.Fatalf("job finished %q, want succeeded. logs:\n%s", status, jobLogs(t, h.store.Pool(), jobID))
 	}
 
+	awaitJobLogs(t, h.store.Pool(), jobID, 2, 10*time.Second)
 	logs := jobLogs(t, h.store.Pool(), jobID)
 	for _, want := range []string{"hello", "from cicado"} {
 		if !strings.Contains(logs, want) {
@@ -364,6 +495,7 @@ func TestWalkingSkeleton(t *testing.T) {
 		t.Errorf("last state = %q, want succeeded", states[len(states)-1])
 	}
 
+	awaitJobLogs(t, h.store.Pool(), jobID, 2, 10*time.Second)
 	// Structured events are the substrate the UI and MCP tools read, so the
 	// skeleton proves they flow too, not just raw text.
 	var eventKinds []string
@@ -440,6 +572,7 @@ func TestSecretDelivery(t *testing.T) {
 
 	status := awaitJobStatus(t, h.store.Pool(), jobID, 60*time.Second,
 		"succeeded", "failed", "dead_letter")
+	awaitJobLogs(t, h.store.Pool(), jobID, 1, 10*time.Second)
 	logs := jobLogs(t, h.store.Pool(), jobID)
 	if status != "succeeded" {
 		t.Fatalf("job finished %q, want succeeded. logs:\n%s", status, logs)
@@ -491,6 +624,7 @@ func TestFailingStepIsReportedWithExitCode(t *testing.T) {
 		t.Errorf("error class = %q, want user_script", errorClass)
 	}
 
+	awaitJobLogs(t, h.store.Pool(), jobID, 1, 10*time.Second)
 	logs := jobLogs(t, h.store.Pool(), jobID)
 	if !strings.Contains(logs, "about to fail") {
 		t.Errorf("logs missing the failing step's output; got:\n%s", logs)
