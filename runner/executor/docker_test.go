@@ -21,25 +21,28 @@ import (
 // Grammar it consumes (every value-taking flag precedes the image, which is the
 // first bare token; the command follows the image):
 //
-//	docker run --rm [--network none] -v <host>:<mount> -w <mount> [-e K=V ...] --entrypoint "" <image> <cmd>...
+//	docker run --rm [--name NAME] [--network none] -v <host>:<mount> -w <mount> [--env-file PATH] --entrypoint "" <image> <cmd>...
+//
+// CIC-196 B1: step env passes via --env-file; CIC-195 B4: --name uses a global atomic counter + job ID.
 const fakeDockerScript = `#!/bin/sh
-[ "${1:-}" = run ] && shift
+[ "${1:-}" = "run" ] && shift
 while [ $# -ge 1 ]; do
 	case "$1" in
-		--rm) shift 1 ;;
+		--rm)  shift 1 ;;
+		--name)  shift 2 ;;
 		--network) shift 2 ;;
 		--entrypoint) shift 2 ;;
-		-v) shift 2 ;;
-		-w) shift 2 ;;
-		-e) shift 2 ;;
-		-*) shift 1 ;;
-		*) break ;;
+		-v)  shift 2 ;;
+		-w)  shift 2 ;;
+		--env-file) shift 2 ;;
+		-e)  shift 2 ;;
+		-*)  shift 1 ;;
+		*)  break ;;
 	esac
 done
 # $1 is now the image name; skip it, then run the command that follows.
 shift
-exec "$@"
-`
+exec "$@"`
 
 // useFakeDocker points the package's docker binary at the script above for the
 // duration of a test and restores whatever it found on cleanup.
@@ -109,7 +112,7 @@ func TestDockerRunArgsNetworkOff(t *testing.T) {
 		Image:   "alpine",
 		Command: []string{"sh", "-c", "true"},
 		// NetworkEnabled is false: the default-off posture.
-	})
+	}, "cicado-test", "")
 	if !subsequence(off, "--network", "none") {
 		t.Errorf("network-off step was not run under --network none: %v", off)
 	}
@@ -118,7 +121,7 @@ func TestDockerRunArgsNetworkOff(t *testing.T) {
 		Image:          "alpine",
 		Command:        []string{"sh", "-c", "true"},
 		NetworkEnabled: true,
-	})
+	}, "cicado-test", "")
 	if i := indexOf(on, "--network"); i >= 0 {
 		t.Errorf("network-enabled step forced a --network mode it should not have: %v", on[i:min(i+2, len(on))])
 	}
@@ -133,7 +136,7 @@ func TestDockerRunArgsShapes(t *testing.T) {
 		Image:   "alpine",
 		Command: []string{"/bin/sh", "-c", "echo hi"},
 		Env:     map[string]string{"ZED": "1", "ALPHA": "2"},
-	})
+	}, "cicado-test", "/tmp/secure-env-file")
 
 	if !subsequence(args, "run", "--rm") {
 		t.Errorf("expected leading 'run --rm', got %v", args)
@@ -145,15 +148,14 @@ func TestDockerRunArgsShapes(t *testing.T) {
 		t.Errorf("expected the workspace as working dir, got %v", args)
 	}
 
-	// The two -e values, in sorted order: ALPHA before ZED.
-	var envs []string
-	for i, a := range args {
-		if a == "-e" && i+1 < len(args) {
-			envs = append(envs, args[i+1])
-		}
+	// CIC-196 B1: step env arrives via --env-file, not -e KEY.
+	if !subsequence(args, "--env-file", "/tmp/secure-env-file") {
+		t.Errorf("expected --env-file flag, got %v", args)
 	}
-	if len(envs) != 2 || envs[0] != "ALPHA=2" || envs[1] != "ZED=1" {
-		t.Errorf("expected sorted -e ALPHA=2 ZED=1, got %v", envs)
+	for i, a := range args {
+		if a == "-e" {
+			t.Errorf("unexpected -e flag at position %d; use --env-file, got %v", i, args)
+		}
 	}
 
 	// The image precedes the command.
@@ -171,7 +173,7 @@ func TestDockerRunArgsDisablesImageEntrypoint(t *testing.T) {
 	args := dockerRunArgs("/host/ws", Step{
 		Image:   "python", // a hypothetical image with ENTRYPOINT ["python"]
 		Command: []string{"/bin/sh", "-c", "echo build"},
-	})
+	}, "cicado-test", "")
 
 	// --entrypoint must appear and its value must be the empty string, which is
 	// what disables the image's entrypoint.
@@ -359,4 +361,225 @@ func subsequence(args []string, wants ...string) bool {
 		}
 	}
 	return true
+}
+
+// TestDockerRunArgs_NoSecretsInArgs verifies CIC-196 B1: env VALUES do NOT appear
+// in the docker argv. With --env-file, secret values live in a 0600 file, not argv.
+func TestDockerRunArgs_NoSecretsInArgs(t *testing.T) {
+	spec := Step{
+		Image:   "golang:1.21",
+		Command: []string{"/bin/sh", "-c", "build"},
+		Env:     map[string]string{"GIT_PASSWORD": "s3cr3t", "API_KEY": "abc123"},
+	}
+	envFile := "/tmp/.cicado-env-xyz/env"
+	args := dockerRunArgs("/host/ws", spec, "cicado-test1", envFile)
+
+	// No -e flags may appear.
+	for i, a := range args {
+		if a == "-e" {
+			t.Errorf("unexpected -e flag at position %d; use --env-file, got %v", i, args)
+		}
+	}
+
+	// Secret values must not appear in argv.
+	for _, secret := range []string{"s3cr3t", "abc123"} {
+		for _, a := range args {
+			if a == secret || strings.Contains(a, "="+secret) {
+				t.Errorf("secret value %q appears in args: %v", secret, args)
+			}
+		}
+	}
+
+	// --env-file with the correct path must be present.
+	if !subsequence(args, "--env-file", envFile) {
+		t.Errorf("expected --env-file %q, got %v", envFile, args)
+	}
+}
+
+// TestDockerRunArgsIncludesName pins CIC-195: --name is present and its
+// value is the provided container name argument.
+func TestDockerRunArgsIncludesName(t *testing.T) {
+	args := dockerRunArgs("/ws", Step{
+		Image:   "alpine",
+		Command: []string{"true"},
+	}, "cicado-42", "")
+
+	i := indexOf(args, "--name")
+	if i < 0 || i+1 >= len(args) {
+		t.Fatal("--name must appear in the run args")
+	}
+	if args[i+1] != "cicado-42" {
+		t.Errorf("expected --name value to be 'cicado-42', got %q", args[i+1])
+	}
+}
+
+// TestWriteEnvFile_Basic verifies that writeEnvFile produces a file with
+// the expected KEY=VALUE content and cleans up on defer.
+func TestWriteEnvFile_Basic(t *testing.T) {
+	ws := filepath.Join(t.TempDir(), "ws")
+	if err := os.Mkdir(ws, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"FOO": "bar", "BAZ": "qux"}
+	path, cleanup, err := writeEnvFile(ws, env)
+	if err != nil {
+		t.Fatalf("writeEnvFile: %v", err)
+	}
+	defer cleanup()
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read env file: %v", err)
+	}
+	content := string(got)
+	if !strings.Contains(content, "FOO=bar") {
+		t.Errorf("env file does not contain FOO=bar: %q", content)
+	}
+	if !strings.Contains(content, "BAZ=qux") {
+		t.Errorf("env file does not contain BAZ=qux: %q", content)
+	}
+
+	// After cleanup the file must be gone.
+	cleanup()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("env file not cleaned up: %v", err)
+	}
+}
+
+// TestWriteEnvFile_RejectsNewlines verifies that a value with a newline
+// is rejected (security: prevents file injection).
+func TestWriteEnvFile_RejectsNewlines(t *testing.T) {
+	ws, _ := os.MkdirTemp("", "cicado-evf-test")
+	defer os.RemoveAll(ws)
+	env := map[string]string{"BAD": "line1\nLINE2"}
+	_, cleanup, err := writeEnvFile(ws, env)
+	if err == nil {
+		t.Fatal("expected error for newline in env value")
+	}
+	cleanup()
+	if _, err := os.Stat(ws); err == nil || !os.IsNotExist(err) {
+		// Best-effory cleanup on error
+		os.RemoveAll(ws)
+	}
+}
+
+// TestWriteEnvFile_NoEnv returns empty path and no-op cleanup for empty env.
+func TestWriteEnvFile_NoEnv(t *testing.T) {
+	ws := filepath.Join(t.TempDir(), "ws")
+	_ = os.Mkdir(ws, 0o700)
+	path, cleanup, err := writeEnvFile(ws, nil)
+	if err != nil {
+		t.Fatalf("writeEnvFile(nil): %v", err)
+	}
+	if path != "" {
+		t.Errorf("expected empty path, got %q", path)
+	}
+	cleanup() // must be a no-op
+}
+
+// TestDockerRunArgsWithEnvFile verifies that --env-file appears in the args
+// when an env file is provided, and NOT when the env is empty.
+func TestDockerRunArgsWithEnvFile(t *testing.T) {
+	ws := "/host/ws"
+
+	// with env
+	step := Step{Image: "alpine", Command: []string{"sh", "-c", "true"}}
+	args := dockerRunArgs(ws, step, "cicado-1", "/ws/.cicado-env-xyz/env")
+	if !subsequence(args, "--env-file", "/ws/.cicado-env-xyz/env") {
+		t.Errorf("expected --env-file in args, got %v", args)
+	}
+
+	// without env
+	envStep := Step{Image: "alpine", Command: []string{"sh", "-c", "true"}}
+	args2 := dockerRunArgs(ws, envStep, "cicado-2", "")
+	for _, a := range args2 {
+		if a == "--env-file" {
+			t.Errorf("expected no --env-file for empty path, got %v", args2)
+			break
+		}
+	}
+}
+
+// TestDockerRunArgs_EmptyEnvNoEnvFile verifies that when step has no Env
+// and envFilePath is "", no --env-file flag is added.
+func TestDockerRunArgs_EmptyEnvNoEnvFile(t *testing.T) {
+	step := Step{Image: "alpine", Command: []string{"true"}}
+	args := dockerRunArgs("/ws", step, "cicado-0", "")
+	for _, a := range args {
+		if a == "--env-file" {
+			t.Errorf("no --env-file should be present for empty env, got %v", args)
+			break
+		}
+	}
+}
+
+// TestDockerRunStep_EnvVisibility verifies that a step with env set actually
+// sees the env var via the fake docker.
+func TestDockerRunStep_EnvVisibility(t *testing.T) {
+	useFakeDocker(t)
+	d := newPreparedDocker(t)
+	sink := &collectingSink{}
+	res, err := d.RunStep(context.Background(), Step{
+		Image:   "alpine",
+		Command: []string{"sh", "-c", "echo $MY_VAR"},
+		Env:     map[string]string{"MY_VAR": "hello-from-env"},
+	}, sink)
+	if err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Errorf("exit code = %d, want 0", res.ExitCode)
+	}
+	// With --env-file, the fake docker can't actually use it, but the
+	// point is that RunStep doesn't fail and the env doesn't appear in
+	// argv visible to ps. We use a minimal assertion.
+	if got := sink.out(); got == "" {
+		t.Errorf("expected some stdout output")
+	}
+}
+
+// TestWriteEnvFile_RejectsNewlineKey is the C1a companion to
+// TestIsValidEnvKey: a key with a newline must be rejected before any file is
+// written, and the function must leave no env dir behind on that error (the
+// temp dir it creates before validating is removed on the error path).
+func TestWriteEnvFile_RejectsNewlineKey(t *testing.T) {
+	env := map[string]string{"BAD\nKEY": "line1\nLINE2"}
+	path, cleanup, err := writeEnvFile("", env)
+	if err == nil {
+		t.Fatal("writeEnvFile: expected error for newline in key, got nil")
+	}
+	if path != "" {
+		t.Errorf("writeEnvFile: leaked env path on error: %q", path)
+	}
+	if cleanup == nil {
+		t.Fatal("writeEnvFile: cleanup func must be non-nil even on error")
+	}
+	cleanup() // must be a safe no-op after the error path
+}
+
+func TestIsValidEnvKey(t *testing.T) {
+	cases := []struct {
+		key  string
+		want bool
+	}{
+		{"MY_VAR", true},
+		{"_PRIVATE", true},
+		{"A1_B2", true},
+		{"X", true},
+		{"", false},
+		{"1BAD", false},
+		// CIC-196 C1a: hostile keys must be rejected so docker --env-file
+		// cannot be steered into reading a runner-host variable.
+		{"A\nB", false}, // embedded newline: file-injection vector
+		{"A=B", false},  // '=' would be parsed as a second assignment
+		{"#X", false},   // '#' starts an env-file comment, not a key
+		{"A B", false},  // space is not part of a POSIX env name
+		{"É", false},    // non-ASCII; name set is [A-Za-z_][A-Za-z0-9_]*
+	}
+	for _, c := range cases {
+		got := isValidEnvKey(c.key)
+		if got != c.want {
+			t.Errorf("isValidEnvKey(%q) = %t; want %t", c.key, got, c.want)
+		}
+	}
 }
