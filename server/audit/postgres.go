@@ -105,8 +105,8 @@ func (p *PostgresLog) Append(ctx context.Context, e Entry) (int64, error) {
 			 payload_hash, metadata, occurred_at)
 			 VALUES (NULLIF($1::text, '')::uuid, $2, $3, $4,
 			$5, '', $6, $7,
-			jsonb_build_object('reason', $8::text, 'prev_hash', $9::text),
-			$10)
+			jsonb_build_object('reason', $8::text, 'prev_hash', $9::text, 'hash_version', 2),
+			$10, 2)
 			RETURNING id`,
 		e.OrgID, e.PrincipalType, e.Actor, e.Surface,
 		string(e.Action), e.Target, hb, e.Reason, prev,
@@ -129,16 +129,18 @@ func (p *PostgresLog) Get(ctx context.Context, id int64) (Entry, error) {
 		prevHash   string
 	)
 	var orgID, principalType, surface string
+	var hashVer int16
 	err := p.pool.QueryRow(ctx,
 		`SELECT occurred_at, principal_id, action,
 			coalesce(subject_id, ''), payload_hash,
 			coalesce(metadata->>'reason', ''),
 			coalesce(metadata->>'prev_hash', ''),
-			coalesce(org_id::text, ''), coalesce(principal_type, ''), coalesce(surface, '')
+			coalesce(org_id::text, ''), coalesce(principal_type, ''), coalesce(surface, ''),
+		coalesce(hash_version, 1)
 		 FROM audit_events WHERE id = $1`,
 		id).Scan(&occurredAt, &principal, &action,
 		&subjID, &payloadB, &reason, &prevHash,
-		&orgID, &principalType, &surface)
+		&orgID, &principalType, &surface, &hashVer)
 	if err != nil {
 		// pgx returns pgx.ErrNoRows, not sql.ErrNoRows.
 		return Entry{}, fmt.Errorf("audit: get: %w", err)
@@ -155,6 +157,7 @@ func (p *PostgresLog) Get(ctx context.Context, id int64) (Entry, error) {
 		OrgID:         orgID,
 		PrincipalType: principalType,
 		Surface:       surface,
+		HashVersion:   int(hashVer),
 	}, nil
 }
 
@@ -169,7 +172,8 @@ func (p *PostgresLog) List(ctx context.Context, afterID int64, limit int) ([]Ent
 			payload_hash,
 			coalesce(metadata->>'reason', ''),
 			coalesce(metadata->>'prev_hash', ''),
-			coalesce(org_id::text, ''), coalesce(principal_type, ''), coalesce(surface, '')
+			coalesce(org_id::text, ''), coalesce(principal_type, ''), coalesce(surface, ''),
+			coalesce(hash_version, 1)
 			 FROM audit_events
 			 WHERE id > $1 ORDER BY id ASC LIMIT $2`,
 		afterID, limit)
@@ -191,8 +195,9 @@ func (p *PostgresLog) List(ctx context.Context, afterID int64, limit int) ([]Ent
 			prevHash  string
 		)
 		var orgID, principalType, surface string
+		var hashVer int16
 		if err := rows.Scan(&id, &occurred, &principal, &action,
-			&subjID, &payloadB, &reason, &prevHash, &orgID, &principalType, &surface); err != nil {
+			&subjID, &payloadB, &reason, &prevHash, &orgID, &principalType, &surface, &hashVer); err != nil {
 			return nil, fmt.Errorf("audit: list scan: %w", err)
 		}
 		out = append(out, Entry{
@@ -207,6 +212,7 @@ func (p *PostgresLog) List(ctx context.Context, afterID int64, limit int) ([]Ent
 			OrgID:         orgID,
 			PrincipalType: principalType,
 			Surface:       surface,
+			HashVersion:   int(hashVer),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -226,6 +232,10 @@ func (p *PostgresLog) VerifyChain(ctx context.Context) error {
 			coalesce(subject_id, ''),
 			coalesce(metadata->>'reason', ''),
 			coalesce(metadata->>'prev_hash', ''),
+			coalesce(org_id::text, ''),
+			coalesce(principal_type, ''),
+			coalesce(surface, ''),
+			coalesce(hash_version, 1),
 			payload_hash
 			 FROM audit_events
 			 ORDER BY id ASC`)
@@ -247,21 +257,27 @@ func (p *PostgresLog) VerifyChain(ctx context.Context) error {
 			storedPrev string
 			payloadB   []byte
 		)
+		var orgID, principalType, surface string
+		var hashVer int16
 		if err := rows.Scan(&id, &occurred, &actor, &action,
-			&subjID, &reason, &storedPrev, &payloadB); err != nil {
+			&subjID, &reason, &storedPrev, &orgID, &principalType, &surface, &hashVer, &payloadB); err != nil {
 			return fmt.Errorf("audit: verify: scan: %w", err)
 		}
 		storedHash := hex.EncodeToString(payloadB)
 		e := Entry{
-			ID:        id, // intentionally excluded from hash
-			Action:    Action(action),
-			Actor:     actor,
-			Target:    subjID,
-			Reason:    reason,
-			PrevHash:  prevHash,
-			Timestamp: occurred,
+			ID:            id, // intentionally excluded from hash
+			Action:        Action(action),
+			Actor:         actor,
+			Target:        subjID,
+			Reason:        reason,
+			PrevHash:      prevHash,
+			Timestamp:     occurred,
+			OrgID:         orgID,
+			PrincipalType: principalType,
+			Surface:       surface,
+			HashVersion:   int(hashVer),
 		}
-		computed := hashEntry(e)
+		computed := hashForRow(e)
 		if computed != storedHash {
 			return fmt.Errorf("audit: chain broken at entry %d (id=%d): computed=%s stored=%s",
 				i, id, computed, storedHash)

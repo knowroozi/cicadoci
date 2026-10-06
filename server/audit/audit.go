@@ -61,6 +61,15 @@ const (
 
 // Entry is a single audit log entry.
 type Entry struct {
+	// HashVersion tags the hash algorithm:
+	//    1 = legacy hash (6 fields: action, actor, target, reason,
+	//           timestamp, prev_hash)
+	//    2 = extends v1 with principal_type, surface, org_id
+	//
+	// CIC-205: Append writes new rows with v2. VerifyChain dispatches
+	// on this per-row field.
+	HashVersion int
+
 	// ID is a monotonic sequence number.
 	ID int64
 
@@ -158,6 +167,7 @@ func NewMemoryLog() *MemoryLog {
 // include it because it assigns IDs before hashing, but that backend-
 // specific behaviour must not leak into a backend-agnostic hash function.
 // Chain integrity is maintained by the prev_hash pointer, not by the id.
+// hashEntry computes the v1 hash (legacy, 6 fields).
 func hashEntry(e Entry) string {
 	body, _ := json.Marshal(struct {
 		Action    Action
@@ -178,6 +188,45 @@ func hashEntry(e Entry) string {
 	return hex.EncodeToString(h[:])
 }
 
+// hashEntryV2 computes the v2 hash (CIC-205): v1 fields plus
+// principal_type, surface, org_id. Rows written after CIC-205
+// use this.
+func hashEntryV2(e Entry) string {
+	body, _ := json.Marshal(struct {
+		Action        Action
+		Actor         string
+		Target        string
+		Reason        string
+		Timestamp     time.Time
+		PrevHash      string
+		PrincipalType string
+		Surface       string
+		OrgID         string
+	}{
+		Action:        e.Action,
+		Actor:         e.Actor,
+		Target:        e.Target,
+		Reason:        e.Reason,
+		Timestamp:     e.Timestamp,
+		PrevHash:      e.PrevHash,
+		PrincipalType: e.PrincipalType,
+		Surface:       e.Surface,
+		OrgID:         e.OrgID,
+	})
+	h := sha256.Sum256(body)
+	return hex.EncodeToString(h[:])
+}
+
+// hashForRow dispatches on HashVersion:
+//
+//	v2 uses hashEntryV2; anything else uses the v1 hash.
+func hashForRow(e Entry) string {
+	if e.HashVersion == 2 {
+		return hashEntryV2(e)
+	}
+	return hashEntry(e)
+}
+
 // Append records a new audit entry.
 func (m *MemoryLog) Append(_ context.Context, e Entry) (int64, error) {
 	m.mu.Lock()
@@ -190,9 +239,10 @@ func (m *MemoryLog) Append(_ context.Context, e Entry) (int64, error) {
 	if e.Timestamp.IsZero() {
 		e.Timestamp = time.Now()
 	}
+	e.HashVersion = 2 // CIC-205: new rows are v2
 	// Set PrevHash to the last entry's hash.
 	e.PrevHash = m.entries[len(m.entries)-1].Hash
-	e.Hash = hashEntry(e)
+	e.Hash = hashForRow(e)
 
 	m.entries = append(m.entries, e)
 	return id, nil
@@ -240,9 +290,9 @@ func (m *MemoryLog) VerifyChain(_ context.Context) error {
 			return fmt.Errorf("audit: hash chain broken at entry %d: PrevHash=%s != prev.Hash=%s",
 				i, e.PrevHash, m.entries[i-1].Hash)
 		}
-		if hashEntry(e) != e.Hash {
+		if hashForRow(e) != e.Hash {
 			return fmt.Errorf("audit: hash mismatch at entry %d: computed=%s stored=%s",
-				i, hashEntry(e), e.Hash)
+				i, hashForRow(e), e.Hash)
 		}
 	}
 	return nil
