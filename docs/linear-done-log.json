@@ -1,1 +1,1941 @@
-
+[
+  {
+    "identifier": "CIC-9",
+    "title": "Repo hygiene: Apache-2.0 LICENSE, CONTRIBUTING, CoC, ADR process, commit project-docs",
+    "description": "Land LICENSE (Apache-2.0 per ADR-006), CONTRIBUTING.md, code of conduct, CLAUDE.md, and the `project-docs/` folder (plan, architecture, ADRs, frozen protocol) as the first-class source of truth.",
+    "state": "completed",
+    "completedAt": "2026-09-17T12:02:20.319Z",
+    "createdAt": "2026-09-16T21:36:52.507Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M0 — Foundations",
+    "url": "https://linear.app/cicadoci/issue/CIC-9/repo-hygiene-apache-20-license-contributing-coc-adr-process-commit",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/1",
+      "https://github.com/cicadoci/core/tree/claude/brave-wright-gagw6n"
+    ]
+  },
+  {
+    "identifier": "CIC-6",
+    "title": "Commit frozen runner proto + wire protoc codegen",
+    "description": "Land `proto/cicado/runner/v1/runner.proto` (FROZEN — additive only, per ADR-004 + 04-runner-protocol.md) and `make proto` codegen for Go server + runner packages. Include buf or protoc tooling pinned in the repo.",
+    "state": "completed",
+    "completedAt": "2026-09-17T21:12:56.031Z",
+    "createdAt": "2026-09-16T21:36:37.924Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M0 — Foundations",
+    "url": "https://linear.app/cicadoci/issue/CIC-6/commit-frozen-runner-proto-wire-protoc-codegen",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/2",
+      "https://github.com/cicadoci/core/tree/claude/brave-wright-gagw6n"
+    ]
+  },
+  {
+    "identifier": "CIC-7",
+    "title": "Postgres schema v1 migration (0001_init.sql)",
+    "description": "Tables per 02-architecture §2: orgs, repos, workflows, runs, jobs, steps, log_chunks, secrets, runners, tokens, audit_events. Include the SKIP LOCKED claim query and a load-test toy script validating race-free claiming. Migration tooling choice (goose/atlas/tern) decided here.",
+    "state": "completed",
+    "completedAt": "2026-09-17T21:15:52.711Z",
+    "createdAt": "2026-09-16T21:36:42.770Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M0 — Foundations",
+    "url": "https://linear.app/cicadoci/issue/CIC-7/postgres-schema-v1-migration-0001-initsql",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/3",
+      "https://github.com/cicadoci/core/tree/claude/brave-wright-gagw6n"
+    ]
+  },
+  {
+    "identifier": "CIC-10",
+    "title": "M0 walking skeleton: hardcoded `echo hello` job end to end",
+    "description": "Milestone exit ticket. A hardcoded job in the DB runs over the real gRPC stream to the local runner and back: assignment → ack → execution → status. Proves the frozen wire format before any feature work.",
+    "state": "completed",
+    "completedAt": "2026-09-17T21:21:33.597Z",
+    "createdAt": "2026-09-16T21:36:57.646Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M0 — Foundations",
+    "url": "https://linear.app/cicadoci/issue/CIC-10/m0-walking-skeleton-hardcoded-echo-hello-job-end-to-end",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/4",
+      "https://github.com/cicadoci/core/tree/claude/brave-wright-gagw6n"
+    ]
+  },
+  {
+    "identifier": "CIC-5",
+    "title": "Monorepo scaffold: layout, Makefile, docker-compose dev loop",
+    "description": "Create `/server /runner /proto /web /terraform /docs` layout, root Makefile (`make dev`, `make test`, `make proto`), and a docker-compose file that brings up server + Postgres + one runner for local development.",
+    "state": "completed",
+    "completedAt": "2026-09-17T21:24:49.221Z",
+    "createdAt": "2026-09-16T21:36:32.874Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M0 — Foundations",
+    "url": "https://linear.app/cicadoci/issue/CIC-5/monorepo-scaffold-layout-makefile-docker-compose-dev-loop",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/5",
+      "https://github.com/cicadoci/core/tree/claude/brave-wright-gagw6n"
+    ]
+  },
+  {
+    "identifier": "CIC-8",
+    "title": "Bootstrap CI on GitHub Actions (lint, vet, race, tests)",
+    "description": "Temporary CI on GitHub Actions: golangci-lint, go vet, go test -race, proto lint/breaking-change check on the frozen proto. Migrates onto CICaDo itself at M3 dogfood.",
+    "state": "completed",
+    "completedAt": "2026-09-17T21:30:22.768Z",
+    "createdAt": "2026-09-16T21:36:47.409Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M0 — Foundations",
+    "url": "https://linear.app/cicadoci/issue/CIC-8/bootstrap-ci-on-github-actions-lint-vet-race-tests",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/6",
+      "https://github.com/cicadoci/core/tree/claude/brave-wright-gagw6n"
+    ]
+  },
+  {
+    "identifier": "CIC-11",
+    "title": "Server skeleton: HTTP API + gRPC RunnerService scaffolding",
+    "description": "HTTP API surface (chi/stdlib mux), gRPC RunnerService implementing Register/Session/LogStream stubs, config loading, graceful shutdown, structured logging.",
+    "state": "completed",
+    "completedAt": "2026-09-22T13:15:59.202Z",
+    "createdAt": "2026-09-16T21:37:02.572Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M1 — Core engine",
+    "url": "https://linear.app/cicadoci/issue/CIC-11/server-skeleton-http-api-grpc-runnerservice-scaffolding",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/8"
+    ]
+  },
+  {
+    "identifier": "CIC-12",
+    "title": "Postgres job queue: SKIP LOCKED claim, LISTEN/NOTIFY, sweeper, retries",
+    "description": "Transactional enqueue with run creation (no dual-write). Claim via FOR UPDATE SKIP LOCKED with runner tag matching; LISTEN/NOTIFY doorbell; visibility-timeout sweeper requeuing expired leases; capped exponential backoff retries; dead-letter status with reason. Behind the Queue interface.",
+    "state": "completed",
+    "completedAt": "2026-09-22T21:03:04.259Z",
+    "createdAt": "2026-09-16T21:37:07.572Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M1 — Core engine",
+    "url": "https://linear.app/cicadoci/issue/CIC-12/postgres-job-queue-skip-locked-claim-listennotify-sweeper-retries",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/9"
+    ]
+  },
+  {
+    "identifier": "CIC-14",
+    "title": "Executor interface + docker executor",
+    "description": "Prepare/RunStep/Cleanup interface (the portability seam — k8s/microVM come later as drivers). Docker executor: fresh container per step, per-job workspace volume, job_id container labels for crash reconciliation, network default-off unless step requests it, resource limits.",
+    "state": "completed",
+    "completedAt": "2026-09-23T14:55:39.146Z",
+    "createdAt": "2026-09-16T21:37:17.963Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M1 — Core engine",
+    "url": "https://linear.app/cicadoci/issue/CIC-14/executor-interface-docker-executor",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/11"
+    ]
+  },
+  {
+    "identifier": "CIC-13",
+    "title": "Runner: enrollment, Session stream, heartbeats, graceful drain",
+    "description": "Register with token (labels from token), credential persistence (0600), outbound Session stream with Hello/ServerHello, heartbeat loop renewing leases, jittered exp backoff reconnect (1s→60s), graceful drain on SIGTERM.",
+    "state": "completed",
+    "completedAt": "2026-09-23T18:19:07.082Z",
+    "createdAt": "2026-09-16T21:37:13.130Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M1 — Core engine",
+    "url": "https://linear.app/cicadoci/issue/CIC-13/runner-enrollment-session-stream-heartbeats-graceful-drain",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/13"
+    ]
+  },
+  {
+    "identifier": "CIC-15",
+    "title": "Shell executor (trusted infra jobs)",
+    "description": "Direct host execution behind the Executor interface. Documented loudly as trusted-only (poisonable shared state). Workspace dir management, process-group kill on cancel.",
+    "state": "completed",
+    "completedAt": "2026-09-23T21:30:08.266Z",
+    "createdAt": "2026-09-16T21:37:22.760Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "",
+    "project": "CICaDo MVP",
+    "milestone": "M1 — Core engine",
+    "url": "https://linear.app/cicadoci/issue/CIC-15/shell-executor-trusted-infra-jobs",
+    "prLinks": []
+  },
+  {
+    "identifier": "CIC-17",
+    "title": "Reconnect/resume: lease verdicts, runner journal, watermark replay",
+    "description": "Implement 04-runner-protocol §9: Hello resume list → RESUME/ABANDON verdicts, bounded local journal (--journal-max-bytes, 256 MiB default) with gap markers, idempotent status/log replay from watermarks, startup container reconciliation by job_id label, zombie-lease rejection.",
+    "state": "completed",
+    "completedAt": "2026-09-24T03:29:16.006Z",
+    "createdAt": "2026-09-16T21:37:39.296Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M1 — Core engine",
+    "url": "https://linear.app/cicadoci/issue/CIC-17/reconnectresume-lease-verdicts-runner-journal-watermark-replay",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/15"
+    ]
+  },
+  {
+    "identifier": "CIC-16",
+    "title": "Step engine: env injection, exit codes, timeouts, cancellation propagation",
+    "description": "Sequential step execution within a job: env/secret injection at exec time, exit-code capture, per-step + per-job timeouts, context-driven cancellation that kills containers/processes, sticky terminal states.",
+    "state": "completed",
+    "completedAt": "2026-09-24T04:02:56.316Z",
+    "createdAt": "2026-09-16T21:37:30.709Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M1 — Core engine",
+    "url": "https://linear.app/cicadoci/issue/CIC-16/step-engine-env-injection-exit-codes-timeouts-cancellation-propagation",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/14"
+    ]
+  },
+  {
+    "identifier": "CIC-18",
+    "title": "M1 E2E test: multi-step job, cancel, server-restart survival",
+    "description": "Milestone exit ticket. Integration test suite: multi-step job defined in DB runs on a remote runner over the wire; cancellation kills containers; server restart mid-job → runner reconnects and resumes; expired lease → requeue + ABANDON of the stale runner.",
+    "state": "completed",
+    "completedAt": "2026-09-24T11:40:49.114Z",
+    "createdAt": "2026-09-16T21:37:44.221Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M1 — Core engine",
+    "url": "https://linear.app/cicadoci/issue/CIC-18/m1-e2e-test-multi-step-job-cancel-server-restart-survival",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/16",
+      "https://github.com/cicadoci/core/pull/21"
+    ]
+  },
+  {
+    "identifier": "CIC-19",
+    "title": "YAML workflow schema v1 + published JSON Schema",
+    "description": "Schema per 02-architecture §6: triggers, jobs, steps, needs, image/run/env, secret refs, approval gates, identity: aws. Publish the JSON Schema (it doubles as the agent-facing contract). Guardrail: no loops/expressions beyond `if:` status + branch/tag filters.",
+    "state": "completed",
+    "completedAt": "2026-09-24T15:59:15.452Z",
+    "createdAt": "2026-09-16T21:37:49.095Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M2 — Workflow definition",
+    "url": "https://linear.app/cicadoci/issue/CIC-19/yaml-workflow-schema-v1-published-json-schema",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/17"
+    ]
+  },
+  {
+    "identifier": "CIC-20",
+    "title": "Workflow parser with positional (line/column) error messages",
+    "description": "Parse + validate against schema with precise, actionable errors carrying line/column and a fix hint. This is a top-3 UX differentiator vs GitHub Actions' silent YAML failures — invest in error message quality and test coverage of bad inputs.",
+    "state": "completed",
+    "completedAt": "2026-09-24T16:00:03.731Z",
+    "createdAt": "2026-09-16T21:37:54.792Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M2 — Workflow definition",
+    "url": "https://linear.app/cicadoci/issue/CIC-20/workflow-parser-with-positional-linecolumn-error-messages",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/18"
+    ]
+  },
+  {
+    "identifier": "CIC-21",
+    "title": "DAG resolution + `needs` fan-out/fan-in scheduling",
+    "description": "Build the job DAG from `needs` edges, detect cycles at validation, schedule fan-out/fan-in, propagate upstream failure/cancellation semantics to dependents.",
+    "state": "completed",
+    "completedAt": "2026-09-24T16:06:02.628Z",
+    "createdAt": "2026-09-16T21:38:00.978Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M2 — Workflow definition",
+    "url": "https://linear.app/cicadoci/issue/CIC-21/dag-resolution-needs-fan-outfan-in-scheduling",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/19"
+    ]
+  },
+  {
+    "identifier": "CIC-22",
+    "title": "Trigger filters (branch/tag) + `if:` step-status conditionals",
+    "description": "Event trigger matching (push/PR + branch/tag globs) and the minimal `if:` conditional on step status (success/failure/always). Deliberately nothing more — no expression language.",
+    "state": "completed",
+    "completedAt": "2026-09-24T18:31:04.016Z",
+    "createdAt": "2026-09-16T21:38:07.427Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M2 — Workflow definition",
+    "url": "https://linear.app/cicadoci/issue/CIC-22/trigger-filters-branchtag-if-step-status-conditionals",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/20"
+    ]
+  },
+  {
+    "identifier": "CIC-23",
+    "title": "`cicado validate` CLI subcommand + API endpoint",
+    "description": "Validate a workflow file locally and via API, returning the same positional errors. This endpoint is later exposed to agents as the MCP `validate_workflow` tool.",
+    "state": "completed",
+    "completedAt": "2026-09-25T01:11:31.550Z",
+    "createdAt": "2026-09-16T21:38:12.200Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M2 — Workflow definition",
+    "url": "https://linear.app/cicadoci/issue/CIC-23/cicado-validate-cli-subcommand-api-endpoint",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/22"
+    ]
+  },
+  {
+    "identifier": "CIC-24",
+    "title": "GitHub App webhook receiver: signature verify, idempotency, replay tolerance",
+    "description": "Receive push / pull_request / check_suite / check_run rerequests. HMAC signature verification, delivery-ID idempotency keys, replay tolerance, webhook flood backpressure hooks.",
+    "state": "completed",
+    "completedAt": "2026-09-25T15:28:00.500Z",
+    "createdAt": "2026-09-16T21:38:17.050Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M3 — GitHub App integration",
+    "url": "https://linear.app/cicadoci/issue/CIC-24/github-app-webhook-receiver-signature-verify-idempotency-replay",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/23"
+    ]
+  },
+  {
+    "identifier": "CIC-25",
+    "title": "Checks API reporting: status lifecycle, annotations, re-run",
+    "description": "Report pending → in_progress → completed with summary + annotations from structured events; support re-run from GitHub's UI (check_run rerequested) and from CICaDo.",
+    "state": "completed",
+    "completedAt": "2026-09-25T15:28:47.595Z",
+    "createdAt": "2026-09-16T21:38:21.289Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M3 — GitHub App integration",
+    "url": "https://linear.app/cicadoci/issue/CIC-25/checks-api-reporting-status-lifecycle-annotations-re-run",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/24"
+    ]
+  },
+  {
+    "identifier": "CIC-35",
+    "title": "Log storage: Postgres hot → S3 compaction, transparent read-through",
+    "description": "Hot log_chunks in Postgres during the run; on completion, compact to an S3 object (BlobStore interface), prune Postgres rows, and serve reads transparently from either tier.",
+    "state": "completed",
+    "completedAt": "2026-09-25T15:43:41.425Z",
+    "createdAt": "2026-09-16T21:39:38.303Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "",
+    "project": "CICaDo MVP",
+    "milestone": "M4 — Logs \u0026 artifacts",
+    "url": "https://linear.app/cicadoci/issue/CIC-35/log-storage-postgres-hot-s3-compaction-transparent-read-through",
+    "prLinks": []
+  },
+  {
+    "identifier": "CIC-26",
+    "title": "Per-job GitHub installation tokens for clone (never persisted)",
+    "description": "Mint short-lived installation tokens per job for git clone (delivered via GitContext.clone_url), never persisted, never logged, registered in the redaction masker.",
+    "state": "completed",
+    "completedAt": "2026-09-25T18:58:38.222Z",
+    "createdAt": "2026-09-16T21:38:26.065Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M3 — GitHub App integration",
+    "url": "https://linear.app/cicadoci/issue/CIC-26/per-job-github-installation-tokens-for-clone-never-persisted",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/25"
+    ]
+  },
+  {
+    "identifier": "CIC-27",
+    "title": "Fork-PR policy: no secrets, restricted runner tags",
+    "description": "Untrusted fork PRs run with zero secrets, no deploy identities, and a restricted runner tag pool. Policy enforced at dispatch, not in workflow config. (Answer to the pwn-request / self-hosted-runner-hijack attack class.)",
+    "state": "completed",
+    "completedAt": "2026-09-26T12:56:28.919Z",
+    "createdAt": "2026-09-16T21:38:31.246Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M3 — GitHub App integration",
+    "url": "https://linear.app/cicadoci/issue/CIC-27/fork-pr-policy-no-secrets-restricted-runner-tags",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/26"
+    ]
+  },
+  {
+    "identifier": "CIC-28",
+    "title": "Forge adapter interface (GitHub as first driver)",
+    "description": "Define the `Forge` Go interface (events in, status/annotations out, clone credentials) with GitHub as the sole implementation. GitLab/Bitbucket become later drivers, not rewrites.",
+    "state": "completed",
+    "completedAt": "2026-09-26T23:48:20.704Z",
+    "createdAt": "2026-09-16T21:38:36.597Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M3 — GitHub App integration",
+    "url": "https://linear.app/cicadoci/issue/CIC-28/forge-adapter-interface-github-as-first-driver",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/27"
+    ]
+  },
+  {
+    "identifier": "CIC-67",
+    "title": "Forge Reporter/TokenMinter adapters — fix nominal-type mismatch with server/github",
+    "description": "[CIC-28](https://linear.app/cicadoci/issue/CIC-28/forge-adapter-interface-github-as-first-driver) shipped `forge.Reporter` and `forge.TokenMinter` with doc comments claiming `*github.ChecksClient` and `*github.InstallationTokenMinter` satisfy them \"via structural typing.\" Go interface satisfaction is nominal, not structural: `forge.RunRef`/`RerunRef`/`Conclusion`/`Annotation` are distinct named types from their `github` package counterparts, so neither concrete type actually implements the corresponding `forge` interface. `TokenMinter.CloneCredentialsForRun` also has no `context.Context` parameter and no way to obtain an installation ID from a bare `RunRef`, so `*InstallationTokenMinter` doesn't match by signature either.\n\nFlagged in review on [cicadoci/core#27](https://linear.app/cicadoci/review/cic-28-forge-adapter-interface-github-as-first-driver-2a0d8711bf74) ([CIC-28](https://linear.app/cicadoci/issue/CIC-28/forge-adapter-interface-github-as-first-driver)). Nothing in `server/main` wires `forge.NewGitHubForge` yet, so this is latent — it will fail to compile the moment real wiring is attempted.\n\nFix: add adapter types in `server/github` (which may depend on `server/forge`, a leaf package, without a cycle) that convert between the two type sets, add `ctx` to `TokenMinter.CloneCredentialsForRun`, and add an installation-ID resolver so the adapter can actually mint a token. Prove it with a compile-time assertion and tests.",
+    "state": "completed",
+    "completedAt": "2026-09-27T00:29:11.323Z",
+    "createdAt": "2026-09-26T23:58:18.499Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M3 — GitHub App integration",
+    "url": "https://linear.app/cicadoci/issue/CIC-67/forge-reportertokenminter-adapters-fix-nominal-type-mismatch-with",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/49"
+    ]
+  },
+  {
+    "identifier": "CIC-41",
+    "title": "Audit event pipeline (all surfaces, one chokepoint)",
+    "description": "Every state-changing action from any surface (web/chat/MCP/API) records principal, surface, action, subject, payload hash, timestamp. Queryable; feeds compliance stories later. Build it as a chokepoint, not per-handler sprinkles.",
+    "state": "completed",
+    "completedAt": "2026-09-27T02:10:24.893Z",
+    "createdAt": "2026-09-16T21:40:14.436Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M5 — Secrets \u0026 identity",
+    "url": "https://linear.app/cicadoci/issue/CIC-41/audit-event-pipeline-all-surfaces-one-chokepoint",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/46",
+      "https://github.com/cicadoci/core/pull/55"
+    ]
+  },
+  {
+    "identifier": "CIC-49",
+    "title": "Slack app foundation: Socket Mode + Events API",
+    "description": "Slack app manifest, Socket Mode as the default (no public ingress — a self-hosting feature) and Events API documented for scale. 3-second ack discipline on all interactive payloads.",
+    "state": "completed",
+    "completedAt": "2026-09-27T02:11:05.110Z",
+    "createdAt": "2026-09-16T21:40:56.920Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M7 — ChatOps: Slack",
+    "url": "https://linear.app/cicadoci/issue/CIC-49/slack-app-foundation-socket-mode-events-api",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/44",
+      "https://github.com/cicadoci/core/pull/65"
+    ]
+  },
+  {
+    "identifier": "CIC-57",
+    "title": "AI triage eval harness: 10 seeded failure scenarios (≥8/10 gate)",
+    "description": "Milestone exit ticket. Ten seeded failure scenarios (dep resolution, OOM, flaky test, expired creds, bad YAML, timeout, image pull, network, disk, user script bug); Claude pointed at the MCP server must correctly explain ≥8/10. Graded manually; harness re-runnable as a regression gate.",
+    "state": "completed",
+    "completedAt": "2026-09-27T02:11:36.981Z",
+    "createdAt": "2026-09-16T21:41:39.344Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M8 — MCP server \u0026 AI surface",
+    "url": "https://linear.app/cicadoci/issue/CIC-57/ai-triage-eval-harness-10-seeded-failure-scenarios-810-gate",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/43",
+      "https://github.com/cicadoci/core/pull/61"
+    ]
+  },
+  {
+    "identifier": "CIC-60",
+    "title": "Backpressure \u0026amp; limits: concurrency, log rates, payload caps, webhook floods",
+    "description": "Max concurrent jobs per org/runner, log rate caps, request/payload size caps, webhook flood protection, graceful degradation under load. Prevents a single noisy repo taking down an install.",
+    "state": "completed",
+    "completedAt": "2026-09-27T02:12:11.147Z",
+    "createdAt": "2026-09-16T21:41:54.685Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M9 — AWS packaging, hardening \u0026 launch prep",
+    "url": "https://linear.app/cicadoci/issue/CIC-60/backpressure-andamp-limits-concurrency-log-rates-payload-caps-webhook",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/42",
+      "https://github.com/cicadoci/core/pull/53",
+      "https://github.com/cicadoci/core/pull/63"
+    ]
+  },
+  {
+    "identifier": "CIC-56",
+    "title": "MCP auth: scoped tokens + per-invocation audit",
+    "description": "MCP tokens carry `read` scope only in MVP; every tool invocation is audited with its principal; per-tool allow-listing; no shared credentials with human sessions.",
+    "state": "completed",
+    "completedAt": "2026-09-27T02:13:17.660Z",
+    "createdAt": "2026-09-16T21:41:33.966Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M8 — MCP server \u0026 AI surface",
+    "url": "https://linear.app/cicadoci/issue/CIC-56/mcp-auth-scoped-tokens-per-invocation-audit",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/39",
+      "https://github.com/cicadoci/core/pull/60"
+    ]
+  },
+  {
+    "identifier": "CIC-55",
+    "title": "MCP server: read-only diagnostic tools",
+    "description": "Read-only tool set: list_runs, get_run, get_job, get_failed_step_logs, get_structured_events, classify_failure, diff_against_last_green, validate_workflow. Typed JSON schemas, sensible token-efficient payloads. No write tools in MVP (those come in Phase 1 behind human-in-the-loop consent).",
+    "state": "completed",
+    "completedAt": "2026-09-27T02:13:47.848Z",
+    "createdAt": "2026-09-16T21:41:28.695Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M8 — MCP server \u0026 AI surface",
+    "url": "https://linear.app/cicadoci/issue/CIC-55/mcp-server-read-only-diagnostic-tools",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/38",
+      "https://github.com/cicadoci/core/pull/59"
+    ]
+  },
+  {
+    "identifier": "CIC-52",
+    "title": "Threaded, edit-in-place run status messages",
+    "description": "One message per run, edited in place as the run progresses (no channel spam), with step detail in the thread. Deliberate UX contrast with GitHub's notification firehose.",
+    "state": "completed",
+    "completedAt": "2026-09-27T02:14:14.217Z",
+    "createdAt": "2026-09-16T21:41:12.838Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M7 — ChatOps: Slack",
+    "url": "https://linear.app/cicadoci/issue/CIC-52/threaded-edit-in-place-run-status-messages",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/37",
+      "https://github.com/cicadoci/core/pull/67"
+    ]
+  },
+  {
+    "identifier": "CIC-54",
+    "title": "Failure classifier v1 (rule-based taxonomy)",
+    "description": "Rule-based taxonomy mapping exit code + phase + log patterns → {infra, deps, test, timeout, oom, auth, user_script}, emitted as error_classified structured events. Ship with a labelled corpus of real failures for regression testing.",
+    "state": "completed",
+    "completedAt": "2026-09-27T02:14:53.058Z",
+    "createdAt": "2026-09-16T21:41:24.123Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M8 — MCP server \u0026 AI surface",
+    "url": "https://linear.app/cicadoci/issue/CIC-54/failure-classifier-v1-rule-based-taxonomy",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/35",
+      "https://github.com/cicadoci/core/pull/52"
+    ]
+  },
+  {
+    "identifier": "CIC-34",
+    "title": "Artifacts: presigned upload/download, namespacing, retention",
+    "description": "Upload/download via presigned S3 URLs, per-run namespacing, size caps, retention policy + lifecycle rules. Artifact events emitted into the structured event stream.",
+    "state": "completed",
+    "completedAt": "2026-09-27T02:15:43.944Z",
+    "createdAt": "2026-09-16T21:39:34.290Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M4 — Logs \u0026 artifacts",
+    "url": "https://linear.app/cicadoci/issue/CIC-34/artifacts-presigned-uploaddownload-namespacing-retention",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/33",
+      "https://github.com/cicadoci/core/pull/56"
+    ]
+  },
+  {
+    "identifier": "CIC-33",
+    "title": "SSE log fan-out with Last-Event-ID resume",
+    "description": "Server-Sent Events endpoint per job with Last-Event-ID resume, per-connection backpressure, and clean disconnect handling. Feeds the browser log viewer and any CLI `logs -f`.",
+    "state": "completed",
+    "completedAt": "2026-09-27T02:16:25.941Z",
+    "createdAt": "2026-09-16T21:39:29.553Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M4 — Logs \u0026 artifacts",
+    "url": "https://linear.app/cicadoci/issue/CIC-33/sse-log-fan-out-with-last-event-id-resume",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/32",
+      "https://github.com/cicadoci/core/pull/53",
+      "https://github.com/cicadoci/core/pull/54"
+    ]
+  },
+  {
+    "identifier": "CIC-32",
+    "title": "Log storage: Postgres hot → S3 cold with transparent read-through",
+    "description": "Hot logs in Postgres during the run; compact and flush to S3 on completion with Postgres rows pruned. Transparent read-through so the UI/API don't care where a log lives. BlobStore interface with S3 as first driver.",
+    "state": "completed",
+    "completedAt": "2026-09-27T02:16:53.105Z",
+    "createdAt": "2026-09-16T21:39:23.505Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M4 — Logs \u0026 artifacts",
+    "url": "https://linear.app/cicadoci/issue/CIC-32/log-storage-postgres-hot-s3-cold-with-transparent-read-through",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/31",
+      "https://github.com/cicadoci/core/pull/64"
+    ]
+  },
+  {
+    "identifier": "CIC-30",
+    "title": "LogStream implementation: chunks, watermark acks, throttle",
+    "description": "Implement the LogStream lane per proto: chunk batching (≤64 KiB / 200 ms), shared seq space with StructuredEvents, LogAck watermarks, Throttle compliance, server-side backpressure.",
+    "state": "completed",
+    "completedAt": "2026-09-27T02:18:14.787Z",
+    "createdAt": "2026-09-16T21:38:48.986Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M4 — Logs \u0026 artifacts",
+    "url": "https://linear.app/cicadoci/issue/CIC-30/logstream-implementation-chunks-watermark-acks-throttle",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/29"
+    ]
+  },
+  {
+    "identifier": "CIC-29",
+    "title": "M3 E2E: push → check → run → status; re-run from both sides; begin dogfooding",
+    "description": "Milestone exit ticket. Push to a connected repo triggers a run and the PR shows live check status; re-run works from GitHub and from CICaDo. Then: point this repo's own tests at CICaDo (dogfooding begins here, not at M9).",
+    "state": "completed",
+    "completedAt": "2026-09-28T01:14:03.280Z",
+    "createdAt": "2026-09-16T21:38:42.413Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M3 — GitHub App integration",
+    "url": "https://linear.app/cicadoci/issue/CIC-29/m3-e2e-push-check-run-status-re-run-from-both-sides-begin-dogfooding",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/28"
+    ]
+  },
+  {
+    "identifier": "CIC-31",
+    "title": "Secret redaction on log ingest + adversarial test suite",
+    "description": "Non-negotiable, day one. Scrub every registered secret value and derived encodings (base64, URL-encoded) before persistence or fan-out; runner-side best-effort masking as defense in depth. Ship an adversarial test suite (split-across-chunks, encodings, partial lines) + fuzzing in CI. Lesson: CVE-2025-30066 — log exfiltration needs no network.",
+    "state": "completed",
+    "completedAt": "2026-09-28T11:34:48.517Z",
+    "createdAt": "2026-09-16T21:38:55.338Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M4 — Logs \u0026 artifacts",
+    "url": "https://linear.app/cicadoci/issue/CIC-31/secret-redaction-on-log-ingest-adversarial-test-suite",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/30",
+      "https://github.com/cicadoci/core/pull/50"
+    ]
+  },
+  {
+    "identifier": "CIC-36",
+    "title": "Structured event stream: kinds, schemas, persistence",
+    "description": "Emit and persist StructuredEvents (step_started, step_finished, error_classified, artifact_uploaded, log_gap) alongside raw text, with per-kind JSON schemas published next to the workflow schema. This is the substrate for the UI, classify_failure, and MCP — get the taxonomy right here.",
+    "state": "completed",
+    "completedAt": "2026-09-28T11:49:05.927Z",
+    "createdAt": "2026-09-16T21:39:43.556Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M4 — Logs \u0026 artifacts",
+    "url": "https://linear.app/cicadoci/issue/CIC-36/structured-event-stream-kinds-schemas-persistence",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/34",
+      "https://github.com/cicadoci/core/pull/51"
+    ]
+  },
+  {
+    "identifier": "CIC-53",
+    "title": "ChatProvider interface (Slack as first driver)",
+    "description": "Define the `ChatProvider` Go interface (send, update, interactive action, approval request, thread) with Slack as sole driver. Teams/Discord/Mattermost become later drivers.",
+    "state": "completed",
+    "completedAt": "2026-09-28T13:42:55.222Z",
+    "createdAt": "2026-09-16T21:41:18.542Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M7 — ChatOps: Slack",
+    "url": "https://linear.app/cicadoci/issue/CIC-53/chatprovider-interface-slack-as-first-driver",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/36",
+      "https://github.com/cicadoci/core/pull/58"
+    ]
+  },
+  {
+    "identifier": "CIC-51",
+    "title": "Approval gates as Block Kit buttons with acting-user authorization",
+    "description": "The killer feature. Approval gates rendered as Block Kit buttons. CRITICAL: buttons are clickable by ANY channel member — the handler MUST authorize the acting user against the gate's allow-list before honoring it, reject + audit otherwise. trigger_id expires in 3s, so open modals before slow work. Timeout/expiry handling for pending approvals.",
+    "state": "completed",
+    "completedAt": "2026-09-28T14:12:13.524Z",
+    "createdAt": "2026-09-16T21:41:08.231Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M7 — ChatOps: Slack",
+    "url": "https://linear.app/cicadoci/issue/CIC-51/approval-gates-as-block-kit-buttons-with-acting-user-authorization",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/40",
+      "https://github.com/cicadoci/core/pull/66"
+    ]
+  },
+  {
+    "identifier": "CIC-50",
+    "title": "Slash commands: status, run, rerun, logs",
+    "description": "/ci status \u003crepo\u003e, /ci run \u003crepo\u003e \u003cworkflow\u003e \\[ref\\], /ci rerun \u003crun\u003e, /ci logs \u003crun\u003e \\[step\\]. Slack identity → CICaDo principal mapping; all commands go through the public API + audit pipeline.",
+    "state": "completed",
+    "completedAt": "2026-09-28T14:27:18.839Z",
+    "createdAt": "2026-09-16T21:41:03.105Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M7 — ChatOps: Slack",
+    "url": "https://linear.app/cicadoci/issue/CIC-50/slash-commands-status-run-rerun-logs",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/41",
+      "https://github.com/cicadoci/core/pull/57"
+    ]
+  },
+  {
+    "identifier": "CIC-59",
+    "title": "Terraform + AMI: EC2 runner ASG; on-prem runner installer",
+    "description": "EC2 Auto Scaling Group with Docker (Fargate can't run image-building runners — no privileged/DinD), AMI or cloud-init provisioning, registration token wiring, and a `curl | sh` installer for on-prem runners. Document the kaniko/BuildKit-rootless path for Fargate-only shops.",
+    "state": "completed",
+    "completedAt": "2026-09-28T14:28:12.170Z",
+    "createdAt": "2026-09-16T21:41:50.176Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M9 — AWS packaging, hardening \u0026 launch prep",
+    "url": "https://linear.app/cicadoci/issue/CIC-59/terraform-ami-ec2-runner-asg-on-prem-runner-installer",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/48",
+      "https://github.com/cicadoci/core/pull/62"
+    ]
+  },
+  {
+    "identifier": "CIC-37",
+    "title": "Secrets store: KMS envelope encryption, scoping, write-only API",
+    "description": "KMS data-key envelope encryption, org/repo/environment scoping, write-only API (no read-back in UI), versioning, audit on every access. SecretStore interface with AWS as first driver (Vault/GCP later).",
+    "state": "completed",
+    "completedAt": "2026-09-28T16:40:10.868Z",
+    "createdAt": "2026-09-16T21:39:53.569Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M5 — Secrets \u0026 identity",
+    "url": "https://linear.app/cicadoci/issue/CIC-37/secrets-store-kms-envelope-encryption-scoping-write-only-api",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/45"
+    ]
+  },
+  {
+    "identifier": "CIC-58",
+    "title": "Terraform module: control plane (Fargate, RDS, S3, KMS, ALB)",
+    "description": "Versioned module: VPC, ALB, ECS Fargate control plane, RDS Postgres, S3 (logs/artifacts), Secrets Manager + KMS, IAM OIDC provider. Target: clean AWS account → working install in under 30 minutes.",
+    "state": "completed",
+    "completedAt": "2026-09-28T16:45:40.918Z",
+    "createdAt": "2026-09-16T21:41:44.535Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M9 — AWS packaging, hardening \u0026 launch prep",
+    "url": "https://linear.app/cicadoci/issue/CIC-58/terraform-module-control-plane-fargate-rds-s3-kms-alb",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/47"
+    ]
+  },
+  {
+    "identifier": "CIC-72",
+    "title": "Missing migration for `artifacts` table — server/artifacts.Postgres will fail at runtime",
+    "description": "## Finding\n\n`server/artifacts/postgres.go`'s own doc comment says:\n\n\u003e Postgres is a Store backed by a SQL connection. It stores artifact metadata in the `artifacts` table (migration 0003).\n\nBut `server/store/migrations/` only contains `0001_init.sql` and `0002_widen_executor_check.sql`. There is no `artifacts` table anywhere in the schema. Every method on `artifacts.Postgres` (`Create`, `GetByRunID`, `GetByID`, `GetByRunAndName`, `Delete`, `FindExpired`) issues SQL directly against a table that does not exist, so the first real call will fail with `relation \"artifacts\" does not exist`.\n\nThis wasn't caught because `artifacts.Postgres` has zero test coverage — `server/artifacts/postgres_test.go` doesn't exist; only `memory_test.go` (against the `Memory` fake) does. CI's `test` job does run against a real Postgres service and fails the build if any DB-backed test is skipped, so a real test here would have caught this immediately — the gap is the missing test, not a CI weakness.\n\n## Suggested fix\n\n* Add `server/store/migrations/0003_artifacts.sql` creating the `artifacts` table matching the columns `Postgres.Create`/`selectCols` expect (id, org_id, run_id, job_id, name, blob_key, size_bytes, content_type, uploaded_at, expires_at, created_at).\n* Add `server/artifacts/postgres_test.go` exercising `NewPostgres` against `CICADO_TEST_DATABASE_URL`, mirroring the pattern used by `server/queue/postgres_test.go` or `server/store/store_test.go`.\n\n## Verified\n\n* Confirmed via `grep` that no migration file defines `CREATE TABLE artifacts`, against both `0001_init.sql` and `0002_widen_executor_check.sql`.\n* Confirmed `server/artifacts/postgres.go`'s own doc comment names a \"migration 0003\" that doesn't exist in the repo.\n* Confirmed no test file references `artifacts.NewPostgres` anywhere in the tree.\n\n## Unverified / needs follow-up\n\n* Did not actually run `artifacts.Postgres` against a live Postgres to reproduce the failure (no wiring exists yet to invoke it — see [CIC-71](https://linear.app/cicadoci/issue/CIC-71/m3-m9-subsystems-are-built-but-never-wired-into-cmdcicado-server-most)) — this is inferred directly from the SQL referencing a nonexistent table, which is unambiguous, but a human should confirm with `go run` + a real DB before closing.",
+    "state": "completed",
+    "completedAt": "2026-09-29T00:22:02.402Z",
+    "createdAt": "2026-09-28T20:26:40.795Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-72/missing-migration-for-artifacts-table-serverartifactspostgres-will",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/70"
+    ]
+  },
+  {
+    "identifier": "CIC-73",
+    "title": "CIC-34 \"Artifacts\" ships no real presigned-URL implementation — only an in-memory fake exists",
+    "description": "## Finding\n\n[CIC-34](https://linear.app/cicadoci/issue/CIC-34/artifacts-presigned-uploaddownload-namespacing-retention) (\"Artifacts: presigned upload/download, namespacing, retention\") is marked Done. The `artifacts.PreSignedURLProvider` interface exists (`UploadURL`/`DownloadURL`), but the only implementation anywhere in the tree is `artifacts.MemoryPreSigner` in `server/artifacts/memory.go`, which returns fake URLs for tests. There is no S3 (or any real object-store) implementation of `PreSignedURLProvider`.\n\nThis means the actual feature the ticket title promises — presigned upload/download against real storage — doesn't exist yet. What's been delivered is the interface, the metadata store (`Store`, `Memory`, and the currently-broken `Postgres` — see companion ticket), and a test fake. That's real, useful work, but it's not what \"presigned upload/download\" delivered means to a reader of the ticket or the project plan.\n\nRelated: `server/blobstore` (the interface artifacts are meant to sit on top of for the actual bytes) also has no S3 driver — only `blobstore.Memory`.\n\n## Suggested fix\n\nAdd a real S3-backed `PreSignedURLProvider` (wrapping `s3.PresignClient` from aws-sdk-go-v2) and a real S3-backed `blobstore.BlobStore`, or explicitly re-scope [CIC-34](https://linear.app/cicadoci/issue/CIC-34/artifacts-presigned-uploaddownload-namespacing-retention)/re-open it to track \"S3 driver\" as remaining work rather than leaving it silently implied as done.\n\n## Verified\n\n* Grepped the whole tree for implementations of `PreSignedURLProvider`; only `MemoryPreSigner` exists.\n* Grepped for any S3 client usage (`s3.NewFromConfig`, `PresignClient`, etc.) in `server/artifacts/` and `server/blobstore/`; none found.\n\n## Unverified / needs follow-up\n\n* Whether this is intentionally deferred to M9 packaging/hardening rather than M4 — if so, the ticket description or plan should say so explicitly rather than reading as delivered.",
+    "state": "completed",
+    "completedAt": "2026-09-29T00:26:19.755Z",
+    "createdAt": "2026-09-28T20:26:48.829Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-73/cic-34-artifacts-ships-no-real-presigned-url-implementation-only-an-in",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/71"
+    ]
+  },
+  {
+    "identifier": "CIC-74",
+    "title": "Redaction masker never learns a real secret value in production — RegisterWithVariants is dead code outside its own tests",
+    "description": "## Finding\n\nCLAUDE.md's security invariants state: \"Secret redaction runs on log ingest, before persistence or fan-out.\" `server/redact.RegisteredMasker.RegisterWithVariants(raw)` is the *only* mechanism by which a masker ever learns a real secret value to scrub (it also registers base64/URL-encoded variants). Grepping the whole tree, `RegisterWithVariants` is called nowhere except inside `server/redact/masker_test.go`.\n\nTwo concrete places that mint or hold real secret-shaped values never register them:\n\n1. `server/github.CloneCredentialsForRunOnClient` (server/github/installation.go) mints a real, short-lived GitHub installation access token and embeds it directly in a git clone URL. This has been a known, explicitly-documented gap since [CIC-26](https://linear.app/cicadoci/issue/CIC-26/per-job-github-installation-tokens-for-clone-never-persisted)'s review (PR [cicadoci/core#25](https://linear.app/cicadoci/review/cic-26-per-job-github-installation-tokens-for-clone-ff5aad07bd3f)) and again at [CIC-31](https://linear.app/cicadoci/issue/CIC-31/secret-redaction-on-log-ingest-adversarial-test-suite) (PR [cicadoci/core#30](https://linear.app/cicadoci/review/cic-31-secret-redaction-on-log-ingest-adversarial-test-suite-6c58e39a0f0d)) — both decision-log entries say registration \"is documented but not yet wired\" — but across two more milestones of work it still hasn't been closed.\n2. Even setting aside (1): as noted in the companion ticket ([CIC-71](https://linear.app/cicadoci/issue/CIC-71/m3-m9-subsystems-are-built-but-never-wired-into-cmdcicado-server-most)), `main.go`'s `runnersvc.DefaultConfig()` explicitly sets `Masker: redact.NoopMasker{}`, so even if something did call `RegisterWithVariants`, the production `Service` isn't using a `RegisteredMasker` at all — it's using the no-op.\n\nNet effect: today, if a job's log output or error text ever contained a real installation token (e.g., a failed `git clone` printing the URL with credentials, which is a very ordinary git failure mode), it would NOT be redacted. This directly contradicts the security invariant above and the MVP's [cicadoci/core#1](https://linear.app/cicadoci/review/cic-9-repo-hygiene-docs-restructure-and-pr-conventions-ffddbcbfe4ab) non-negotiable success criterion: \"A secret set in the UI never appears in any log (verified by adversarial test suite).\" The adversarial test suite ([CIC-31](https://linear.app/cicadoci/issue/CIC-31/secret-redaction-on-log-ingest-adversarial-test-suite), excellent as far as it goes) only proves the masker redacts values it's been told about — it doesn't prove any real value ever gets told to it.\n\n## Suggested fix\n\n* Wire `CloneCredentialsForRunOnClient` (or its caller, once the forge/webhook path is wired per [CIC-71](https://linear.app/cicadoci/issue/CIC-71/m3-m9-subsystems-are-built-but-never-wired-into-cmdcicado-server-most)) to call `masker.RegisterWithVariants(token)` immediately after minting, before the token is used in any command that could be logged.\n* Wire a real `*redact.RegisteredMasker` into `runnersvc.Config.Masker` in `main.go` instead of `NoopMasker{}`.\n* Add an integration-level adversarial test that goes through the real minting + masking path end-to-end (not just the masker in isolation), so this can't silently regress again.\n\n## Verified\n\n* `grep -rn \"RegisterWithVariants\"` across the whole tree: only `server/redact/masker.go` (definition) and `server/redact/masker_test.go` (3 call sites, all in tests).\n* Read `server/github/installation.go` and confirmed `CloneCredentialsForRunOnClient` has no masker parameter or call.\n* Read `server/runnersvc/service.go`'s `DefaultConfig()` and confirmed `Masker: redact.NoopMasker{}`.\n* Read the [CIC-26](https://linear.app/cicadoci/issue/CIC-26/per-job-github-installation-tokens-for-clone-never-persisted) and [CIC-31](https://linear.app/cicadoci/issue/CIC-31/secret-redaction-on-log-ingest-adversarial-test-suite) decision-log entries in CLAUDE.md, both of which independently flag this exact gap as known-but-not-closed.\n\n## Unverified / needs follow-up\n\n* Whether there's a different, not-yet-built call site (e.g., inside the not-yet-wired webhook dispatcher) that's meant to own this instead of `CloneCredentialsForRunOnClient` directly — worth deciding as part of the fix rather than assuming.",
+    "state": "completed",
+    "completedAt": "2026-09-29T00:31:03.715Z",
+    "createdAt": "2026-09-28T20:27:05.579Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 1,
+    "priorityLabel": "Urgent",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-74/redaction-masker-never-learns-a-real-secret-value-in-production",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/72"
+    ]
+  },
+  {
+    "identifier": "CIC-76",
+    "title": "CIC-55 \"MCP server\" has no actual MCP protocol transport — unreachable by any real MCP client",
+    "description": "## Finding\n\n[CIC-55](https://linear.app/cicadoci/issue/CIC-55/mcp-server-read-only-diagnostic-tools) (\"MCP server: read-only diagnostic tools\") is marked Done. `server/mcp/server.go`'s own package doc is explicit about scope:\n\n\u003e In this MVP seed, it exposes the tool definitions and the dispatch mechanism as plain Go methods. The JSON-RPC transport and MCP protocol wiring come in a follow-up ticket.\n\nSo `Server.ListRuns`/`GetRun`/`ClassifyFailure`/etc. are ordinary Go methods on a struct — there is no `stdio`, HTTP+SSE, or streamable-HTTP MCP transport anywhere in the tree, and (per [CIC-71](https://linear.app/cicadoci/issue/CIC-71/m3-m9-subsystems-are-built-but-never-wired-into-cmdcicado-server-most)) it isn't constructed by `main.go` regardless. No real MCP client — Claude Desktop, Claude Code, or any other agent — can connect to this today.\n\nThis matters because it's the literal M8 exit criterion in the project plan: \"the success-criteria Claude eval passes ≥8/10\" (§3: \"Claude, pointed at the MCP server, can correctly explain why a seeded failing build failed\"). That eval requires an actual MCP endpoint to point Claude at. `server/ai`'s eval harness ([CIC-57](https://linear.app/cicadoci/issue/CIC-57/ai-triage-eval-harness-10-seeded-failure-scenarios-810-gate), Done) calls `classify.Classify` directly in-process — it's a genuinely good baseline-accuracy measurement for the rule-based classifier, but it is not, and can't yet be, the \"point Claude at the MCP server\" eval the plan describes, since there's no server to point at.\n\n## Suggested fix\n\n* Add a real MCP transport (the reference Go SDK's `stdio` or streamable-HTTP transport is the natural fit) that exposes `Server`'s methods as MCP tools per the MCP spec's tool schema.\n* Wire it into `main.go` per [CIC-71](https://linear.app/cicadoci/issue/CIC-71/m3-m9-subsystems-are-built-but-never-wired-into-cmdcicado-server-most), gated by `mcpauth.Authorizer`.\n* Once reachable, run the actual \"point Claude at it\" eval described in the plan's success criteria, distinct from the in-process classifier-accuracy eval [CIC-57](https://linear.app/cicadoci/issue/CIC-57/ai-triage-eval-harness-10-seeded-failure-scenarios-810-gate) already covers.\n\n## Verified\n\n* Read `server/mcp/server.go`'s package doc, which self-documents the transport gap.\n* Grepped the tree for any MCP transport/SDK usage (`mcp.NewServer`, `stdio`, JSON-RPC framing) tied to `server/mcp`; none found.\n* Confirmed (per [CIC-71](https://linear.app/cicadoci/issue/CIC-71/m3-m9-subsystems-are-built-but-never-wired-into-cmdcicado-server-most)) `server/mcp` is not constructed anywhere in `main.go`.\n\n## Unverified / needs follow-up\n\n* Which MCP transport (stdio vs. HTTP) fits the deployment model best — self-hosted server implies HTTP-based is likely right, but that's a product decision, not inferred here.",
+    "state": "completed",
+    "completedAt": "2026-09-29T01:03:14.085Z",
+    "createdAt": "2026-09-28T20:27:33.628Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-76/cic-55-mcp-server-has-no-actual-mcp-protocol-transport-unreachable-by",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/74"
+    ]
+  },
+  {
+    "identifier": "CIC-75",
+    "title": "CIC-41 \"Audit event pipeline\" — nothing in the codebase ever calls Append; zero audit events are written",
+    "description": "## Finding\n\n[CIC-41](https://linear.app/cicadoci/issue/CIC-41/audit-event-pipeline-all-surfaces-one-chokepoint) (\"Audit event pipeline (all surfaces, one chokepoint)\") is marked Done. `server/audit/audit.go` implements a solid `Log` interface with an in-memory hash-chained implementation (`MemoryLog`) and a well-designed `Action` taxonomy (`ActionApprove`, `ActionCancel`, `ActionRerun`, `ActionDeploy`, `ActionRollback`, `ActionSecretPut`, `ActionSecretDelete`) — the package itself is good work with solid test coverage.\n\nBut grepping the whole tree for any caller of `audit.` outside `server/audit/` itself turns up nothing except an unrelated doc-comment mention in `server/workflow/types.go`. No surface — not the approval-gates handler, not the secrets store's `Put`/`Delete`, not the webhook-triggered run creation (once that's wired), not the MCP tool-invocation audit (which uses its own separate, unrelated `mcpauth.AuditEntry`/`MemoryAuditor` mechanism, not this package) — ever calls `Append`. There is also no Postgres-backed `Log` implementation; only `MemoryLog` exists, so even once wired, nothing would survive a restart yet.\n\nThis directly contradicts CLAUDE.md's stated invariant: \"Every state-changing action from any surface (web/chat/MCP/API) writes an audit event,\" and the ticket's own \"all surfaces, one chokepoint\" framing. Today there is a well-built chokepoint that zero surfaces flow through.\n\n## Suggested fix\n\n* Wire `audit.Append` calls into the real state-changing call sites as each surface gets wired per [CIC-71](https://linear.app/cicadoci/issue/CIC-71/m3-m9-subsystems-are-built-but-never-wired-into-cmdcicado-server-most): `approvalgates.Manager.Resolve` (approve/deny), `secrets.Store.Put`/`Delete`, run cancel/rerun handlers, deploy-job dispatch.\n* Add a Postgres-backed `audit.Log` implementation against the existing `audit_events` table (which already exists in `0001_init.sql` — the schema is ready, just unused by this package).\n* Consider consolidating with `mcpauth`'s separate audit mechanism so there's genuinely one chokepoint rather than two parallel ones.\n\n## Verified\n\n* `grep -rln \"audit\\.\"` across the whole tree outside `server/audit/`: only one hit, a doc comment in `server/workflow/types.go`, not a call.\n* Confirmed no Postgres-backed implementation of `audit.Log` exists (only `MemoryLog`).\n* Confirmed the `audit_events` table already exists in `server/store/migrations/0001_init.sql`, so schema is not the blocker.\n* Confirmed `server/mcpauth` has its own separate, unrelated audit mechanism (`AuditEntry`/`MemoryAuditor`) that doesn't use `server/audit` at all.\n\n## Unverified / needs follow-up\n\n* Whether consolidating the two audit mechanisms is in scope now or should be tracked separately — flagging the duplication for a human decision rather than assuming.",
+    "state": "completed",
+    "completedAt": "2026-09-29T11:40:06.088Z",
+    "createdAt": "2026-09-28T20:27:17.016Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-75/cic-41-audit-event-pipeline-nothing-in-the-codebase-ever-calls-append",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/73"
+    ]
+  },
+  {
+    "identifier": "CIC-38",
+    "title": "GetJobSecrets RPC: lease-authorized delivery, memory-only on runner",
+    "description": "Implement GetJobSecrets authorized against the live lease (values-at-start per protocol §11 decision 2). Values live only in runner memory, never on disk, registered in the local masker immediately.",
+    "state": "completed",
+    "completedAt": "2026-09-29T19:28:35.297Z",
+    "createdAt": "2026-09-16T21:39:58.294Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M5 — Secrets \u0026 identity",
+    "url": "https://linear.app/cicadoci/issue/CIC-38/getjobsecrets-rpc-lease-authorized-delivery-memory-only-on-runner",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/83"
+    ]
+  },
+  {
+    "identifier": "CIC-77",
+    "title": "Per-PR knowledge-graph currency — keep the /understand graph in lockstep with master",
+    "description": "## Context\n\nThe repo now carries an `/understand` knowledge graph at `.ua/knowledge-graph.json`\n(a `.ua/fingerprints.json` delta baseline + `.ua/meta.json` provenance). If that graph is\nnot kept in lockstep with the tip of `master`, every downstream consumer — agent context,\n`/understand-diff`, the knowledge-graph dashboard — silently reasons about a *past* revision\nof the code, and the per-PR diff overlay becomes misleading.\n\nThis ticket introduces a standing convention (owner-directed, parallel to the per-PR\ndecision-log policy of CIC-103) and commits the first knowledge snapshot.\n\n## What lands\n\n1. **First knowledge snapshot** — `.ua/knowledge-graph.json`, `.ua/fingerprints.json`,\n   `.ua/meta.json` (+ `.ua/config.json`, `.ua/.understandignore`). Scratch\n   (`.ua/.trash-*/`, `.ua/intermediate/`) and the transient `.ua/diff-overlay.json` are git-ignored.\n2. **Currency convention**, recorded three ways so it survives drift:\n   * `CLAUDE.md` → new \"Knowledge graph currency\" section + a per-PR Verified-checklist line.\n   * `docs/decisions/CIC-104-knowledge-graph-currency.md` — the dated decision record.\n   * `docs/decisions/README.md` — new \"Process conventions (owner-directed)\" section registering it.\n   * `.gitignore` — keep the 5 artifacts tracked, ignore the scratch.\n\n## The two-skill split\n\n* `/understand-diff` **— *determine the change*.** Maps changed files → graph nodes, finds\n  1-hop affected components / touched layers, scores risk, writes `.ua/diff-overlay.json`, and\n  *warns* when the graph is stale (committed/working-tree diff since `meta.json.gitCommitHash`\n  is non-empty). Run when opening or rebasing a stacked PR.\n* `/understand` **— *refresh the graph*.** Incremental: with the baseline present it\n  re-scans/re-extracts only changed files, reassembles, validates, and rewrites all three\n  artifacts. No LLM subagents needed for a normal refresh. Run before a PR lands on `master`,\n  and commit the refreshed `.ua/` artifacts.\n\n**Staleness signal:** the graph is current when `git diff --name-only \u003cgraphCommit\u003e..HEAD -- .` (project-scoped) is empty. `/understand-diff` prints the warning\nautomatically — treat it as a \"refresh\" signal, never a reason to skip the diff.\n\n## Verified\n\n* `/understand` was run deterministically (no LLM subagents in this env): scan → 13 batches →\n  extract → `GraphBuilder` → merge (1,685 nodes / 2,487 edges) → 10 curated layers + 10-step\n  architectural tour → validate → save. `validateGraph` + `validateForWriting` return 0 errors.\n* `git check-ignore` confirms the 5 artifacts are tracked and `intermediate/`, `.trash-*/`,\n  `diff-overlay.json` are ignored.\n* `meta.json` records the generation commit + `lastAnalyzedAt` and the analyzed-file count.\n\n## Unverified / needs follow-up\n\n* `meta.json.gitCommitHash` is the 71h stack tip (`5e4fc27`), not `master`, because the\n  decision-log infrastructure this sits on is not yet on `master`. The graph should be\n  refreshed (`/understand`) onto each new `master` tip as the 71x stack lands — this is the\n  first real use of the convention itself, and a live staleness warning will surface it.\n* The owner makes the merge decision (no self-merge).",
+    "state": "completed",
+    "completedAt": "2026-10-01T00:28:21.294Z",
+    "createdAt": "2026-09-30T13:51:39.562Z",
+    "labels": [],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-77/per-pr-knowledge-graph-currency-keep-the-understand-graph-in-lockstep",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/84"
+    ]
+  },
+  {
+    "identifier": "CIC-78",
+    "title": "Production server creates runs but never jobs: WorkflowLoader is nil and nothing writes the workflows table",
+    "description": "Found in a QC audit of `master` @ `c8d89fc` (2026-09-30).\n\n## What's wrong\n\nEvery push or PR webhook creates a `runs` row, and then nothing happens. No job is ever created, so no job is dispatched to a runner.\n\n* `server/cmd/cicado-server/main.go:157` builds the controller with `controller.DefaultConfig().WithAudit(auditLog)`. `DefaultConfig()` leaves `WorkflowLoader` nil (`server/controller/controller.go:83`), and a nil loader is documented as \"a silent no-op\" (`controller.go:15`).\n* `controller.NewStoreLoader` (CIC-71e, `server/controller/jobs.go:115`) is called only from tests.\n* Even once it is wired, nothing in the codebase ever writes the `workflows` table. `StoreLoader` would return zero workflows.\n\n## Impact\n\nThe core product loop (webhook → run → jobs → runner) is broken in the shipped binary. Runs stay queued with zero jobs. [CIC-71](https://linear.app/cicadoci/issue/CIC-71/m3-m9-subsystems-are-built-but-never-wired-into-cmdcicado-server-most) lists 71a–71h as landed, which gives the impression the loop is live.\n\n## Fix\n\n1. Wire a loader in `main.go`, e.g. `DefaultConfig().WithAudit(a).WithWorkflowLoader(controller.NewStoreLoader(st, log))`. Add the builder if it doesn't exist.\n2. Add the write path that fills `workflows`: a GitHub loader that fetches `.cicado/*.yml` at the head SHA, or a sync on push. Its output must use the JSON shape `StoreLoader.LoadAll` decodes (the [cicadoci/core#79](https://linear.app/cicadoci/review/cic-71e-storeloader-reads-workflow-definitions-from-db-3aa14e4960b1) review asked for a shared contract).\n3. Decide what a run with zero matching workflows should do: complete it as `skipped`/`success` rather than leave it queued forever.\n4. Add a test proving `main`'s config has a non-nil loader. At minimum, `DefaultConfig` should document that `main` must set one.\n\n## Acceptance\n\nWith `-dev-seed` (or a seeded `workflows` row), a signed push webhook creates jobs that a runner claims.",
+    "state": "completed",
+    "completedAt": "2026-10-01T11:50:34.160Z",
+    "createdAt": "2026-09-30T20:57:02.268Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 1,
+    "priorityLabel": "Urgent",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-78/production-server-creates-runs-but-never-jobs-workflowloader-is-nil",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/89"
+    ]
+  },
+  {
+    "identifier": "CIC-39",
+    "title": "OIDC issuer: job identity tokens + JWKS endpoint",
+    "description": "Server signs short-lived job identity JWTs (claims: sub=org/repo/branch/env, aud configurable), serves JWKS + OIDC discovery. Ship Terraform for the AWS side (IAM OIDC provider + role trust conditions) so jobs call sts:AssumeRoleWithWebIdentity. Zero stored cloud keys — the headline security feature.",
+    "state": "completed",
+    "completedAt": "2026-10-01T13:24:36.098Z",
+    "createdAt": "2026-09-16T21:40:03.528Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M5 — Secrets \u0026 identity",
+    "url": "https://linear.app/cicadoci/issue/CIC-39/oidc-issuer-job-identity-tokens-jwks-endpoint",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/86"
+    ]
+  },
+  {
+    "identifier": "CIC-40",
+    "title": "Token subsystem: scoped ephemeral tokens + rotation/revocation",
+    "description": "Hashed storage, scoped claims (run/repo/job), expiry, revocation. Covers job tokens, API tokens, MCP tokens, and runner credentials with rotation (RotateCredential RPC).",
+    "state": "completed",
+    "completedAt": "2026-10-01T13:29:17.875Z",
+    "createdAt": "2026-09-16T21:40:09.323Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "M5 — Secrets \u0026 identity",
+    "url": "https://linear.app/cicadoci/issue/CIC-40/token-subsystem-scoped-ephemeral-tokens-rotationrevocation",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/87"
+    ]
+  },
+  {
+    "identifier": "CIC-80",
+    "title": "Webhook signature verification is silently disabled when CICADO_WEBHOOK_SECRET is unset",
+    "description": "Found in a QC audit of `master` @ `c8d89fc` (2026-09-30). Security.\n\n## What's wrong\n\n* `server/cmd/cicado-server/main.go:61`: `-webhook-secret` defaults to `$CICADO_WEBHOOK_SECRET`, with help text \"empty disables verification\".\n* `server/webhook/receiver.go:112`: `if r.secret != \"\" { Verify(...) }`. With no secret, **every** POST to `/api/v1/webhooks/github` is accepted unsigned.\n* The server starts with no warning and no opt-in. Compare the secrets key right next to it, which refuses to start unless `-allow-ephemeral-key` is passed explicitly (`main.go:64`, `:130`).\n\n## Impact\n\nA deployment that forgets the environment variable accepts forged webhooks from anyone who can reach the HTTP port. Once jobs are wired (see the loader ticket), a forged push or PR event can trigger runs for any installed repo and branch. This fails open on an internet-facing endpoint, against the CLAUDE.md security invariants.\n\n## Fix\n\nFail closed, mirroring the ephemeral-key pattern:\n\n1. If the webhook secret is empty, refuse to start unless an explicit dev flag is set (e.g. `-allow-unsigned-webhooks` / `CICADO_ALLOW_UNSIGNED_WEBHOOKS=true`).\n2. When that flag is set, log `Warn` at startup and on each unsigned delivery.\n3. Update the flag help text, `docs/development.md` and docker-compose (local dev sets the dev flag).\n4. Test: the server refuses to start with an empty secret and no flag, and the receiver rejects unsigned requests when a secret is configured (already covered).\n\n## Acceptance\n\n`cicado-server` with no webhook secret and no dev flag exits with a clear error.",
+    "state": "completed",
+    "completedAt": "2026-10-01T13:31:42.052Z",
+    "createdAt": "2026-09-30T20:57:17.347Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-80/webhook-signature-verification-is-silently-disabled-when-cicado",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/90"
+    ]
+  },
+  {
+    "identifier": "CIC-84",
+    "title": "Production workflow producer: fetch .cicado workflow files at the event SHA and UpsertWorkflow them",
+    "description": "Split out of [CIC-78](https://linear.app/cicadoci/issue/CIC-78/production-server-creates-runs-but-never-jobs-workflowloader-is-nil) (PR [cicadoci/core#89](https://linear.app/cicadoci/review/cic-78-wire-store-backed-workflow-loader-add-upsertworkflow-fix-nil-9d8a21a804ae)), deferred by the orchestrator (ref c6e323): this must land before [CIC-82](https://linear.app/cicadoci/issue/CIC-82/built-but-unwired-subsystems-in-cicado-server-live-log-sse)/83.\n\n## What's missing\n\n[CIC-78](https://linear.app/cicadoci/issue/CIC-78/production-server-creates-runs-but-never-jobs-workflowloader-is-nil) wires `StoreLoader` into `cicado-server` and adds `Store.UpsertWorkflow`. Outside `-dev-seed`, though, nothing writes the `workflows` table, so a production server still creates runs and never jobs.\n\n## Fix\n\n* On a push or PR webhook, fetch the repo's workflow files at the head SHA through the GitHub App installation token, parse them with `controller.ParseWorkflowBytes`, and store each one with `UpsertWorkflow`. The stored `Definition` must be the JSON shape `StoreLoader.LoadAll` decodes.\n* Decide where the fetch runs: in the controller before `LoadAndCreateJobs`, or as a sync step. Then decide how parse errors are reported (log a warning; later, a failed check).\n* Optional: revision-pinned loading. `StoreLoader` ignores its `sha` argument today.\n\n## Acceptance\n\nOn a real (non-dev-seed) server, a signed push webhook for an installed repo that has a workflow file creates jobs that a runner claims.",
+    "state": "completed",
+    "completedAt": "2026-10-01T20:10:36.399Z",
+    "createdAt": "2026-10-01T00:43:42.794Z",
+    "labels": [],
+    "priority": 1,
+    "priorityLabel": "Urgent",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-84/production-workflow-producer-fetch-cicado-workflow-files-at-the-event",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/109",
+      "https://github.com/cicadoci/core/pull/95"
+    ]
+  },
+  {
+    "identifier": "CIC-107",
+    "title": "Step `if: failure | always` (CIC-22) never reaches the runner: no wire field, runner stops at first failed step",
+    "description": "Found in QC of `master` @ `5d6722f` (2026-10-01).\n\n## What's wrong\n\nThe parser and validator accept step `if: success|failure|always` (`server/workflow/parse/parse.go:500`, `validate.go:129`), but:\n\n* `StepSpec` in the runner proto (fields 1–7) has no condition field.\n* `runner/job.go:163` returns on the first failing step. A cleanup step marked `if: always` or `if: failure` never runs.\n\nThe feature is documented as merged ([CIC-22](https://linear.app/cicadoci/issue/CIC-22/trigger-filters-branchtag-if-step-status-conditionals), PR [cicadoci/core#20](https://linear.app/cicadoci/review/cic-22-trigger-filters-if-conditionals-26b7e059da85)) but has no runtime effect. Workflows that rely on cleanup or notify-on-failure steps silently skip them.\n\n## Fix\n\n1. Add `string if = 8` (enum preferred) to `StepSpec`. This is an additive proto change, so `make proto-breaking` stays green.\n2. Persist it in `steps` (new column plus migration) and send it in the assignment.\n3. In the runner, track job outcome and run steps per their condition after a failure. The job result stays failed.\n\n## Acceptance\n\nRunner unit test: steps \\[fail, `if: always`, `if: success`\\]. Steps 1 and 2 execute, step 3 is skipped, and the job ends failed.",
+    "state": "completed",
+    "completedAt": "2026-10-01T21:26:02.154Z",
+    "createdAt": "2026-10-01T08:57:51.065Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-107/step-if-failure-always-cic-22-never-reaches-the-runner-no-wire-field",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/103"
+    ]
+  },
+  {
+    "identifier": "CIC-79",
+    "title": "Secrets can never reach a job: secret_refs is never populated and the runner never calls GetJobSecrets",
+    "description": "Found in a QC audit of `master` @ `c8d89fc` (2026-09-30).\n\n## What's wrong\n\nThe `GetJobSecrets` RPC ([CIC-38](https://linear.app/cicadoci/issue/CIC-38/getjobsecrets-rpc-lease-authorized-delivery-memory-only-on-runner)) and the masker registration ([CIC-74](https://linear.app/cicadoci/issue/CIC-74/redaction-masker-never-learns-a-real-secret-value-in-production)) are correct in isolation, but nothing on either side reaches them:\n\n* **Server:** `controller.secretRefsFor` (`server/controller/jobs.go:219`) always returns `nil` (`TODO(CIC-38/39/40)`). Every job therefore has an empty `secret_refs`, and `GetJobSecrets` returns an empty map early (`server/runnersvc/service.go`, `len(secretRefs) == 0`).\n* **Runner:** nothing under `runner/` calls `GetJobSecrets`. `runner/executor/docker.go:63` says it \"is not wired\".\n* **Workflow schema:** there is no way to declare secret references. `server/workflow/types.go:258-259` claims \"Secret references (e.g. `secrets.DEPLOY_ROLE`) are resolved by the runner at step start via GetJobSecrets\", which is false today. A `secrets.X` value in `env:` reaches the step as the literal string.\n\n## Impact\n\nThe M5 exit criterion (\"a deploy job assumes an AWS role … zero stored AWS keys\") and any workflow that needs a secret cannot work. The docs and code comments say it does.\n\n## Fix\n\n1. Define how a workflow references secrets (e.g. parse `secrets.NAME` in job/step `env`, or add an explicit `secrets:` list). Validate it in `server/workflow/validate.go`.\n2. Implement `secretRefsFor` from that definition, with names only.\n3. Runner: call `GetJobSecrets` with the lease after claiming a job, substitute values into the step env in memory only, and never write them to logs or the journal.\n4. The service-wide masker (`service.go:335`) keeps every delivered secret forever. Consider scoping registration per job, or document the growth bound.\n5. Add an end-to-end test: a workflow using `secrets.FOO` gets the value in its env, and the value is masked in stored logs.\n6. Fix the `types.go` comment until this lands.\n\n## Acceptance\n\nA job whose env references a stored secret receives the value, and the value is redacted from `log_entries`.",
+    "state": "completed",
+    "completedAt": "2026-10-02T00:29:04.455Z",
+    "createdAt": "2026-09-30T20:57:12.209Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-79/secrets-can-never-reach-a-job-secret-refs-is-never-populated-and-the",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/91"
+    ]
+  },
+  {
+    "identifier": "CIC-102",
+    "title": "pull_request webhook decodes the wrong JSON shape: fork flag is always false (fork-PR policy bypassed), base ref and head SHA always empty",
+    "description": "Found in QC of `master` @ `5d6722f` (2026-10-01).\n\n## What's wrong\n\n`webhook.PullRequestPayload` (`server/webhook/events.go:42`) reads `base`, `head` and `fork` from the top level of the event. GitHub nests them: `pull_request.base.ref`, `pull_request.head.sha`, `pull_request.head.ref`, `pull_request.head.repo.full_name`, and the fork signal is `pull_request.head.repo.fork` (or head repo ≠ base repo). There is no top-level `fork` field.\n\nThe tests pass only because the fixtures in `server/webhook/receiver_test.go:431` and `:525` use the same invented flat shape.\n\n## Impact on a real GitHub delivery\n\n* `payload.Fork` is always `false`, so `runs.is_fork` is always false.\n  * `controller.LoadAndCreateJobs` never applies `ForkPolicy` (`server/controller/jobs.go:287`).\n  * `GetJobSecrets` fork guard (`server/runnersvc/service.go:302`) never fires. Once [CIC-79](https://linear.app/cicadoci/issue/CIC-79/secrets-can-never-reach-a-job-secret-refs-is-never-populated-and-the) lands, a fork PR would receive repo secrets. **Security invariant break.**\n* `Base.Ref` is empty, so the run's ref is `\"\"` and `branches:` trigger filters never match.\n* `Head.SHA` is empty, so runs and forge reports carry no commit SHA.\n\n## Fix\n\n1. Model the real payload: `PullRequest struct { Base{Ref, Repo}, Head{Ref, SHA, Repo{FullName, Fork}} } \\`json:\"pull_request\"\\``, plus `sender.login\\`.\n2. Compute fork as `head.repo.fork || head.repo.full_name != repository.full_name`. Treat a null `head.repo` (deleted fork) as a fork.\n3. Replace the hand-written fixtures with a trimmed real GitHub `pull_request` payload under `testdata/`. Assert fork=true end to end through to `runs.is_fork`.\n\n## Acceptance\n\nA recorded GitHub fork-PR payload produces a run with `is_fork = true`, non-empty ref and SHA, and the fork policy is applied.",
+    "state": "completed",
+    "completedAt": "2026-10-02T11:40:33.238Z",
+    "createdAt": "2026-10-01T08:57:19.822Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 1,
+    "priorityLabel": "Urgent",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-102/pull-request-webhook-decodes-the-wrong-json-shape-fork-flag-is-always",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/98"
+    ]
+  },
+  {
+    "identifier": "CIC-133",
+    "title": "Regression from CIC-79 (#91): every job fails as infra, because the runner calls GetJobSecrets without its credential (Unauthenticated)",
+    "description": "Found on `master` @ `f445f0d` (2026-10-02). Reported by Dwight; confirmed by Creed.\n\n## Symptom\n\n`./scripts/with-postgres.sh go test -race -count=1 ./test/e2e/...` fails 5 tests: `TestWalkingSkeleton`, `TestFailingStepIsReportedWithExitCode`, `TestCancelPropagates`, `TestRunnerSurvivesServerRestart` and `TestSweepRequeuesExpiredJob`. All passed at `0034d5d`. The only code commit since then is `f445f0d` ([CIC-79](https://linear.app/cicadoci/issue/CIC-79/secrets-can-never-reach-a-job-secret-refs-is-never-populated-and-the), PR [cicadoci/core#91](https://linear.app/cicadoci/review/cic-79-deliver-secrets-to-a-job-end-to-end-high-fc8879db8015)).\n\nEvery job ends `failed`, exit -1, `error_class=infra`, and the runner logs:\n\n```\nfetch job secrets ... error=\"runner: get job secrets: rpc error: code = Unauthenticated desc = missing credentials\"\n```\n\n## Cause\n\n`runner/job.go:143` calls `fetchJobSecrets(ctx, a.secrets, jobID, leaseID)` with the job context. The unary `GetJobSecrets` RPC needs the runner bearer token in the `authorization` metadata (`server/runnersvc/service.go:345` `authenticate`). The agent attaches it only through `a.authContext(ctx)` (`runner/agent.go:179`), and this call skips that. Unit tests use a fake `secretsClient`, so they never cross the real interceptor or auth path.\n\nThis is a production break as well as a test failure: every job on a real runner fails before its first step, **including jobs that reference no secrets**, because the fetch is unconditional.\n\n## Fix\n\n1. Call `fetchJobSecrets(a.authContext(ctx), ...)` (or attach the credential inside `fetchJobSecrets`).\n2. Skip the RPC when the assignment carries no secret refs, so a secrets-service outage can't fail jobs that don't need secrets.\n3. Add an e2e test that a job with a `secrets.X` env ref receives the value, through the real runner and server.\n\n## Acceptance\n\nThe 5 e2e tests pass on master again. A new e2e test proves end-to-end secret delivery.",
+    "state": "completed",
+    "completedAt": "2026-10-02T11:41:57.843Z",
+    "createdAt": "2026-10-02T07:54:58.737Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 1,
+    "priorityLabel": "Urgent",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-133/regression-from-cic-79-91-every-job-fails-as-infra-because-the-runner",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/104"
+    ]
+  },
+  {
+    "identifier": "CIC-122",
+    "title": "OIDC job token `sub` is `job:\u003crun\u003e:\u003cjob\u003e`: AWS trust policies cannot scope roles to repo/branch/env (contradicts architecture)",
+    "description": "Found in QC of `master` @ `0034d5d` (2026-10-01). Security design bug in [CIC-39](https://linear.app/cicadoci/issue/CIC-39/oidc-issuer-job-identity-tokens-jwks-endpoint) (`server/oidc`). It is not wired yet, so fix it before wiring.\n\n## What's wrong\n\n* The issuer's subject is `job:\u003crun-uuid\u003e:\u003cjob-name\u003e` (`SubjectFor` / `parseSubject`, `server/oidc/issuer.go`; `docs/decisions/CIC-39-oidc-issuer.md:50`). Repo, branch and environment are only in custom claims (`repo`, `branch`, `sha`).\n* For a generic (non-GitHub) OIDC provider, AWS IAM trust policies can only condition on `aud`, `sub` and `amr`. Custom claims such as `repo`/`branch` are **not** usable in a trust policy.\n* So a role that trusts the CICaDo issuer can only say \"any job from this CICaDo server\", or pin one random run UUID, which is useless. Any job on the instance, from any repo or org (and, if the fork policy fails, a fork PR), could assume every role that trusts the issuer.\n* `project-docs/02-architecture.md:106` specifies: *trust conditions on* `sub` *= org/repo/branch/env,* `aud`. The implementation contradicts it.\n\n## Fix\n\n* Make `sub` encode the trust-relevant tuple in a fixed order, with escaping. For example `repo:\u003corg\u003e/\u003crepo\u003e:ref:refs/heads/\u003cbranch\u003e:env:\u003cenv\u003e` (GitHub's convention, which users already know how to write `StringLike` conditions for). Fork PRs get a distinct form such as `repo:\u003corg\u003e/\u003crepo\u003e:pull_request`, so no branch- or env-scoped role ever matches a fork.\n* Keep run/job in custom claims (and `jti`) for audit.\n* Update the decision doc and the planned Terraform trust-policy example.\n\n## Acceptance\n\nTests show tokens for different repos, branches, or fork vs non-fork runs get subjects that a `StringLike` condition such as `repo:acme/api:ref:refs/heads/main:*` can tell apart.",
+    "state": "completed",
+    "completedAt": "2026-10-02T13:58:59.440Z",
+    "createdAt": "2026-10-01T20:56:34.066Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-122/oidc-job-token-sub-is-jobrunjob-aws-trust-policies-cannot-scope-roles",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/105"
+    ]
+  },
+  {
+    "identifier": "CIC-103",
+    "title": "Job graph never advances and run status never changes: `needs` dependents stay pending forever, runs never finish",
+    "description": "Found in QC of `master` @ `5d6722f` (2026-10-01).\n\n## What's wrong\n\n* `store.CreateJobSpecs` (`server/store/runs.go:156`) queues only the top-level jobs. Jobs with `needs` stay `pending`.\n* No code anywhere promotes a `pending` job to `queued` when its dependencies succeed. `queue.Complete` (`server/queue/postgres.go`) only updates the finished job, and no database trigger does it either (checked `0001_init.sql` to `0003`). The only other `Enqueue` caller is `devseed.go`.\n* No code marks dependents `skipped`/`cancelled` when a dependency fails or dead-letters.\n* No code ever updates `runs.status`. It stays `pending` from `CreateRun` onward, whatever the jobs do.\n\nSo any workflow using `needs` ([CIC-21](https://linear.app/cicadoci/issue/CIC-21/dag-resolution-needs-fan-outfan-in-scheduling) fan-out/fan-in) runs only its first wave and then hangs. Every run looks pending forever in the API, and to the forge once [CIC-81](https://linear.app/cicadoci/issue/CIC-81/server-never-reports-check-status-to-github-and-re-run-does-nothing) lands.\n\nRelated: [CIC-85](https://linear.app/cicadoci/issue/CIC-85/runs-with-zero-matching-workflows-stay-queued-forever-finalise-them-as) covers runs with zero workflows only. [CIC-78](https://linear.app/cicadoci/issue/CIC-78/production-server-creates-runs-but-never-jobs-workflowloader-is-nil) covers job creation.\n\n## Fix\n\nIn the same transaction as `queue.Complete` (and `Requeue` when it dead-letters):\n\n1. Queue each dependent whose dependencies have all succeeded, honouring the `if: always` fan-in rule in `workflow/dag.go:248`.\n2. Skip or cancel dependents of a failed job.\n3. Roll up run status: running on first claim, then succeeded / failed / cancelled when all jobs are terminal.\n\nAdd an e2e test: a 3-job diamond DAG runs to completion and the run ends `succeeded`.\n\nAlso: `store.CompleteJob` (`runs.go:250`) has no callers and writes a terminal status without a lease check. Delete it or make it lease-checked.",
+    "state": "completed",
+    "completedAt": "2026-10-02T14:39:49.828Z",
+    "createdAt": "2026-10-01T08:57:26.606Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-103/job-graph-never-advances-and-run-status-never-changes-needs-dependents",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/99"
+    ]
+  },
+  {
+    "identifier": "CIC-104",
+    "title": "Webhook-created jobs carry no steps and no git checkout info: convertJobSpecs drops Steps, GitCloneURL, GitRef, GitSha",
+    "description": "Found in QC of `master` @ `5d6722f` (2026-10-01).\n\n## What's wrong\n\n`controller.convertJobSpecs` (`server/controller/jobs.go:167`) builds `store.JobSpec` from a workflow job, but:\n\n* `store.JobSpec` has no `Steps` field, and nothing writes the `steps` table except `devseed.go:126`. A job created from a workflow has zero steps. The runner claims it, runs nothing, and reports success.\n* `GitCloneURL`, `GitRef` and `GitSha` are never set, so the runner's `GitContext` is empty and there is no checkout.\n* `Executor` is hard-coded to `\"cicanscript\"` whatever the workflow says.\n\nThis is separate from [CIC-78](https://linear.app/cicadoci/issue/CIC-78/production-server-creates-runs-but-never-jobs-workflowloader-is-nil) (loader nil, workflows table empty). Even with [CIC-78](https://linear.app/cicadoci/issue/CIC-78/production-server-creates-runs-but-never-jobs-workflowloader-is-nil) / PR [cicadoci/core#89](https://linear.app/cicadoci/review/cic-78-wire-store-backed-workflow-loader-add-upsertworkflow-fix-nil-9d8a21a804ae) merged, jobs will run nothing unless that PR also persists steps. Please check [cicadoci/core#89](https://linear.app/cicadoci/review/cic-78-wire-store-backed-workflow-loader-add-upsertworkflow-fix-nil-9d8a21a804ae) before starting.\n\n## Fix\n\n1. Add `Steps []StepSpec` to `store.JobSpec` and insert into `steps` inside the `CreateJobSpecs` transaction: index, name, command/run, env, timeout, image. Also carry the step `if:` value (see the step `if:` ticket).\n2. Pass the clone URL, ref and SHA from the controller (head repo/SHA for PRs) into each spec.\n3. Map the executor from the workflow (container image → docker), not a constant.\n\n## Acceptance\n\nA push webhook for a seeded 2-step workflow produces a claimed job whose `JobAssignment` has both steps and a populated `GitContext`.",
+    "state": "completed",
+    "completedAt": "2026-10-02T14:40:32.796Z",
+    "createdAt": "2026-10-01T08:57:33.006Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-104/webhook-created-jobs-carry-no-steps-and-no-git-checkout-info",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/100"
+    ]
+  },
+  {
+    "identifier": "CIC-105",
+    "title": "Webhook events are silently lost: delivery marked \"seen\" before dispatch, and controller errors/backpressure return 200",
+    "description": "Found in QC of `master` @ `5d6722f` (2026-10-01).\n\n## What's wrong\n\n1. **Dedup before success.** `Receiver.ServeHTTP` (`server/webhook/receiver.go:154`) records `X-GitHub-Delivery` as seen *before* dispatching. If dispatch then fails (500), the operator's \"Redeliver\" in GitHub reuses the same delivery GUID and gets `200 duplicate`. The event can never be processed.\n2. **Errors swallowed as success.** `Controller.HandlePush` / `HandlePullRequest` return `nil` when `resolveRepo` fails (`server/controller/controller.go:139`, `:215`), e.g. a transient database error. GitHub gets 200, so no run is created and there is no signal to retry.\n3. **Backpressure drops with 200.** When `Backpressure.Acquire` says no, the handler returns `nil`, so the push or PR is discarded and GitHub sees success.\n4. **Misleading comments.** `receiver.go:97` and `:177` say GitHub \"will retry\" a 503/501. GitHub does not automatically retry failed webhook deliveries; only manual or API redelivery exists.\n\n## Fix\n\n* Mark the delivery seen only after a successful dispatch, or remove the entry on failure.\n* Return an error (→ 5xx) from the controller for transient store failures.\n* Either queue over-limit events (preferred: create the run, and let the dispatcher enforce concurrency) or return 503 rather than 200.\n* Correct the comments. Consider a redelivery sweep using GitHub's \"list deliveries\" API for failed ones.\n\n## Acceptance\n\nTests: a failed dispatch followed by redelivery with the same GUID is processed. A store error yields 5xx.",
+    "state": "completed",
+    "completedAt": "2026-10-02T14:40:54.945Z",
+    "createdAt": "2026-10-01T08:57:45.099Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-105/webhook-events-are-silently-lost-delivery-marked-seen-before-dispatch",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/101"
+    ]
+  },
+  {
+    "identifier": "CIC-83",
+    "title": "Cleanup: stale/misattributed TODOs and code comments, abandoned runner/lambda stub",
+    "description": "Found in a QC audit of `master` @ `c8d89fc` (2026-09-30). Low risk, but these comments currently mislead readers and agents.\n\n* `server/runnersvc/logstream.go:317`: `TODO(CIC-37): masker scrubs against an empty registered-value set` is stale. `GetJobSecrets` feeds the masker at `service.go:335` ([CIC-74](https://linear.app/cicadoci/issue/CIC-74/redaction-masker-never-learns-a-real-secret-value-in-production), Done). Remove it, or point it at the secrets-delivery ticket.\n* `server/controller/controller.go:267`, `:279`: `TODO(CIC-71d)` refers to a merged ticket. Point them at the forge/rerequest ticket.\n* `server/cmd/cicado-server/main.go:153` and `server/controller/jobs.go:42`, `:220` credit the GitHub forge, GitHub loader and secret refs to \"[CIC-38](https://linear.app/cicadoci/issue/CIC-38/getjobsecrets-rpc-lease-authorized-delivery-memory-only-on-runner)/39/40\" (the secrets RPC, OIDC and job tokens). Use the right tickets.\n* `server/workflow/types.go:249` says the AWS role comes from `env.AWSTOKEN_ROLE_ARN`, but `project-docs/02-architecture.md:97` uses `AWS_ROLE_ARN`. Pick one.\n* `server/workflow/types.go:258-259` claims `secrets.X` is resolved via `GetJobSecrets`. It isn't (see the secrets-delivery ticket).\n* `runner/lambda/lambda.go:104` is a stub (`TODO: wire to gRPC queue connect + job fetch + execute`) that no binary builds. Either give it a ticket and a `doc.go` saying it's a placeholder, or delete it.\n* `server/api/handler.go:219-226`: `TODO(M3/M5)` for a latency histogram. Link it to a ticket.\n\n## Acceptance\n\n`git grep -n TODO -- '*.go'` shows only TODOs that point at open tickets.",
+    "state": "completed",
+    "completedAt": "2026-10-02T14:42:15.872Z",
+    "createdAt": "2026-09-30T20:57:39.838Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 4,
+    "priorityLabel": "Low",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-83/cleanup-stalemisattributed-todos-and-code-comments-abandoned",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/93"
+    ]
+  },
+  {
+    "identifier": "CIC-85",
+    "title": "Runs with zero matching workflows stay queued forever: finalise them as skipped",
+    "description": "Split out of [CIC-78](https://linear.app/cicadoci/issue/CIC-78/production-server-creates-runs-but-never-jobs-workflowloader-is-nil) fix item 3 (PR [cicadoci/core#89](https://linear.app/cicadoci/review/cic-78-wire-store-backed-workflow-loader-add-upsertworkflow-fix-nil-9d8a21a804ae)), deferred by the orchestrator (ref c6e323).\n\n## What's wrong\n\n`controller.LoadAndCreateJobs` returns nil on both zero-job paths, so the run row stays queued/pending forever:\n\n* `server/controller/jobs.go:263`: the repo has no workflows.\n* `server/controller/jobs.go:330`: no workflow matched the event.\n\nUntil the production workflow producer lands, this is every production webhook. Once [CIC-81](https://linear.app/cicadoci/issue/CIC-81/server-never-reports-check-status-to-github-and-re-run-does-nothing) reports checks, these runs would also leave a GitHub check pending forever.\n\n## Fix\n\nWhen `created == 0`, move the run to a terminal state (`skipped`, or `success` with a reason), write an audit event, and, once a real forge exists, complete the check as neutral or skipped. Test both zero-job paths.\n\n## Acceptance\n\nA webhook for a repo with no matching workflow produces a run in a terminal state, not one left queued.",
+    "state": "completed",
+    "completedAt": "2026-10-02T15:25:48.488Z",
+    "createdAt": "2026-10-01T00:43:57.969Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-85/runs-with-zero-matching-workflows-stay-queued-forever-finalise-them-as",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/96"
+    ]
+  },
+  {
+    "identifier": "CIC-106",
+    "title": "Backpressure in controller limits concurrent webhook handlers, not concurrent runs (slot released when the HTTP handler returns)",
+    "description": "Found in QC of `master` @ `5d6722f` (2026-10-01).\n\n## What's wrong\n\n`HandlePush` and `HandlePullRequest` (`server/controller/controller.go:145-153`, `:221-229`) call `Backpressure.Acquire` and `defer Release` in the same function. The slot is held only for the few milliseconds of run creation, then released, while the run and its jobs execute for minutes.\n\nThe result is that the per-repo/per-org limit almost never trips, and the runs it is meant to bound are unlimited. When it does trip, the event is dropped (see the \"webhook events are silently lost\" ticket).\n\nCorrection (2026-10-01, from Oscar's review): `server/dispatch` *does* support a tracker (`dispatch.Config.Backpressure`, `server/dispatch/dispatcher.go:55`, enforced around `:276`). But `main.go` builds the dispatcher with `dispatch.DefaultConfig(...)` and leaves it nil, so in the shipped binary only the controller-side tracker is active. The fix is to set the dispatch-side tracker in `main.go`, and to remove or keep only the controller-side acquire.\n\n## Fix\n\nMove enforcement to dispatch/claim: count `claimed`/`running` jobs per repo/org, or acquire at claim and release on terminal completion. Over-limit work should stay `queued`, not be dropped.\n\n## Acceptance\n\nWith a limit of 1, two pushes create two runs, and the second run's jobs are not claimed until the first run's jobs finish.",
+    "state": "completed",
+    "completedAt": "2026-10-02T15:26:35.742Z",
+    "createdAt": "2026-10-01T08:57:46.118Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-106/backpressure-in-controller-limits-concurrent-webhook-handlers-not",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/102"
+    ]
+  },
+  {
+    "identifier": "CIC-120",
+    "title": "Workflow producer (CIC-84) is never wired into cicado-server: production still creates no jobs",
+    "description": "Found in QC of `master` @ `0034d5d` (2026-10-01).\n\n## What's wrong\n\n[CIC-84](https://linear.app/cicadoci/issue/CIC-84/production-workflow-producer-fetch-cicado-workflow-files-at-the-event) is marked Done, but its acceptance (\"on a real non-dev-seed server, a signed push webhook ... creates jobs that a runner claims\") is not met:\n\n* `controller.NewGitHubWorkflowProducer` has **no non-test caller**. `server/cmd/cicado-server/main.go` sets `ctrlOpts.WorkflowLoader` but never `ctrlOpts.Producer`, so `Config.Producer` is nil and `HandlePush` skips the fetch (`server/controller/controller.go:195`). Outside `-dev-seed`, nothing writes the `workflows` table, which is the same end state [CIC-78](https://linear.app/cicadoci/issue/CIC-78/production-server-creates-runs-but-never-jobs-workflowloader-is-nil) described.\n* The producer takes one static `token string` at construction. GitHub App installation tokens expire after 1 hour and are per installation, so even a wired producer would break an hour after start and could only serve one installation. It needs a token source per call: `InstallationTokenMinter` plus an installation-ID lookup (the push payload's `installation.id`, which the payload struct doesn't decode yet).\n\n## Also in the producer (`server/controller/workflowproducer.go`)\n\n* **Deleted workflow files are never removed.** Produce only upserts, so a workflow file deleted from the repo keeps triggering runs forever.\n* `ci.yml` and `ci.yaml` both map to name `ci` (`workflowNameFromPath`), which can collide in the store.\n* `ContentSHA` is set to the commit SHA, not a hash of the content, so dedup never hits across commits.\n* Fetch and upsert failures are logged at Warn and swallowed. The run then proceeds on stale definitions with no signal to the user. A failed check run is the eventual home ([CIC-81](https://linear.app/cicadoci/issue/CIC-81/server-never-reports-check-status-to-github-and-re-run-does-nothing)).\n\n## Fix\n\n1. Wire the producer in `main.go` behind GitHub App config (app ID, private key), with a per-call installation-token source.\n2. Decode `installation.id` from push/PR payloads.\n3. Inside the upsert, delete workflow rows for the repo whose path is no longer present at the ref.\n4. Add a test proving `main`'s controller config has a non-nil Producer when App credentials are configured.\n\n## Acceptance\n\nThe [CIC-84](https://linear.app/cicadoci/issue/CIC-84/production-workflow-producer-fetch-cicado-workflow-files-at-the-event) acceptance, run against the shipped binary.",
+    "state": "completed",
+    "completedAt": "2026-10-02T15:27:03.004Z",
+    "createdAt": "2026-10-01T20:56:18.996Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 1,
+    "priorityLabel": "Urgent",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-120/workflow-producer-cic-84-is-never-wired-into-cicado-server-production",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/106",
+      "https://github.com/cicadoci/core/pull/109"
+    ]
+  },
+  {
+    "identifier": "CIC-81",
+    "title": "Server never reports check status to GitHub, and \"Re-run\" does nothing: NoOpForge in main.go, rerequest handlers are no-ops",
+    "description": "Found in a QC audit of `master` @ `c8d89fc` (2026-09-30).\n\n## What's wrong\n\n* `server/cmd/cicado-server/main.go:157` passes `controller.NoOpForge{}`, so no check run is ever created or updated on GitHub. `server/github` (installation tokens, Checks client) is not imported by any binary.\n* `controller.HandleCheckSuite` and `HandleCheckRun` (`server/controller/controller.go:267`, `:279`) only log \"no-op until job resolution lands\", with `TODO(CIC-71d)`. CIC-71d has merged, so these TODOs point at a closed ticket and \"Re-run\" in GitHub does nothing.\n* The main.go comment says the real forge waits on \"[CIC-38](https://linear.app/cicadoci/issue/CIC-38/getjobsecrets-rpc-lease-authorized-delivery-memory-only-on-runner)/39/40\". Those tickets are secrets, OIDC and job tokens, not the GitHub Checks forge.\n\n## Impact\n\nThe M3 \"Checks API reporting\" deliverable and the MVP criterion \"check appears pending → job runs → check completes\" don't work in the running binary. `project-docs/01-project-plan.md` §9 marks M3 ✅ Complete.\n\n## Fix\n\n1. Wire the real GitHub forge (`server/github`) in `main.go` when App credentials are configured. Keep `NoOpForge` only as an explicit dev fallback, with a startup `Warn`.\n2. Implement check_suite `requested` / check_run `rerequested`: re-create the run (or re-queue failed jobs) for the SHA.\n3. Point the TODOs and the main.go comment at the correct ticket.\n\n## Acceptance\n\nWith App credentials set, a push produces a pending → completed check on the commit, and clicking \"Re-run\" starts a new run.",
+    "state": "completed",
+    "completedAt": "2026-10-02T15:51:32.648Z",
+    "createdAt": "2026-09-30T20:57:24.080Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-81/server-never-reports-check-status-to-github-and-re-run-does-nothing",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/109",
+      "https://github.com/cicadoci/core/pull/92"
+    ]
+  },
+  {
+    "identifier": "CIC-121",
+    "title": "Workflow producer reads .github/workflows/ (GitHub Actions' folder) instead of a CICaDo folder: GitHub Actions also runs those files",
+    "description": "Found in QC of `master` @ `0034d5d` (2026-10-01).\n\n## What's wrong\n\n`server/github/workflows.go:96` lists `GET /repos/{o}/{r}/contents/.github/workflows`, and `docs/decisions/CIC-84-workflow-producer.md` documents that choice. But:\n\n* [CIC-84](https://linear.app/cicadoci/issue/CIC-84/production-workflow-producer-fetch-cicado-workflow-files-at-the-event)'s own title says to fetch `.cicado` workflow files.\n* `.github/workflows/` belongs to GitHub Actions. GitHub Actions tries to run **every** YAML file there. A CICaDo workflow placed there triggers a failing Actions run (\"invalid workflow file\") on every push.\n* Repos that already use Actions (most of the target users migrating off GHA) have their Actions files fetched and run through the CICaDo parser. Each fails parsing and logs a Warn on every default-branch push. If one happens to parse, CICaDo runs it.\n\n## Fix\n\n* Pick a CICaDo-owned path. The recommendation is `.cicado/workflows/*.y{a}ml` (or `.cicado/*.yml`), matching the ticket title and the `cicado validate` CLI naming.\n* Update the fetcher, the decision doc, and `project-docs` together.\n* Settle this before the producer is wired in. It is a user-visible convention that is painful to change later.\n\nThis needs a product decision on the exact path. Flagged to god.",
+    "state": "completed",
+    "completedAt": "2026-10-02T16:03:04.881Z",
+    "createdAt": "2026-10-01T20:56:25.237Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-121/workflow-producer-reads-githubworkflows-github-actions-folder-instead",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/107",
+      "https://github.com/cicadoci/core/pull/109"
+    ]
+  },
+  {
+    "identifier": "CIC-82",
+    "title": "Built-but-unwired subsystems in cicado-server: live-log SSE, blob/artifact/archive, backpressure tracker, approval gates",
+    "description": "Found in a QC audit of `master` @ `c8d89fc` (2026-09-30). I compared `go list -deps` of the three binaries (`cmd/cicado`, `server/cmd/cicado-server`, `runner/cmd/cicado-runner`) against all packages. These are built and tested but reachable from no binary, or constructed with nil:\n\n* **Live logs:** `server/logs` (the only `text/event-stream` handler, `sse.go`) isn't imported by the server, and there is no log route in `server/api/handler.go` (only runs, runners, validate, webhooks). `runnersvc.Config.LogPublish` is never set in `main.go`. Logs are persisted but cannot be read or streamed.\n* **Blob storage:** `server/blobstore`, `server/artifacts` and `server/archive` are unreachable. There is no artifact upload/download and no hot→cold log archiving.\n* **Backpressure:** `dispatch.Config.Backpressure` and `controller.Config.Backpressure` stay nil in `main.go`. Before wiring, the tracker needs the job-completion `Release` described in the [cicadoci/core#81](https://linear.app/cicadoci/review/cic-71g-backpressure-tracker-in-dispatch-loop-c3831c8303ed) review, or it will wedge after `PerRepo` jobs.\n* **Approval gates:** `controller.Config.Approvals` / `AllowedApprovers` aren't set in `main.go`.\n* **Later milestones:** `server/mcp`, `mcpauth`, `slash`, `runstatus`, `classify`, `ai` and `events` are also unreachable. That's expected while M7/M8 are in progress, but it should be tracked here so nobody reads them as shipped.\n\n## Impact\n\n`project-docs/01-project-plan.md` §9 says M4's SSE log fan-out is \"wired into the runner service\" and marks M4 ✅. That's true of the code on `master`, not of the running server.\n\n## Fix\n\nWire each subsystem in `main.go` behind config, with a startup log line saying which are active. Add routes for log read and SSE. Add a smoke test that checks the server's route table. Split into sub-tickets as needed.\n\n## Acceptance\n\nA run's logs can be tailed over HTTP from a running `cicado-server`, and each wired subsystem logs its active or disabled state at startup.",
+    "state": "completed",
+    "completedAt": "2026-10-02T16:05:21.642Z",
+    "createdAt": "2026-09-30T20:57:32.485Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-82/built-but-unwired-subsystems-in-cicado-server-live-log-sse",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/109",
+      "https://github.com/cicadoci/core/pull/116",
+      "https://github.com/cicadoci/core/pull/94"
+    ]
+  },
+  {
+    "identifier": "CIC-68",
+    "title": "Recovery PR — restore M4/M5/M6/M8 packages lost from master",
+    "description": "PR [cicadoci/core#53](https://linear.app/cicadoci/review/recovery-bring-m4-m9-feature-packages-to-master-cic-33cic-60-1e4a9b479e00) (`knowroozi/cic-101-m4m9-recovery` → master, head `f44d83b`, 38 files).\n\nRestores M4/M5/M7/M8/M9 packages that were written, merged into intermediate stacked\nbranches, then dropped from master when stacked-branch PRs superseded each other.\nSee `project-docs/01-project-plan.md` §9 for full milestone-level status.\n\n## Files in PR [cicadoci/core#53](https://linear.app/cicadoci/review/recovery-bring-m4-m9-feature-packages-to-master-cic-33cic-60-1e4a9b479e00)\n\n### New packages\n\n* `server/approvalgates/` ([CIC-51](https://linear.app/cicadoci/issue/CIC-51/approval-gates-as-block-kit-buttons-with-acting-user-authorization))\n* `server/backup/archive/` ([CIC-32](https://linear.app/cicadoci/issue/CIC-32/log-storage-postgres-hot-s3-cold-with-transparent-read-through))\n* `server/artifacts/` ([CIC-34](https://linear.app/cicadoci/issue/CIC-34/artifacts-presigned-uploaddownload-namespacing-retention))\n* `server/backpressure/` ([CIC-60](https://linear.app/cicadoci/issue/CIC-60/backpressure-andamp-limits-concurrency-log-rates-payload-caps-webhook))\n* `server/blobstore/` ([CIC-34](https://linear.app/cicadoci/issue/CIC-34/artifacts-presigned-uploaddownload-namespacing-retention))\n* `server/chat/` ([CIC-53](https://linear.app/cicadoci/issue/CIC-53/chatprovider-interface-slack-as-first-driver))\n* `server/logs/` ([CIC-33](https://linear.app/cicadoci/issue/CIC-33/sse-log-fan-out-with-last-event-id-resume))\n* `server/mcp/` ([CIC-55](https://linear.app/cicadoci/issue/CIC-55/mcp-server-read-only-diagnostic-tools))\n* `server/mcpauth/` ([CIC-56](https://linear.app/cicadoci/issue/CIC-56/mcp-auth-scoped-tokens-per-invocation-audit))\n* `server/audit/` ([CIC-41](https://linear.app/cicadoci/issue/CIC-41/audit-event-pipeline-all-surfaces-one-chokepoint))\n* `server/ai/` ([CIC-57](https://linear.app/cicadoci/issue/CIC-57/ai-triage-eval-harness-10-seeded-failure-scenarios-810-gate))\n* `server/runstatus/` ([CIC-52](https://linear.app/cicadoci/issue/CIC-52/threaded-edit-in-place-run-status-messages))\n* `server/slack/` ([CIC-49](https://linear.app/cicadoci/issue/CIC-49/slack-app-foundation-socket-mode-events-api), [CIC-50](https://linear.app/cicadoci/issue/CIC-50/slash-commands-status-run-rerun-logs))\n* `server/slash/` ([CIC-50](https://linear.app/cicadoci/issue/CIC-50/slash-commands-status-run-rerun-logs))\n* `runner/lambda/` ([CIC-59](https://linear.app/cicadoci/issue/CIC-59/terraform-ami-ec2-runner-asg-on-prem-runner-installer))\n\n### Modified files\n\n* `server/runnersvc/logstream.go`, `service.go`, `logstream_test.go`\n* `server/cmd/cicado-server/main.go`\n* `server/api/auth.go`, `handler.go`\n* `server/forge/github.go`\n* `server/github/checks.go`, `installation.go`, `forge_iface.go`, `checks_test.go`, `installation_test.go`\n* `server/policy/fork.go`\n* `server/webhook/events.go`, `receiver.go`, `receiver_test.go`\n* `server/store/migrations/0003_artifacts.sql`\n* `Dockerfile`, `build.sh`\n* `test/e2e/m3_test.go`\n\n## Status: awaiting owner merge\n\n`go build ./...` passes. All non-DB tests pass. `gofmt -l .` clean.\n`golangci-lint` 0 issues. No CLAUDE.md changes (per owner's task [cicadoci/core#5](https://linear.app/cicadoci/review/cic-5-docker-compose-development-loop-and-repo-layout-a6178bb9f2c3) recommendation).",
+    "state": "completed",
+    "completedAt": "2026-10-02T16:13:42.535Z",
+    "createdAt": "2026-09-28T18:07:30.203Z",
+    "labels": [],
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-68/recovery-pr-restore-m4m5m6m8-packages-lost-from-master",
+    "prLinks": []
+  },
+  {
+    "identifier": "CIC-71",
+    "title": "M3–M9 subsystems are built but never wired into cmd/cicado-server — most of the platform is dead code in the running binary",
+    "description": "## Status: M3–M9 wiring — 8 of 8 sub-blockers landed as open PRs\n\nThe M3–M9 subsystems (webhook, workflow engine, forge adapter, chat/approvalgates,\nbackpressure, audit, secrets store, MCP) are built and tested. This ticket\nis to wire them into the running server via controller and dispatch.\n\n## PRs — stacked, `master` ← 75 ← 76 ← 77 ← 78 ← 79 ← 80 ← 81 ← 82\n\n- [ ] **CIC-71a** #75 — `server/controller` — first real `webhook.Dispatcher`;\n  `HandlePush` creates run; `HandlePullRequest` creates run\n- [ ] **CIC-71b** #76 — `store.ResolveRepo`: `FindOrgBySlug`, `UpsertOrg`;\n  `controller.resolveRepo` uses real DB look-up\n- [ ] **CIC-71c** #77 — workflow→DAG conversion: `convertJobSpecs`,\n  `LoadAndCreateJobs`, `StaticLoader`, `FileSystemLoader`\n- [ ] **CIC-71d** #78 — `NoOpForge` + `controller.New(...)` in main.go\n  replacing `webhook.NoOpDispatcher{}`\n- [X] **CIC-71e** #79 — `StoreLoader.LoadAll` reads `workflows` table;\n  `store.WorkflowRow`, `store.ListWorkflowsForRepo`\n- [X] **CIC-71f** #80 — `audit.Log` in controller; `ActionCreateRun`;\n  `emitAudit` in `HandlePush` and `HandlePullRequest`\n- [X] **CIC-71g** #81 — `backpressure.Tracker` in `dispatch.Config`;\n  `dispatchOnce` calls `Acquire` per claimed job\n- [X] **CIC-71h** #82 — `approvalgates.Manager` in controller;\n  `maybeOpenGate` in `HandlePullRequest`; nil-safe\n\n## Not yet done\n\n* E2E: webhok→run→dispatch→forge chain (needs live Postgres)\n* M5 secrets store + masker: `runnersvc.Config` needs `GetJobSecrets` RPC\n* M6 UI tickets: not started\n* M9: packaging / distribution\n\n## Decision logs\n\n* `docs/decisions/CIC-71a-controller-dispatcher.md`\n* `docs/decisions/CIC-71b-real-org-lookup.md`\n* `docs/decisions/CIC-71c-workflow-dag.md`\n* `docs/decisions/CIC-71d-server-wiring.md`\n* `docs/decisions/CIC-71e-store-loader.md`\n* `docs/decisions/CIC-71f-audit-wiring.md`\n* `docs/decisions/CIC-71g-backpressure-wiring.md`\n* `docs/decisions/CIC-71h-approvalgates-wiring.md`",
+    "state": "completed",
+    "completedAt": "2026-10-02T16:14:03.506Z",
+    "createdAt": "2026-09-28T20:26:27.670Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 1,
+    "priorityLabel": "Urgent",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-71/m3-m9-subsystems-are-built-but-never-wired-into-cmdcicado-server-most",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/75"
+    ]
+  },
+  {
+    "identifier": "CIC-135",
+    "title": "Embedded secret references (e.g. `Bearer ${{ secrets.T }}`) are silently passed through as literal text",
+    "description": "Found in QC of `master` @ `f445f0d` (2026-10-02).\n\n## What's wrong\n\n`internal/secretexpr` only recognises a reference when it is the **whole** env value (`secrets.NAME` or `${{ secrets.NAME }}`): see `extract`. For a value such as `Authorization: Bearer ${{ secrets.API_TOKEN }}` or `postgres://u:${{ secrets.PW }}@db`:\n\n* `Refs` doesn't extract it, so the server never delivers the secret.\n* `Resolve` leaves it unchanged, so the step receives the literal string `${{ secrets.API_TOKEN }}`.\n* `unresolvedSecrets` (`runner/secrets.go:71`) uses the same whole-value `Extract`, so it doesn't flag it. The job doesn't fail clearly; it fails later with a confusing auth error. That is exactly what the unresolved-secret check in `runner/job.go:189` (a PR [cicadoci/core#91](https://linear.app/cicadoci/review/cic-79-deliver-secrets-to-a-job-end-to-end-high-fc8879db8015) review fix) was added to prevent.\n* The fork policy (`server/policy/fork.go`, now `secretexpr.IsRef`) also doesn't strip embedded forms. This doesn't leak today, because they are never resolved.\n\nUsers coming from GitHub Actions write embedded references all the time.\n\n## Fix (pick one)\n\n1. Support interpolation: scan for every `${{ secrets.NAME }}` occurrence in a value, extract the names, and substitute in place. Then update `unresolvedSecrets` and the fork policy to match.\n2. Or reject at parse/validate time: `workflow/parse` returns a positional error for any value containing `secrets.` that isn't a whole-value reference, with a hint.\n\n## Acceptance\n\nA value `Bearer ${{ secrets.T }}` either resolves to `Bearer \u003cvalue\u003e` or fails `cicado validate` with a line/column error. It never reaches a step as literal text.",
+    "state": "completed",
+    "completedAt": "2026-10-02T20:51:23.016Z",
+    "createdAt": "2026-10-02T08:56:38.394Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-135/embedded-secret-references-eg-bearer-dollar-secretst-are-silently",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/108"
+    ]
+  },
+  {
+    "identifier": "CIC-134",
+    "title": "CI is disabled: GitHub Actions workflow \"CI\" is disabled_manually and has not run since 2026-09-27, so no PR is gated",
+    "description": "Found in QC on 2026-10-02.\n\n## What's wrong\n\n* `gh api repos/cicadoci/core/actions/workflows` shows `CI  disabled_manually  .github/workflows/ci.yml`.\n* The last runs were on 2026-09-27 at about 02:35Z, all on PR branches, all `failure`. Every job had **0 steps**, which usually means GitHub refused to start the runners (Actions billing or a spending limit) rather than the code failing.\n* The last CI run on `master` was at `83ab756` (2026-09-27). Since then, about 30 PRs have merged with no status checks. `gh pr view 91` shows an empty `statusCheckRollup`.\n* Result: PR [cicadoci/core#91](https://linear.app/cicadoci/review/cic-79-deliver-secrets-to-a-job-end-to-end-high-fc8879db8015) ([CIC-79](https://linear.app/cicadoci/issue/CIC-79/secrets-can-never-reach-a-job-secret-refs-is-never-populated-and-the)) merged and broke 5 e2e tests and every real job ([CIC-133](https://linear.app/cicadoci/issue/CIC-133/regression-from-cic-79-91-every-job-fails-as-infra-because-the-runner)). CI, which runs the full Postgres + `-race` suite (`ci.yml:114`), would have caught it.\n\n## Fix (needs the repo owner)\n\n1. Resolve the cause of the 0-step failures (check the Actions billing / spending limit for `cicadoci`).\n2. Re-enable the workflow: `gh workflow enable CI -R cicadoci/core`.\n3. Turn on branch protection on `master`, requiring the CI checks, so a disabled or red CI blocks merging.\n4. Re-run CI on the current `master` tip and triage what fails. [CIC-133](https://linear.app/cicadoci/issue/CIC-133/regression-from-cic-79-91-every-job-fails-as-infra-because-the-runner) is expected.\n\nUntil then, reviewers must run `make check` locally and paste the result into the PR's Verified section.",
+    "state": "completed",
+    "completedAt": "2026-10-02T21:04:22.589Z",
+    "createdAt": "2026-10-02T08:56:31.117Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 1,
+    "priorityLabel": "Urgent",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-134/ci-is-disabled-github-actions-workflow-ci-is-disabled-manually-and-has",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/110",
+      "https://github.com/cicadoci/core/pull/113"
+    ]
+  },
+  {
+    "identifier": "CIC-123",
+    "title": "jobtoken.Postgres.Lookup does not filter kind = 'job' (defence in depth)",
+    "description": "Found in QC of `master` @ `0034d5d` (2026-10-01). Low severity.\n\n`server/jobtoken/postgres.go` `Lookup` selects from the shared `tokens` table `WHERE token_hash = $1` without `AND kind = 'job'`. Registration, runner, MCP and API tokens live in the same table with the same sha256 hashing (`server/auth/token.go:72`). Today `Manager.Verify` rejects other kinds by prefix (`auth.Validate(auth.KindJob, raw)`), so this cannot be exploited. But the store's contract shouldn't depend on a caller-side prefix check: runnersvc's own lookups do filter by kind (`service.go:365`).\n\nSeparately: `Lookup` scans `expires_at` and `created_by` into non-nullable Go types. A row with NULLs (other kinds have NULLs there) gives a scan error, not a clean not-found.\n\nFix: add `AND kind = 'job'` to `Lookup` (and to `MarkRevoked` / `SetLastUse`), and add a test that a runner-token hash returns `ErrStoreNotFound`.",
+    "state": "completed",
+    "completedAt": "2026-10-02T21:37:31.284Z",
+    "createdAt": "2026-10-01T20:56:38.880Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 4,
+    "priorityLabel": "Low",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-123/jobtokenpostgreslookup-does-not-filter-kind-job-defence-in-depth",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/111"
+    ]
+  },
+  {
+    "identifier": "CIC-147",
+    "title": "Workflow `run:` steps can never execute: script becomes argv[0] (\"echo hi\" exec'd as a program); `uses:` steps have no command",
+    "description": "Found in QC of `master` @ `7d8a26a` (2026-10-02).\n\n## What's wrong\n\n`controller.convertSteps` (`server/controller/jobs.go:269`) maps `run: \u003cscript\u003e` to `Command: []string{s.Run}`. The runner's shell executor (which `cicanscript` delegates to) runs `exec.CommandContext(step.Command[0], step.Command[1:]...)` (`runner/executor/shell.go:84`). So:\n\n* `run: echo hi` → tries to exec a binary literally named `\"echo hi\"` → `exec: \"echo hi\": executable file not found` → the step fails as **infra**.\n* Any multi-word or multi-line script fails the same way. Only a bare single-word command like `run: make` would work.\n* `uses:` steps get `Command: nil` → `shell: step has no command` → infra failure.\n\nWebhook-created jobs now carry steps ([CIC-104](https://linear.app/cicadoci/issue/CIC-104/webhook-created-jobs-carry-no-steps-and-no-git-checkout-info)), so every real workflow fails at its first step. The e2e tests and dev-seed pass only because they write argv-shaped commands (`[\"sh\",\"-c\",...]` or `[\"echo\",\"hello\"]`) straight into the `steps` table, bypassing `convertSteps`.\n\n## Fix\n\n* Map `run:` to `[\"/bin/sh\", \"-ec\", script]` (or `bash -eo pipefail -c` when bash is the declared shell), for both shell and docker executors.\n* Decide `uses:` semantics for MVP: reject at validate time with a positional error (\"`uses:` not supported yet\"), or implement it. Don't send command-less steps.\n* Add an e2e test that goes YAML → controller → runner (not hand-inserted steps): `run: echo \"a b\" \u0026\u0026 echo c` succeeds, and the logs contain both lines.",
+    "state": "completed",
+    "completedAt": "2026-10-03T17:52:19.699Z",
+    "createdAt": "2026-10-02T20:56:11.797Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 1,
+    "priorityLabel": "Urgent",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-147/workflow-run-steps-can-never-execute-script-becomes-argv0-echo-hi",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/112"
+    ]
+  },
+  {
+    "identifier": "CIC-152",
+    "title": "Docker executor: `run:` steps break on images with an ENTRYPOINT (script passed as args to the entrypoint)",
+    "description": "Found in QC of `master` @ `ffe228d` (2026-10-03), while reviewing PR [cicadoci/core#112](https://linear.app/cicadoci/review/cic-147-fix-workflow-run-multi-word-execution-uses-rejection-6a70e4503912) ([CIC-147](https://linear.app/cicadoci/issue/CIC-147/workflow-run-steps-can-never-execute-script-becomes-argv0-echo-hi)). That PR's decision doc §2b lists this as a known follow-up, and no ticket existed for it.\n\n## What's wrong\n\n`runner/executor/docker.go` `dockerRunArgs` builds `docker run ... \u003cimage\u003e \u003cstep.Command...\u003e` (lines \\~243–244) and never sets `--entrypoint`. After [CIC-147](https://linear.app/cicadoci/issue/CIC-147/workflow-run-steps-can-never-execute-script-becomes-argv0-echo-hi), a `run:` step's command is `/bin/sh -ec \u003cscript\u003e`. For any image with an ENTRYPOINT (for example `golang`-based tool images, `node` images with a custom entrypoint, or most `*/cli` images), Docker runs `\u003centrypoint\u003e /bin/sh -ec \u003cscript\u003e`, so the script is handed to the tool as arguments instead of being executed. GitHub Actions overrides the entrypoint for `run:` steps.\n\n## Fix\n\nFor `run:` steps, pass `--entrypoint /bin/sh` and then `-ec \u003cscript\u003e`, or have the controller mark steps as shell scripts so the executor can choose. Keep argv-style steps (no shell) unchanged.\n\n## Acceptance\n\nTest with an image whose ENTRYPOINT is not a shell (for example a tiny test image with `ENTRYPOINT [\"/bin/false\"]`): `run: echo ok` succeeds and prints `ok`.",
+    "state": "completed",
+    "completedAt": "2026-10-03T17:58:08.458Z",
+    "createdAt": "2026-10-03T08:55:25.219Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-152/docker-executor-run-steps-break-on-images-with-an-entrypoint-script",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/117"
+    ]
+  },
+  {
+    "identifier": "CIC-108",
+    "title": "approvalgates.Manager: timeout never enforced, data race in Resolve, callback under lock, gate recorded on failed post, Channel set to PR number",
+    "description": "Found in QC of `master` @ `5d6722f` (2026-10-01). Fix these before [CIC-82](https://linear.app/cicadoci/issue/CIC-82/built-but-unwired-subsystems-in-cicado-server-live-log-sse) wires the manager into `cicado-server`.\n\n## What's wrong (`server/approvalgates/approvalgates.go`)\n\n1. **Timeout never enforced.** `Gate.Timeout` is only forwarded to the chat provider. No timer moves a gate to `GateTimedOut`, so a run gated without a click waits forever.\n2. **Data race.** `Resolve` unlocks, then reads `rec.State` for `onResolved(runID, rec.State)`, which can race with `CloseAll`. Use the copied state.\n3. **Callback and network I/O under lock.** `CloseAll` calls `provider.CloseApproval` and `onResolved` while holding `m.mu`. A callback that calls `State()` deadlocks. `Open` also holds `m.mu` across `RequestApproval` (a Slack HTTP call), which serialises every gate.\n4. **Ghost gate on failure.** `Open` stores the record before `RequestApproval`. If the post fails, a pending gate with no message stays in the map.\n5. `State()` **of an unknown run returns** `GatePending`**.** Callers cannot tell \"no gate\" from \"waiting\". Return `(state, ok)`.\n6. **Controller misuse.** `controller.maybeOpenGate` (`server/controller/controller.go:369`) sets `Channel` to the PR number (`\"42\"`), not a chat channel ID. It also opens a gate for every PR run, with an empty allow-list by default, so the buttons cannot be used.\n7. Gates live only in memory and are lost on restart.\n\n## Fix\n\nPoints 1–5 in the manager, with `-race` tests. Point 6: channel from config, and open gates only when policy requires it. Point 7: track as a follow-up (persist gates in Postgres).",
+    "state": "completed",
+    "completedAt": "2026-10-03T17:58:22.852Z",
+    "createdAt": "2026-10-01T08:57:58.143Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-108/approvalgatesmanager-timeout-never-enforced-data-race-in-resolve",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/118"
+    ]
+  },
+  {
+    "identifier": "CIC-150",
+    "title": "HTTP API is unauthenticated in the shipped binary: live job logs (GET /api/v1/logs?job=) readable by anyone; no per-org authorization",
+    "description": "Found in QC of `master` @ `7d8a26a` (2026-10-02).\n\n## What's wrong\n\n* `server/cmd/cicado-server/main.go:270` builds `api.New(st, WithLogger, WithWebhookReceiver, WithSSEHandler)` with no authenticator, so the default no-op authenticator is used (`handler.go:208`: \"noOpAuthenticator keeps it open today\").\n* [CIC-82](https://linear.app/cicadoci/issue/CIC-82/built-but-unwired-subsystems-in-cicado-server-live-log-sse) ([cicadoci/core#94](https://linear.app/cicadoci/review/cic-82-wire-live-log-streaming-sse-route-masked-logpublish-a55d9822c081)) added `GET /api/v1/logs?job=\u003cid\u003e`, which streams a job's full log history and live tail. Its decision doc and tests cite \"auth on both chains\", but in the shipped binary that auth is the no-op. **Anyone who can reach the HTTP port can read any job's logs**, plus the existing run and runner read endpoints. Logs are masked for registered secrets but routinely contain other sensitive output (internal hostnames, tokens from tools, PII in test fixtures).\n* Even with a real authenticator, `logs.SSE.ServeHTTP` only parses `?job=`. There's no check that the caller's org owns the job's repo, so it is cross-tenant readable by job UUID.\n\n[CIC-44](https://linear.app/cicadoci/issue/CIC-44/auth-github-oauth-login-adminmember-roles) (GitHub OAuth login) is the planned real auth, but it's in Backlog, and nothing stops a production deploy from exposing these routes today.\n\n## Fix\n\n1. Until [CIC-44](https://linear.app/cicadoci/issue/CIC-44/auth-github-oauth-login-adminmember-roles) lands: require a configured API token (static bearer, or an `api`-kind token from the `tokens` table) and refuse to serve `/api/v1/*` (except webhooks and health) without one. Fail closed, like [CIC-80](https://linear.app/cicadoci/issue/CIC-80/webhook-signature-verification-is-silently-disabled-when-cicado) did for webhooks. Add a dev opt-in flag.\n2. In the SSE handler (and the run/job read handlers), authorize: resolve job → run → repo → org, and compare with the principal's org.\n3. Fix the [CIC-82](https://linear.app/cicadoci/issue/CIC-82/built-but-unwired-subsystems-in-cicado-server-live-log-sse) decision doc wording (\"authenticated\" means a no-op today).\n\n## Acceptance\n\nA request without credentials to `/api/v1/logs?job=` gets 401. A principal from org A requesting org B's job gets 404 or 403.",
+    "state": "completed",
+    "completedAt": "2026-10-04T02:38:31.169Z",
+    "createdAt": "2026-10-02T20:56:30.876Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-150/http-api-is-unauthenticated-in-the-shipped-binary-live-job-logs-get",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/113",
+      "https://github.com/cicadoci/core/pull/116"
+    ]
+  },
+  {
+    "identifier": "CIC-161",
+    "title": "Expose CICADO_GIT_CLONE_URL/REF/SHA env to steps",
+    "description": "Runner injects CICADO_GIT_CLONE_URL, CICADO_GIT_REF and CICADO_GIT_SHA as job-level env from JobSpec.Git so cicanscript `run:` blocks can reference them. Split out of PR [cicadoci/core#120](https://linear.app/cicadoci/review/fixrunner-consume-jobspecgit-inject-cicado-git-env-vars-cic-148-a95f5e29d5bb). Related to [CIC-148](https://linear.app/cicadoci/issue/CIC-148/runner-never-checks-out-the-repository-gitcontext-clone-urlrefsha-is), which stays open for private-repo clone credentials via the lease-scoped GetJobSecrets RPC.",
+    "state": "completed",
+    "completedAt": "2026-10-04T02:39:52.132Z",
+    "createdAt": "2026-10-03T20:49:29.985Z",
+    "labels": [],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-161/expose-cicado-git-clone-urlrefsha-env-to-steps",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/120",
+      "https://github.com/cicadoci/core/pull/121"
+    ]
+  },
+  {
+    "identifier": "CIC-159",
+    "title": "Secrets leak via flag defaults: --webhook-secret, --secret-key, GitHub token flags print env values in usage output",
+    "description": "Found by Dwight in review of PR [cicadoci/core#116](https://linear.app/cicadoci/review/featapi-fail-closed-bearer-token-auth-on-apiv1-cic-150-c0eedbfdc470) ([CIC-150](https://linear.app/cicadoci/issue/CIC-150/http-api-is-unauthenticated-in-the-shipped-binary-live-job-logs-get)).\n\nIn `server/cmd/cicado-server/main.go`, secret-bearing flags take their default from `os.Getenv(...)`. Go's `flag` package prints defaults in usage text, so `--help` or any mistyped flag prints the secret to stderr and logs. Reproduced: `CICADO_API_TOKEN=LEAKME-api cicado-server --bogus` prints `(default \"LEAKME-api\")`. Same leak confirmed for `--webhook-secret`, `--secret-key` (the AES key) and the GitHub token flags.\n\n## Fix\n\nGive each flag an empty default and read the env var after `flag.Parse()` (or use a `flag.Value` whose `String()` returns \"\"). Add a test asserting no secret appears in `PrintDefaults` output.\n\n## Acceptance\n\nWith all secret env vars set, an invalid flag prints no secret value.",
+    "state": "completed",
+    "completedAt": "2026-10-04T02:42:15.847Z",
+    "createdAt": "2026-10-03T15:44:26.540Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-159/secrets-leak-via-flag-defaults-webhook-secret-secret-key-github-token",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/119"
+    ]
+  },
+  {
+    "identifier": "CIC-148",
+    "title": "Runner never checks out the repository: GitContext (clone URL/ref/SHA) is sent but ignored, jobs run in an empty workspace",
+    "description": "Found in QC of `master` @ `7d8a26a` (2026-10-02).\n\n## What's wrong\n\n[CIC-104](https://linear.app/cicadoci/issue/CIC-104/webhook-created-jobs-carry-no-steps-and-no-git-checkout-info) ([cicadoci/core#100](https://linear.app/cicadoci/review/cic-104-persist-gitcloneurlgitrefgitsha-in-convertjobspecs-9925a9eb1022)) persists `git_clone_url`, `git_ref` and `git_sha`, and the server sends them in `JobAssignment.Git` (`server/runnersvc/session.go`). But **nothing in** `runner/` **reads them**: there are no references to `GetGit`, `CloneUrl` or `git clone` anywhere in the runner. Every job's workspace is an empty temp dir, so `make test`, `go test ./...` and similar can't work on any repo.\n\nPrivate repos also need credentials. The stored URL is token-less (`https://github.com/\u003co\u003e/\u003cr\u003e.git`, which is correct per the \"no secrets in assignments\" invariant). The per-job installation token from [CIC-26](https://linear.app/cicadoci/issue/CIC-26/per-job-github-installation-tokens-for-clone-never-persisted) (`forge.CloneCredentialsForRun`) is not delivered anywhere.\n\n## Fix\n\n1. Runner: in `Prepare` (all executors), when `Git.CloneUrl` is set, do a shallow fetch of `Git.Sha` (or `Ref`) into the workspace: `git init`, `git fetch --depth=1 origin \u003csha\u003e`, `git checkout FETCH_HEAD`. A failure there is an infra failure with a clear detail message.\n2. Credentials: deliver a short-lived clone token **only** through a lease-scoped RPC (extend `GetJobSecrets` with a reserved clone-credential entry, or add a sibling RPC). Never put it in the assignment or journal. Register it with the masker. Don't use a token for fork runs of public repos.\n3. Add an e2e test: a job against a local bare git repo (`file://`) checks out the expected SHA, and a step can `cat` a file from it.",
+    "state": "completed",
+    "completedAt": "2026-10-04T12:46:03.002Z",
+    "createdAt": "2026-10-02T20:56:17.396Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 1,
+    "priorityLabel": "Urgent",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-148/runner-never-checks-out-the-repository-gitcontext-clone-urlrefsha-is",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/120",
+      "https://github.com/cicadoci/core/pull/123"
+    ]
+  },
+  {
+    "identifier": "CIC-170",
+    "title": "`make dev` broken: server exits at startup since CIC-150 — docker-compose sets neither CICADO_API_TOKEN nor CICADO_INSECURE_API",
+    "description": "Found in QC of `master` @ `89cd97f` (2026-10-04).\n\n[cicadoci/core#116](https://linear.app/cicadoci/review/featapi-fail-closed-bearer-token-auth-on-apiv1-cic-150-c0eedbfdc470) ([CIC-150](https://linear.app/cicadoci/issue/CIC-150/http-api-is-unauthenticated-in-the-shipped-binary-live-job-logs-get)) added `apiStartupGuard` (`server/cmd/cicado-server/main.go:150`, `:498`). The server now refuses to start when `CICADO_API_TOKEN` is empty and `--insecure-api` / `CICADO_INSECURE_API` is not set. Unlike the ephemeral-key guard, `--dev-seed` does **not** bypass it.\n\n`docker-compose.yml` (the `server` service, lines 44–55) sets `CICADO_INSECURE_WEBHOOK` for the [CIC-80](https://linear.app/cicadoci/issue/CIC-80/webhook-signature-verification-is-silently-disabled-when-cicado) guard but has nothing for the API guard. So `make dev` ([README.md:37](\u003chttp://README.md:37\u003e), docs/development.md:13) brings up a server that exits immediately with \"CICADO_API_TOKEN is not set and --insecure-api was not passed\". The runner never becomes healthy, and the documented dev loop is broken. This is the same class of regression [CIC-80](https://linear.app/cicadoci/issue/CIC-80/webhook-signature-verification-is-silently-disabled-when-cicado) caused and fixed in compose.\n\nCI doesn't catch it: the Docker images job builds the images but never runs compose.\n\n## Fix\n\n1. Add `CICADO_INSECURE_API: \"true\"` to the compose `server` env, with a comment like the one for the webhook flag. Or set a fixed dev `CICADO_API_TOKEN` and document it for `curl`/SSE use in docs/development.md.\n2. Add a CI smoke step (`docker compose up -d --wait` plus a health probe), or a test that parses `docker-compose.yml` env and runs the startup guards against it, so a new fail-closed guard can't silently break `make dev` again.\n3. Small cleanup while in `main.go`: the secrets-store comment block at lines \\~180–189 is still duplicated (listed in [CIC-83](https://linear.app/cicadoci/issue/CIC-83/cleanup-stalemisattributed-todos-and-code-comments-abandoned), which is Done).\n\n## Acceptance\n\n`make dev` on a clean checkout gets the server healthy and the demo job runs. The CI check fails if compose can't boot the server.",
+    "state": "completed",
+    "completedAt": "2026-10-04T12:50:58.141Z",
+    "createdAt": "2026-10-04T08:56:10.104Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-170/make-dev-broken-server-exits-at-startup-since-cic-150-docker-compose",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/127"
+    ]
+  },
+  {
+    "identifier": "CIC-151",
+    "title": "Private repos can never be cloned: per-job clone token (CIC-26) is built but never minted or delivered (TokenMinter nil in main.go, Auth stub)",
+    "description": "Found in QC of `master` @ `ffe228d` (2026-10-03).\n\n## What's wrong\n\n[CIC-26](https://linear.app/cicadoci/issue/CIC-26/per-job-github-installation-tokens-for-clone-never-persisted) (\"Per-job GitHub installation tokens for clone\") is Done, but nothing in the shipped binary uses it:\n\n* `server/cmd/cicado-server/main.go:399` `newForge` builds `forge.NewGitHubForge(..., nil)`, so the TokenMinter is **nil**, and `CloneCredentialsForRun` always returns `errNoMinter`.\n* `forge.CloneCredentialsForRun` has **no non-test caller** in `server/` or `runner/`.\n* `github.InstallationTokenMinter.Auth` is documented as \"a stub that returns a static token; full JWT implementation is [CIC-26](https://linear.app/cicadoci/issue/CIC-26/per-job-github-installation-tokens-for-clone-never-persisted)+\". No App-JWT signing exists.\n* The clone URL is `https://github.com/\u003crepo\u003e.git` with no credentials (`controller.go:208`), and the synthetic checkout step from PR [cicadoci/core#112](https://linear.app/cicadoci/review/cic-147-fix-workflow-run-multi-word-execution-uses-rejection-6a70e4503912) ([CIC-147](https://linear.app/cicadoci/issue/CIC-147/workflow-run-steps-can-never-execute-script-becomes-argv0-echo-hi)/148) clones it anonymously.\n\nResult: once [CIC-147](https://linear.app/cicadoci/issue/CIC-147/workflow-run-steps-can-never-execute-script-becomes-argv0-echo-hi)/148 land, **every job on a private repository fails at checkout**. Most self-hosted CI users have private repos.\n\n## Constraints\n\n* The token must never go in the step `Command` or the `JobAssignment`. Steps are persisted, and secrets may only travel through the lease-scoped `GetJobSecrets` (security invariant).\n* Register the token with the masker (`RegisterWithVariants`, [CIC-74](https://linear.app/cicadoci/issue/CIC-74/redaction-masker-never-learns-a-real-secret-value-in-production)) before use.\n\n## Fix\n\n1. Implement App-JWT `Auth` (RS256 with the App private key) and wire `InstallationTokenMinterAdapter` into `newForge` from App ID + key flags. Share this with [CIC-146](https://linear.app/cicadoci/issue/CIC-146/workflow-producer-mint-installation-tokens-per-call-and-decode), which needs the same minter.\n2. Mint per job at lease time. Deliver it through `GetJobSecrets` under a reserved name (for example `CICADO_GIT_TOKEN`), and have the checkout step use a git credential helper (`git -c credential.helper=...`) or `http.extraHeader` read from env, never the URL.\n3. Fork PRs: still read-only, with a contents:read installation token scoped to the base repo only.\n\n## Acceptance\n\nE2E: a job for a repo whose fetch requires auth checks out successfully. The token never appears in `jobs.steps`, the assignment, or logs (masked).",
+    "state": "completed",
+    "completedAt": "2026-10-04T13:16:41.853Z",
+    "createdAt": "2026-10-03T08:55:06.644Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-151/private-repos-can-never-be-cloned-per-job-clone-token-cic-26-is-built",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/124"
+    ]
+  },
+  {
+    "identifier": "CIC-160",
+    "title": "approvalgates: controller.maybeOpenGate sets Channel to the PR number; needs a Config channel/timeout source (split from CIC-108)",
+    "description": "Sub-bug 5 of [CIC-108](https://linear.app/cicadoci/issue/CIC-108/approvalgatesmanager-timeout-never-enforced-data-race-in-resolve), scoped out of PR [cicadoci/core#118](https://linear.app/cicadoci/review/fixapprovalgates-fix-4-manager-sub-bugs-auto-timeout-race-callback-8f098d6049b5). `controller.maybeOpenGate` sets the gate Channel to the PR number. Fix needs a Config source for the Slack channel and gate timeout (does not exist yet), then use it in the controller. See the PR [cicadoci/core#118](https://linear.app/cicadoci/review/fixapprovalgates-fix-4-manager-sub-bugs-auto-timeout-race-callback-8f098d6049b5) body and its decision doc.",
+    "state": "completed",
+    "completedAt": "2026-10-05T00:49:27.911Z",
+    "createdAt": "2026-10-03T16:32:13.614Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-160/approvalgates-controllermaybeopengate-sets-channel-to-the-pr-number",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/129"
+    ]
+  },
+  {
+    "identifier": "CIC-179",
+    "title": "E2E: flaky step-log/secret checks (TestWalkingSkeleton, TestSecretDelivery) — wait for job logs before asserting",
+    "description": "Tests poll `jobs.status` then read `log_entries` once; the runner sends logs on the LogStream RPC and the terminal SUCCEEDED on the separate Session RPC with no server-side ordering, so the read can see 0 rows (`test/e2e/skeleton_test.go:337`, `:448`). Fix: test-only `awaitJobLogs` helper that waits until the last step's `step_finished` event (step_index = steps-1) or any `error_classified`, with a bounded timeout. Product-level hardening is tracked separately in [CIC-178](https://linear.app/cicadoci/issue/CIC-178/runner-wait-bounded-for-logack-to-cover-the-last-log-seq-before) (runner waits for LogAck). Root cause by Creed; review by Dwight on PR [cicadoci/core#130](https://linear.app/cicadoci/review/teste2e-fix-flake-in-log-reading-tests-with-awaitjoblogs-ccd-34-3a48d0ee7758).",
+    "state": "completed",
+    "completedAt": "2026-10-05T00:50:00.584Z",
+    "createdAt": "2026-10-04T17:38:20.504Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-179/e2e-flaky-step-logsecret-checks-testwalkingskeleton-testsecretdelivery",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/130"
+    ]
+  },
+  {
+    "identifier": "CIC-146",
+    "title": "Workflow producer: mint installation tokens per call and decode installation.id from webhooks (CIC-120 follow-up)",
+    "description": "Follow-up split out of [CIC-120](https://linear.app/cicadoci/issue/CIC-120/workflow-producer-cic-84-is-never-wired-into-cicado-server-production) (PR [cicadoci/core#106](https://linear.app/cicadoci/review/cic-120-wire-the-github-workflow-producer-into-cicado-server-efdea3f25c9f)), per god's option (b) decision on Dwight's review.\n\n## Context\n\nPR [cicadoci/core#106](https://linear.app/cicadoci/review/cic-120-wire-the-github-workflow-producer-into-cicado-server-efdea3f25c9f) wires `controller.GitHubWorkflowProducer` into `cicado-server` behind `--github-workflow-token` / `CICADO_GITHUB_WORKFLOW_TOKEN`. That flag takes one static token, documented as a long-lived **fine-grained personal access token** (contents:read). This is an MVP: it serves only the repos that PAT can read, and the operator owns its rotation.\n\nA GitHub App installation token cannot be used there: it expires after 1 hour and is scoped to one installation, so fetches would start failing with 401 an hour after start (logged at Warn and swallowed, so runs would silently use stale definitions).\n\n## Scope\n\n1. Replace the producer's static `token string` with a per-call token source (for example `func(ctx, installationID int64) (string, error)`), backed by the existing `github.InstallationTokenMinter` / `InstallationTokenMinterAdapter` ([CIC-26](https://linear.app/cicadoci/issue/CIC-26/per-job-github-installation-tokens-for-clone-never-persisted), [CIC-81](https://linear.app/cicadoci/issue/CIC-81/server-never-reports-check-status-to-github-and-re-run-does-nothing)).\n2. Configure it from GitHub App credentials (app ID + private key) in `main.go`; keep the PAT flag as an optional fallback or remove it.\n3. Decode `installation.id` from push and pull_request webhook payloads and pass it through `HandlePush` to `Produce`.\n4. Test: two installations served by one server; a token minted after expiry is refreshed; main wiring builds the producer from App credentials.\n\n## Acceptance\n\nA default-branch push in any repo of any installation of the App upserts that repo's workflows, including more than 1 hour after server start. The `TODO` at the producer construction site in `server/cmd/cicado-server/main.go` is removed.",
+    "state": "completed",
+    "completedAt": "2026-10-05T00:50:34.707Z",
+    "createdAt": "2026-10-02T14:59:27.745Z",
+    "labels": [],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-146/workflow-producer-mint-installation-tokens-per-call-and-decode",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/128",
+      "https://github.com/cicadoci/core/pull/131"
+    ]
+  },
+  {
+    "identifier": "CIC-191",
+    "title": "Docker executor timeout doesn't kill the step on Linux: TestDockerTimeoutKillsStep fails on every CI run (masked by CIC-190); container also left running",
+    "description": "Found in QC of `master` @ `29cf433` (2026-10-05). [CIC-190](https://linear.app/cicadoci/issue/CIC-190/ci-never-fails-on-test-failures-go-test-tee-jq-sed-runs-without) (no pipefail) has hidden this failure.\n\n## Evidence\n\n* CI Test (race), run 37249140979 (`29cf433`): `docker_test.go:297: timeout took 30.003262318s; the step was not killed promptly`, `--- FAIL: TestDockerTimeoutKillsStep (30.00s)`, `FAIL cicadoci.com/cicado/runner/executor`.\n* The same failure shows on every non-cancelled master run checked, back to 2026-09-24 (`cfb42c2`). The job was green each time.\n* It passes locally on macOS. The full local suite on `29cf433` passes: 39/39 packages.\n\n## Root cause\n\n`runner/executor/docker.go` RunStep (\\~:135–160) runs `exec.CommandContext(stepCtx, docker, ...)`. On timeout it SIGKILLs **only the** `docker` **client process**. There's no process group (`Setpgid`) and no `cmd.WaitDelay`, and it then blocks in `wg.Wait()` on the stdout/stderr pumps until **every** holder of the pipe's write end exits.\n\nIn the test, the fake docker script (`docker_test.go`, ends with `exec \"$@\"`) runs `sh -c \"sleep 30\"`. On Ubuntu `/bin/sh` is dash, which **forks** `sleep` instead of exec'ing it, so the grandchild `sleep` keeps the pipes open for 30 s after the client is killed. On macOS `/bin/sh` is bash, which exec's the last command, so the test passes there.\n\nThe production version is worse. Killing the `docker run` client (SIGKILL, so no sig-proxy) does **not** stop the container. That's the known limitation at `docker.go:46–48`/`:114` (\"deferred to [CIC-16](https://linear.app/cicadoci/issue/CIC-16/step-engine-env-injection-exit-codes-timeouts-cancellation-propagation)\"), but [CIC-16](https://linear.app/cicadoci/issue/CIC-16/step-engine-env-injection-exit-codes-timeouts-cancellation-propagation) is Done and no ticket tracks it. A timed-out or cancelled step's container keeps running on the runner host, consuming resources and possibly writing to the mounted workspace while the next step or job runs.\n\n## Fix\n\n1. Give each step a known container name (`--name cicado-\u003cjob\u003e-\u003cstep\u003e-\u003crand\u003e`) or `--cidfile`. On timeout or cancel, run `docker kill \u003cname\u003e` (then `docker rm -f`), then reap the client.\n2. Set `cmd.WaitDelay` (for example 5 s) so pumps can never hang past the deadline, and/or `Setpgid` plus group kill as in `shell.go`.\n3. Make the test platform-independent: use `Command: []string{\"sleep\", \"30\"}` (exec'd directly) or have the fake script exec in its own process group, and assert that the container-kill call happens.\n4. Land this before, or together with, [CIC-190](https://linear.app/cicadoci/issue/CIC-190/ci-never-fails-on-test-failures-go-test-tee-jq-sed-runs-without), so master doesn't go red when pipefail is fixed.\n\n## Acceptance\n\nTestDockerTimeoutKillsStep passes on Linux CI with pipefail on. A real-docker test (behind a build tag) shows a timed-out step's container is gone within a few seconds.",
+    "state": "completed",
+    "completedAt": "2026-10-05T11:40:10.950Z",
+    "createdAt": "2026-10-05T02:02:25.068Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-191/docker-executor-timeout-doesnt-kill-the-step-on-linux",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/136"
+    ]
+  },
+  {
+    "identifier": "CIC-190",
+    "title": "CI never fails on test failures: `go test | tee | jq | sed` runs without pipefail, so a failing Test (race) step stays green",
+    "description": "Found by Dwight on PR [cicadoci/core#134](https://linear.app/cicadoci/review/featcontrollermain-wire-per-call-github-app-installation-token-minter-6191f7213e4d) (issuecomment-5986810361) and verified on `master` @ `29cf433` (2026-10-05).\n\n## What's wrong\n\n`.github/workflows/ci.yml:114` (the \"Run tests with the race detector\" step):\n\n```\nrun: go test ./... -race -count=1 -timeout 15m -json | tee /tmp/test-output.json | jq -r 'select(.Action == \"output\") | .Output' | sed '/^$/d'\n```\n\nThe workflow sets no `shell:` and has no `defaults.run.shell`. When `shell` is unspecified, GitHub runs steps with `bash -e {0}`, which has **no** `pipefail`. The step's exit status is `sed`'s, which is always 0. **A failing test never fails the job.** The following \"Fail if any test was skipped\" step only checks skips, not failures.\n\n## Evidence\n\n* PR [cicadoci/core#134](https://linear.app/cicadoci/review/featcontrollermain-wire-per-call-github-app-installation-token-minter-6191f7213e4d) run 37251166516: `TestCIC180_B1_MinterBeatsPAT` failed, and the job was green.\n* Master: `TestDockerTimeoutKillsStep` has failed on **every** non-cancelled master run checked, as far back as 2026-09-24 (`cfb42c2` … `29cf433`, run 37249140979), and every run is green. It's tracked separately as its own bug.\n* The pipeline has been in place since about 2026-09-17, so the \"Test (race)\" check hasn't gated anything since then.\n\n## Fix\n\n1. Add `shell: bash` to that step (GitHub then uses `bash --noprofile --norc -eo pipefail {0}`), or set `defaults: run: shell: bash` for the whole workflow, or start the `run:` with `set -o pipefail`.\n2. Belt and braces: add a step that fails when `/tmp/test-output.json` contains any `\"Action\":\"fail\"` event, for example `jq -e 'select(.Action==\"fail\")' /tmp/test-output.json \u0026\u0026 exit 1 || true`, written so a `jq` error can't pass silently. This also catches a failing package whose summary line gets lost.\n3. Audit the other multi-command `run:` steps in `ci.yml` for the same pattern.\n\n## Acceptance\n\nA deliberately failing test on a throwaway branch turns the Test (race) job red. Before merging this, the known master failure (`TestDockerTimeoutKillsStep`, separate ticket) must be fixed or marked skip-with-ticket, or master goes red.",
+    "state": "completed",
+    "completedAt": "2026-10-05T11:40:28.511Z",
+    "createdAt": "2026-10-05T02:02:09.012Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-190/ci-never-fails-on-test-failures-go-test-tee-jq-sed-runs-without",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/137"
+    ]
+  },
+  {
+    "identifier": "CIC-196",
+    "title": "Security: docker executor passes step env (incl. resolved secrets) as `docker run -e KEY=VALUE` argv — world-readable via ps on the runner host",
+    "description": "Found in the post-pipefail sweep on `master` @ `582b06c` (2026-10-05), from reading `runner/executor/docker.go`.\n\n## What's wrong\n\n`dockerRunArgs` (`runner/executor/docker.go` \\~:225–240) adds every step env var as `-e KEY=VALUE` on the `docker` client's command line. `runner/job.go` builds the step env with `secretexpr.Resolve(stepRaw, secrets)`, so secrets from `GetJobSecrets` are **already resolved to their plaintext values** by then, including `github_clone_token` ([CIC-148](https://linear.app/cicadoci/issue/CIC-148/runner-never-checks-out-the-repository-gitcontext-clone-urlrefsha-is)/151). The file's own doc comment (`docker.go:53–60`) admits that argv is \"world-readable via `ps` / /proc/\u003cpid\u003e/cmdline by *any* local user, no privilege needed\", but nothing tracks it as a defect.\n\nOn a shared or self-hosted runner host, any local process or user (another job using the shell executor, a monitoring agent, a compromised service account) can read job secrets while the container starts. That breaks the secrets invariant: values travel only through the lease-scoped `GetJobSecrets`, are held in memory only, and are never exposed beyond the job. The masker doesn't help here because it only scrubs log output.\n\n## Fix\n\nPass values without putting them in argv:\n\n* `-e KEY` (name only) with the value set in the `docker` client's own `cmd.Env`. Docker then copies it from the client's environment, which is readable only by the owning UID and root, the same exposure as the shell executor. Or:\n* `--env-file` pointing at a 0600 temp file in a 0700 dir, deleted right after the container starts.\n\nAdd a test asserting no secret value ever appears in `dockerRunArgs` output, using a fake docker that dumps its argv.\n\nThe docker executor isn't selectable in production yet ([CIC-132](https://linear.app/cicadoci/issue/CIC-132/per-job-executor-selection-stop-hardcoding-cicanscript-in)), so this isn't exploitable today. It must be fixed before [CIC-132](https://linear.app/cicadoci/issue/CIC-132/per-job-executor-selection-stop-hardcoding-cicanscript-in) ships, which is why it's High.\n\n## Acceptance\n\nWith a step env holding a resolved secret, the docker client's argv (`/proc/\u003cpid\u003e/cmdline`) contains only `-e KEY`, never the value. The container still sees the right value.",
+    "state": "completed",
+    "completedAt": "2026-10-05T23:37:04.873Z",
+    "createdAt": "2026-10-05T12:00:02.764Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-196/security-docker-executor-passes-step-env-incl-resolved-secrets-as",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/139"
+    ]
+  },
+  {
+    "identifier": "CIC-195",
+    "title": "Docker executor never stops the container on timeout/cancel (CIC-191 fixed only the client); real-docker tests never run in CI",
+    "description": "Found in the post-pipefail hidden-failure sweep on `master` @ `582b06c` (2026-10-05).\n\n## Container still leaks\n\n[CIC-191](https://linear.app/cicadoci/issue/CIC-191/docker-executor-timeout-doesnt-kill-the-step-on-linux)'s PR ([cicadoci/core#136](https://linear.app/cicadoci/review/fixes-cic-191-docker-executor-timeout-kills-client-fb722e95dadd), `d6b68c2`, 1 file) put the `docker` client in its own process group and SIGKILLs the group on timeout or cancel (`runner/executor/docker.go:138–144`). That fixed the hanging test. But the second half of [CIC-191](https://linear.app/cicadoci/issue/CIC-191/docker-executor-timeout-doesnt-kill-the-step-on-linux) (kill the **container**) wasn't done: there's no `--name`/`--cidfile` and no `docker kill`/`rm -f` anywhere in `docker.go`. The doc comment still says so (`docker.go:46–51`: \"we do not yet track the container ID ... A killed client can leave its `--rm` container running ... [CIC-16](https://linear.app/cicadoci/issue/CIC-16/step-engine-env-injection-exit-codes-timeouts-cancellation-propagation) adds that path\"). [CIC-16](https://linear.app/cicadoci/issue/CIC-16/step-engine-env-injection-exit-codes-timeouts-cancellation-propagation) is Done, and [CIC-191](https://linear.app/cicadoci/issue/CIC-191/docker-executor-timeout-doesnt-kill-the-step-on-linux) auto-closed on merge (\"Fixes [CIC-191](https://linear.app/cicadoci/issue/CIC-191/docker-executor-timeout-doesnt-kill-the-step-on-linux)\"). A SIGKILLed client doesn't proxy the signal, so a timed-out or cancelled step's container keeps running on the runner host, still writing to the bind-mounted workspace, while the next step or job runs.\n\n## Real-docker tests never run\n\n`runner/executor/docker_real_test.go` (`//go:build docker`, `TestDockerRealEgressOff`) is the only test against a real daemon. Its header says \"CI's test job has no docker\", but GitHub's `ubuntu-latest` runners ship Docker (the CI **Docker images** job uses it in the same workflow, run 37304446928). No CI job passes `-tags docker`, so real-runtime behaviour has never run in CI: `--network none`, the [CIC-152](https://linear.app/cicadoci/issue/CIC-152/docker-executor-run-steps-break-on-images-with-an-entrypoint-script) `--entrypoint \"\"` override, and timeout/cancel teardown.\n\n## Fix\n\n1. Name each step's container (`--name cicado-\u003cjob\u003e-\u003cstep\u003e-\u003crand\u003e`) or use `--cidfile`. In `cmd.Cancel` (and on any error path), run `docker kill \u003cname\u003e` then `docker rm -f \u003cname\u003e` with a short bounded context, then kill the client group. Update the stale `docker.go:46–51` / `:166–168` comments.\n2. Add a CI step (or job) running `go test -tags docker -race ./runner/executor/...` on `ubuntu-latest`. Add real tests for: a timeout removes the container (`docker ps -a --filter name=...` is empty within about 5 s); an image with a non-shell ENTRYPOINT runs `run:`; `--network none` blocks egress.\n\nThe docker executor isn't selectable in production yet (executor is hard-coded to `cicanscript`, [CIC-132](https://linear.app/cicadoci/issue/CIC-132/per-job-executor-selection-stop-hardcoding-cicanscript-in)), so this is Medium. It has to be fixed before [CIC-132](https://linear.app/cicadoci/issue/CIC-132/per-job-executor-selection-stop-hardcoding-cicanscript-in) ships.\n\n## Acceptance\n\nThe `-tags docker` CI step is green and includes a test proving the container is gone after a step timeout.",
+    "state": "completed",
+    "completedAt": "2026-10-06T00:19:24.555Z",
+    "createdAt": "2026-10-05T11:59:53.408Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-195/docker-executor-never-stops-the-container-on-timeoutcancel-cic-191",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/139"
+    ]
+  },
+  {
+    "identifier": "CIC-181",
+    "title": "Remove the superseded forge.TokenMinter clone path (puts the token in the clone URL); fix stale fork-token comment in secretRefsFor",
+    "description": "Found in QC of `master` @ `d0293a2` (2026-10-04).\n\n[CIC-148](https://linear.app/cicadoci/issue/CIC-148/runner-never-checks-out-the-repository-gitcontext-clone-urlrefsha-is) ([cicadoci/core#123](https://linear.app/cicadoci/review/featcontroller-per-repo-github-clone-token-delivery-cic-148-dd23221c3b04)) and [CIC-151](https://linear.app/cicadoci/issue/CIC-151/private-repos-can-never-be-cloned-per-job-clone-token-cic-26-is-built) ([cicadoci/core#124](https://linear.app/cicadoci/review/featclonerunnersvc-cic-151-per-job-github-app-installation-token-a0600362c927)) shipped the real clone-credential path. `runnersvc.CloneMinterFunc` (`server/runnersvc/clone_minter.go`) mints a contents:read, single-repo token at lease time. It's delivered only via `GetJobSecrets` and used through a `git -c credential.helper` in the checkout step (`server/controller/jobs.go:255`, `:383`), so it's never persisted or put in a URL.\n\nThe older, never-wired path is still in the tree and is now abandoned code:\n\n* `forge.Forge.CloneCredentialsForRun` / `forge.TokenMinter` (`server/forge/forge.go:38`, `server/forge/github.go:26–83`). `newForge` still passes a nil minter (`server/cmd/cicado-server/main.go:583`).\n* `github.InstallationTokenMinterAdapter` (`server/github/forge_adapter.go:58–131`), `CloneCredentialsForRunOnClient` (`server/github/installation.go:210`), and `cloneURLWithToken` (`:240`). The last one **embeds the token in the clone URL** (`https://x-access-token:TOKEN@github.com/...`). That's exactly the pattern the new design avoids, because URLs end up in `git remote -v`, `.git/config`, process lists and error output. If anyone wires this path later \"because it exists\", the token leaks.\n* Stubs: `ChecksClient.CloneCredentialsForRun` and `errNoCloneCreds` (`server/github/checks.go:262–282`), and `NoOpForge.CloneCredentialsForRun` (`server/controller/noop.go:48`).\n\nAlso a stale comment: `server/controller/jobs.go:282–286` says \"non-fork runs get the static installation token\". Since [cicadoci/core#124](https://linear.app/cicadoci/review/featclonerunnersvc-cic-151-per-job-github-app-installation-token-a0600362c927), fork and non-fork both get a freshly minted contents:read token (`ClonePermissions = \"read\"`, `clone_minter.go`), and the `isFork` argument to the minter closure is unused.\n\n## Fix\n\nDelete `CloneCredentialsForRun` from the `forge.Forge` interface and from all implementations, along with the adapter, `CloneCredentialsForRunOnClient` and `cloneURLWithToken`, and their tests. Update the comment. If a per-fork permission difference is ever wanted, use `isFork` explicitly.\n\n## Acceptance\n\n`grep -rn \"CloneCredentialsForRun\\|cloneURLWithToken\" server` returns nothing. Build, vet, lint and tests stay green.\n\n## Also: no env fallback for the App credentials\n\n`--github-app-id` and `--github-app-key-file` (`server/cmd/cicado-server/main.go:117–118`) are flag-only. Every other server setting has a `CICADO_*` env equivalent (`envBool`/`envSecret`), and docker-compose and container deploys configure through env. Add `CICADO_GITHUB_APP_ID` and `CICADO_GITHUB_APP_KEY_FILE`, read the same way, and add a test.",
+    "state": "completed",
+    "completedAt": "2026-10-06T00:19:36.520Z",
+    "createdAt": "2026-10-04T20:55:43.552Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 4,
+    "priorityLabel": "Low",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-181/remove-the-superseded-forgetokenminter-clone-path-puts-the-token-in",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/133"
+    ]
+  },
+  {
+    "identifier": "CIC-162",
+    "title": "Approval gates cannot gate anything: Manager never built in main.go, nothing calls Resolve, gate state never blocks dispatch, decisions not audited",
+    "description": "Found in QC of `master` @ `21c5306` (2026-10-03), after [CIC-108](https://linear.app/cicadoci/issue/CIC-108/approvalgatesmanager-timeout-never-enforced-data-race-in-resolve) ([cicadoci/core#118](https://linear.app/cicadoci/review/fixapprovalgates-fix-4-manager-sub-bugs-auto-timeout-race-callback-8f098d6049b5)) fixed the Manager's internal bugs.\n\n`server/approvalgates` is now internally correct, but the feature is a dead end on every side:\n\n1. **Never constructed.** Nothing in `server/cmd/cicado-server` sets `controller.Config.ApprovalGates` or `AllowedApprovers`, so `maybeOpenGate` (`controller.go:694`) returns early.\n2. **Nothing can resolve a gate.** `Manager.Resolve` and `CloseAll` have no non-test callers. There is no Slack interaction handler on master ([CIC-138](https://linear.app/cicadoci/issue/CIC-138/no-real-slack-integration-on-master-cic-49-socket-mode-events-api-is)), and no API or MCP route.\n3. **A gate doesn't gate.** Nothing outside the package reads `Manager.State`, and `onResolved` isn't wired to the queue or dispatch. Even if a gate opened, the run's jobs would dispatch regardless. `maybeOpenGate` opens one \"for every PR run as a placeholder\".\n4. **No audit trail.** Approve, deny, unauthorized-click and timeout transitions write no audit event. That breaks the invariant \"every state change writes an audit event\" and the M7 exit criterion \"unauthorized approval attempts are rejected and audited\" (plan line 104).\n5. Channel and timeout source: tracked separately in [CIC-160](https://linear.app/cicadoci/issue/CIC-160/approvalgates-controllermaybeopengate-sets-channel-to-the-pr-number).\n\n## Fix\n\n* Gate on a workflow-declared approval (`environment:` or a gate step), not on every PR run. Hold dependent jobs in `pending` until the gate is approved. Fail or skip them on deny or timeout.\n* Call `Resolve` from the Slack interaction handler ([CIC-138](https://linear.app/cicadoci/issue/CIC-138/no-real-slack-integration-on-master-cic-49-socket-mode-events-api-is)), passing the acting user. Add an audited API endpoint for the non-Slack path.\n* Emit audit events for every transition, including rejected unauthorized clicks.\n* Construct the Manager in `main.go` when a chat provider is configured.\n\n## Acceptance\n\nAn e2e test where a workflow with a gate opens a gate and the gated job doesn't dispatch. An authorized approve dispatches it. An unauthorized click is rejected, and both write audit rows. Timeout fails the job.",
+    "state": "completed",
+    "completedAt": "2026-10-06T00:19:42.275Z",
+    "createdAt": "2026-10-03T20:55:55.909Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-162/approval-gates-cannot-gate-anything-manager-never-built-in-maingo",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/135"
+    ]
+  },
+  {
+    "identifier": "CIC-180",
+    "title": "Workflow producer: per-call installation token source from App creds + remove main.go TODO (CIC-146 part 3)",
+    "description": "Part 3 of [CIC-146](https://linear.app/cicadoci/issue/CIC-146/workflow-producer-mint-installation-tokens-per-call-and-decode) (parts 1 and 2 are PRs [cicadoci/core#128](https://linear.app/cicadoci/review/refs-cic-146-part-1-installation-event-handlers-b1-b3s1-s3-review-d747517d523d) and [cicadoci/core#131](https://linear.app/cicadoci/review/cic-146-p2-pushpr-payloads-stamp-reposinstallation-id-for-the-clone-23c5135063bf), which cover installation-event handlers and decoding `installation.id` from push/PR payloads).\n\n## Scope ([CIC-146](https://linear.app/cicadoci/issue/CIC-146/workflow-producer-mint-installation-tokens-per-call-and-decode) items 1, 2, 4)\n\n1. Replace the workflow producer's static `token string` with a per-call token source (e.g. `func(ctx, installationID int64) (string, error)`) backed by the existing `github.InstallationTokenMinter` / `InstallationTokenMinterAdapter`.\n2. Configure it from GitHub App credentials (app ID + private key) in `server/cmd/cicado-server/main.go`; keep the PAT flag as an optional fallback or remove it. Remove `TODO(CIC-146)` at the producer construction site (`main.go` \\~line 301).\n3. Tests: two installations served by one server; a token minted after expiry is refreshed; main wiring builds the producer from App credentials.\n\n## Acceptance\n\nA default-branch push in any repo of any installation of the App upserts that repo's workflows, including more than 1 hour after server start. The TODO is removed. This PR may say `Fixes CIC-146`.\n\nDepends on [cicadoci/core#128](https://linear.app/cicadoci/review/refs-cic-146-part-1-installation-event-handlers-b1-b3s1-s3-review-d747517d523d) and [cicadoci/core#131](https://linear.app/cicadoci/review/cic-146-p2-pushpr-payloads-stamp-reposinstallation-id-for-the-clone-23c5135063bf) being merged.",
+    "state": "completed",
+    "completedAt": "2026-10-06T00:19:47.732Z",
+    "createdAt": "2026-10-04T18:12:40.577Z",
+    "labels": [],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-180/workflow-producer-per-call-installation-token-source-from-app-creds",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/134"
+    ]
+  },
+  {
+    "identifier": "CIC-192",
+    "title": "Audit: PostgresLog.Append hard-codes principal_type='user' (and surface='system', org_id NULL) for every event, including system actors",
+    "description": "From Dwight's [cicadoci/core#135](https://linear.app/cicadoci/review/refs-cic-162-part-1-build-the-approvalgates-manager-in-cicado-server-8f3ee4d60eb3) READY review (issuecomment-5989744248). Verified in code on `master` @ `29cf433` and on PR [cicadoci/core#135](https://linear.app/cicadoci/review/refs-cic-162-part-1-build-the-approvalgates-manager-in-cicado-server-8f3ee4d60eb3).\n\n## What's wrong\n\n`server/audit/postgres.go:85–95` inserts every audit row with literal values:\n\n```sql\nINSERT INTO audit_events (org_id, principal_type, principal_id, surface, ...)\nVALUES (NULL, 'user', $1, 'system', ...)\n```\n\n`audit.Entry` (`server/audit/audit.go:43`) has only a free-text `Actor`, with no principal type, org or surface. So every row is recorded as a **user**, whatever really acted:\n\n* Approval-gate timeout: [cicadoci/core#135](https://linear.app/cicadoci/review/refs-cic-162-part-1-build-the-approvalgates-manager-in-cicado-server-8f3ee4d60eb3) `gateAuditEntry` (`server/cmd/cicado-server/main.go:750–768`) sets `Actor = \"system\"`, and the row says `principal_type='user', principal_id='system'`.\n* Check-run rerequest: `controller.go:437` `Actor: \"github-rerequest\"`.\n* Job-token audit: `server/jobtoken/audit.go:41–71`, where the issuer is a server component.\n\nThe schema already supports the right values: `principal_type CHECK IN ('user','runner','agent','token','system')` (`server/store/migrations/0001_init.sql:416–418`), plus an `org_id` FK and a `surface` column. Filtering the audit log by principal type (`audit_events_principal_idx`, `0001_init.sql:432`) can't distinguish human actions from automatic ones, which undermines the \"every state change is audited\" invariant for review purposes. Every row also has `org_id NULL` and `surface='system'`, so per-org audit queries return nothing.\n\n## Fix (one line)\n\nAdd `PrincipalType`, `OrgID` and `Surface` to `audit.Entry` and bind them in the INSERT instead of the literals (default `PrincipalType` to `\"system\"` when the actor is a server component, and set `\"user\"` only for a real human actor).\n\nNotes:\n\n* Keep `hashEntry` (`audit.go:114`) stable, or version it. Adding fields to the hashed struct changes every new hash, so decide deliberately and test chain verification across the change.\n* Update the callers above to set the correct type (gate timeout → `system`; approve/deny → `user`; job tokens → `token`/`system`).\n\n## Acceptance\n\nA gate timeout writes `principal_type='system'`. An approve writes `'user'` with the acting user's ID. Run-creation rows carry the run's `org_id`. A test reads them back and asserts each.",
+    "state": "completed",
+    "completedAt": "2026-10-06T11:19:40.343Z",
+    "createdAt": "2026-10-05T07:07:13.775Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-192/audit-postgreslogappend-hard-codes-principal-typeuser-and",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/140"
+    ]
+  },
+  {
+    "identifier": "CIC-193",
+    "title": "approvalgates onResolved audit write uses run()'s signal ctx, so gate resolutions during shutdown are never audited",
+    "description": "From Dwight's [cicadoci/core#135](https://linear.app/cicadoci/review/refs-cic-162-part-1-build-the-approvalgates-manager-in-cicado-server-8f3ee4d60eb3) READY review (issuecomment-5989744248). Verified in PR [cicadoci/core#135](https://linear.app/cicadoci/review/refs-cic-162-part-1-build-the-approvalgates-manager-in-cicado-server-8f3ee4d60eb3) (`knowroozi/cic-162-approvalgates-wiring`).\n\n## What's wrong\n\n`server/cmd/cicado-server/main.go` ([cicadoci/core#135](https://linear.app/cicadoci/review/refs-cic-162-part-1-build-the-approvalgates-manager-in-cicado-server-8f3ee4d60eb3)):\n\n* `:195`: `ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)`\n* `:399`: `buildApprovalGates(ctx, ...)` receives that ctx\n* `:727–734`: the `onResolved` closure captures it and calls `auditLog.Append(ctx, e)`\n\nOn SIGTERM/SIGINT the ctx is cancelled first, while the gate Manager's `time.AfterFunc` timeout timers keep running. A gate that times out (`onTimeout` → `GateTimedOut` → `onResolved`) or is resolved while the server drains then fails its audit append with `context canceled` (logged as \"approvalgates: audit append failed\"), so **those gate state changes are never audited**. (Correction: no shutdown code calls `Manager.CloseAll` today. Pending gates are simply abandoned on shutdown, with no terminal audit row. Decide whether shutdown should `CloseAll` them, which would then hit this same bug.) That breaks the \"every state change writes an audit event\" invariant. A long-running server's ctx also ties a per-event write to the process lifetime instead of giving it its own deadline.\n\n## Fix (one line)\n\nIn `onResolved`, write with a fresh, bounded context detached from cancellation: `actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second); defer cancel(); auditLog.Append(actx, e)`. Also make sure shutdown waits for in-flight audit writes before closing the DB pool.\n\n## Acceptance\n\nA test cancels the ctx passed to `buildApprovalGates`, then calls `CloseAll` on an open gate, and asserts that the timeout audit row is written.",
+    "state": "completed",
+    "completedAt": "2026-10-06T11:20:03.755Z",
+    "createdAt": "2026-10-05T07:07:20.973Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-193/approvalgates-onresolved-audit-write-uses-runs-signal-ctx-so-gate",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/141"
+    ]
+  },
+  {
+    "identifier": "CIC-194",
+    "title": "No operator surface to set secrets or cancel/rerun a run: secrets.Put and queue.RequestCancel have no production caller; 7 of 8 audit actions are never written",
+    "description": "Found in QC of `master` @ `29cf433` (2026-10-05).\n\nThe MVP definition (`project-docs/01-project-plan.md:13`) needs jobs \"with ... secrets\", plus cancel and rerun. Server-side engines exist for both, but nothing in the shipped binaries can reach them.\n\n## Secrets can't be written\n\n* `secrets.Postgres.Put` (`server/secrets/postgres.go:66`) has **no non-test caller**.\n* There's no API route: `server/api/handler.go:162–175` serves only healthz, readyz, `GET runs`, `GET runs/{id}`, `GET runners`, `POST validate` and webhooks.\n* There's no CLI: `cmd/cicado/main.go:54` has only `validate`. The MCP server is read-only by design.\n* Values are AES-encrypted with `CICADO_SECRET_KEY`, so an operator can't insert them with SQL either.\n* [CIC-37](https://linear.app/cicadoci/issue/CIC-37/secrets-store-kms-envelope-encryption-scoping-write-only-api) (\"write-only API\") is Done, but the write-only *API* was never exposed. Result: `GetJobSecrets` delivery ([CIC-38](https://linear.app/cicadoci/issue/CIC-38/getjobsecrets-rpc-lease-authorized-delivery-memory-only-on-runner)/79) works only in tests, which call `secretStore.Put` directly (`test/e2e/skeleton_test.go` TestSecretDelivery). In production every `${{ secrets.X }}` step fails as unavailable.\n\n## Runs can't be cancelled\n\n* `queue.Postgres.RequestCancel` (`server/queue/postgres.go:545`) has no non-test caller; it's used only in `server/queue/cancel_test.go` and `test/e2e/skeleton_test.go`. The whole cancel path works (doorbell → `CancelJob` on the wire → runner kill → `TerminalizeCancel`), but nothing triggers it: no API, CLI, Slack ([CIC-138](https://linear.app/cicadoci/issue/CIC-138/no-real-slack-integration-on-master-cic-49-socket-mode-events-api-is)) or GitHub hook.\n* Rerun exists only through GitHub check_suite/check_run rerequest (`controller.go:483`).\n\n## Audit actions defined but never written\n\n`server/audit/audit.go:27–34` defines approve, cancel, rerun, deploy, rollback, create_run, secret.put and secret.delete. Only `create_run` is ever emitted (`controller.go:887`, via `emitAudit`). The others have no caller (`grep \"audit.Action\u003cX\u003e\"` finds nothing outside tests). Rerun is recorded as `create_run` with source `github-rerequest`, not `ActionRerun`. Job-token audits (`server/jobtoken/audit.go:41–71`) are written only if `jobtoken.NewManager` is built, and `main.go` doesn't build it.\n\n## Fix\n\n1. API, behind the [CIC-150](https://linear.app/cicadoci/issue/CIC-150/http-api-is-unauthenticated-in-the-shipped-binary-live-job-logs-get) bearer token: `PUT /api/v1/repos/{repo}/secrets/{name}` (write-only, value never returned) and `DELETE` for the same path. List names only, no values. Each writes `secret.put` or `secret.delete` audit rows (org, repo, name, actor; never the value).\n2. API: `POST /api/v1/jobs/{id}/cancel` and `POST /api/v1/runs/{id}/cancel` call `RequestCancel` and write `ActionCancel`. Optionally add `POST /api/v1/runs/{id}/rerun` with `ActionRerun`.\n3. Thin `cicado secrets set|delete` and `cicado run cancel` CLI subcommands that call these endpoints, so operators don't need curl.\n4. e2e: set a secret via the API, run a job that uses it (masked), cancel a running job via the API, and assert the audit rows.\n\n[CIC-93](https://linear.app/cicadoci/issue/CIC-93/secrets-audit-logging) (secrets audit logging, Backlog) and [CIC-48](https://linear.app/cicadoci/issue/CIC-48/screens-secrets-runner-fleet-workflow-viewer-settingstokens) (UI screens) overlap. This ticket is the minimum API and CLI path that makes the MVP usable without a UI.\n\n## Acceptance\n\nOn a fresh `make dev`, an operator can set a secret and cancel a running job without touching the database, and both actions show up in `audit_events`.",
+    "state": "completed",
+    "completedAt": "2026-10-06T11:21:00.597Z",
+    "createdAt": "2026-10-05T08:54:51.659Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-194/no-operator-surface-to-set-secrets-or-cancelrerun-a-run-secretsput-and",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/143"
+    ]
+  }
+]
