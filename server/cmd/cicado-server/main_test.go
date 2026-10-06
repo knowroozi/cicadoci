@@ -311,7 +311,7 @@ func TestGateAuditEntry(t *testing.T) {
 		{approvalgates.GateTimedOut, "U3", audit.ActionGateTimeout, "system"},
 	}
 	for _, tc := range cases {
-		e := gateAuditEntry("run-1", tc.state, tc.actorID)
+		e := gateAuditEntry("run-1", tc.state, tc.actorID, "")
 		if e.Action != tc.wantAct || e.Actor != tc.wantActor || e.Target != "run-1" {
 			t.Errorf("gateAuditEntry(%v, %q) = %+v, want action=%s actor=%s", tc.state, tc.actorID, e, tc.wantAct, tc.wantActor)
 		}
@@ -349,5 +349,32 @@ func TestApiAuthOpts(t *testing.T) {
 				t.Errorf("token path expected exactly 2 options (write deps + token), got %d", len(got))
 			}
 		})
+	}
+}
+
+func TestGateAuditEntry_ReasonShutdownDrain(t *testing.T) {
+	e := gateAuditEntry("run-x", approvalgates.GateTimedOut, "", approvalgates.ReasonShutdownDrain)
+	if e.Action != audit.ActionGateTimeout {
+		t.Errorf("Action = %s, want %s", e.Action, audit.ActionGateTimeout)
+	}
+	if e.Actor != "system" {
+		t.Errorf("Actor = %q, want system", e.Actor)
+	}
+	if e.Reason != approvalgates.ReasonShutdownDrain {
+		t.Errorf("Reason = %q, want %q", e.Reason, approvalgates.ReasonShutdownDrain)
+	}
+}
+
+func TestGateAuditEntry_ReasonApprovalTimedOut(t *testing.T) {
+	e := gateAuditEntry("run-x", approvalgates.GateTimedOut, "U3", approvalgates.ReasonApprovalTimedOut)
+	if e.Reason != approvalgates.ReasonApprovalTimedOut {
+		t.Errorf("Reason = %q, want %q", e.Reason, approvalgates.ReasonApprovalTimedOut)
+	}
+}
+
+func TestGateAuditEntry_ReasonDenied(t *testing.T) {
+	e := gateAuditEntry("run-x", approvalgates.GateDenied, "U1", "approval denied")
+	if e.Reason != "approval denied" {
+		t.Errorf("Reason = %q, want %q", e.Reason, "approval denied")
 	}
 }

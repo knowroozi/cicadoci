@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -139,6 +140,34 @@ type Controller struct {
 	forge forge.Forge
 	cfg   Config
 	log   *slog.Logger
+
+	// gateDispatchWG tracks in-flight awaitGateAndDispatch
+	// goroutines so WaitGateDispatch can join them (CIC-204 B1).
+	gateDispatchWG *sync.WaitGroup
+}
+
+// spawnGateDispatch starts an awaitGateAndDispatch goroutine
+// tracked by gateDispatchWG.
+func (c *Controller) spawnGateDispatch(runID uuid.UUID) {
+	c.gateDispatchWG.Add(1)
+	go func() {
+		defer c.gateDispatchWG.Done()
+		c.awaitGateAndDispatch(runID)
+	}()
+}
+
+// WaitGateDispatch blocks until all in-flight gate-dispatch goroutines
+// return or ctx is done. No-op when none in flight.
+func (c *Controller) WaitGateDispatch(ctx context.Context) {
+	done := make(chan struct{})
+	go func() {
+		c.gateDispatchWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
 // New builds a Controller.
@@ -148,7 +177,7 @@ func New(st *store.Store, f forge.Forge, cfg Config, log *slog.Logger) *Controll
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Controller{store: st, forge: f, cfg: cfg, log: log}
+	return &Controller{store: st, forge: f, cfg: cfg, log: log, gateDispatchWG: &sync.WaitGroup{}}
 }
 
 // ── webhook.Dispatcher ────────────────────────────────────────────────────────
@@ -381,7 +410,7 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 	// fails the held jobs when the gate resolves (CIC-182 B3).
 	if gateOpened {
 		c.log.Info("approval gate open; top-level jobs held in pending", "run", runID)
-		go c.awaitGateAndDispatch(runID)
+		c.spawnGateDispatch(runID)
 	}
 	return nil
 }
@@ -515,7 +544,7 @@ func (c *Controller) rerun(fullName, sha, source string) error {
 	// R1: start the gate waiter after the jobs are loaded so an early
 	// approval cannot promote zero jobs before they exist.
 	if gateRerun && loadErr == nil {
-		go c.awaitGateAndDispatch(runID)
+		c.spawnGateDispatch(runID)
 	}
 	c.finishIfNoJobs(ctx, runID, loadErr)
 	c.emitAudit(ctx, runID, orgID, source, rerequestActor, owner, repoName, orig.Ref)
@@ -1007,14 +1036,18 @@ func (c *Controller) awaitGateAndDispatch(runID uuid.UUID) {
 	if mgr == nil {
 		return
 	}
+	var (
+		state  approvalgates.GateState
+		reason string
+	)
 	if c.cfg.ApprovalTimeout <= 0 {
-		// No auto-timeout: block until manually resolved.
-		c.dispatchAfterGate(runID, mgr.Await(context.Background(), runID.String()))
+		state, reason = mgr.Await(context.Background(), runID.String())
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), c.cfg.ApprovalTimeout)
 		defer cancel()
-		c.dispatchAfterGate(runID, mgr.Await(ctx, runID.String()))
+		state, reason = mgr.Await(ctx, runID.String())
 	}
+	c.dispatchAfterGate(runID, state, reason)
 }
 
 // dispatchAfterGate acts on a resolved gate using a fresh context for
@@ -1023,7 +1056,7 @@ func (c *Controller) awaitGateAndDispatch(runID uuid.UUID) {
 // B3 fix: on deny/timeout, both the run row and all held jobs
 // (including dependents) are failed, not just the run.
 // S4: GatePending (unknown runID) is treated as fail-closed.
-func (c *Controller) dispatchAfterGate(runID uuid.UUID, state approvalgates.GateState) {
+func (c *Controller) dispatchAfterGate(runID uuid.UUID, state approvalgates.GateState, terminalReason string) {
 	ctx := context.Background()
 	switch state {
 	case approvalgates.GateApproved:
@@ -1037,12 +1070,17 @@ func (c *Controller) dispatchAfterGate(runID uuid.UUID, state approvalgates.Gate
 			c.log.Info("approval gate approved; top-level jobs promoted", "run", runID)
 		}
 	case approvalgates.GateDenied, approvalgates.GateTimedOut, approvalgates.GatePending:
-		reason := "approval timeout"
-		switch state {
-		case approvalgates.GateDenied:
-			reason = "approval denied"
-		case approvalgates.GatePending:
-			reason = "no gate (fail-closed)"
+		// CIC-204 B1: use terminal reason from the manager.
+		reason := terminalReason
+		if reason == "" {
+			switch state {
+			case approvalgates.GateDenied:
+				reason = "approval denied"
+			case approvalgates.GatePending:
+				reason = "no gate (fail-closed)"
+			default:
+				reason = "approval timed out"
+			}
 		}
 		c.log.Info("approval gate resolved; failing run and held jobs", "run", runID, "reason", reason)
 		if err := c.store.FailAllJobs(ctx, runID, reason); err != nil {

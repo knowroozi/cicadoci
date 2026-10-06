@@ -1165,7 +1165,7 @@ func TestDispatchAfterGate_DenyFailsJobs(t *testing.T) {
 
 	// dispatchAfterGate with GateDenied should fail the job and the run.
 	c := New(st, NoOpForge{}, DefaultConfig(), discardLogger)
-	c.dispatchAfterGate(runID, approvalgates.GateDenied)
+	c.dispatchAfterGate(runID, approvalgates.GateDenied, "")
 
 	// Verify job is now "failed".
 	var status string
@@ -1184,6 +1184,81 @@ func TestDispatchAfterGate_DenyFailsJobs(t *testing.T) {
 	}
 	if run.Status != "failed" {
 		t.Errorf("after deny, run status = %q; want %q", run.Status, "failed")
+	}
+}
+
+// TestDispatchAfterGate_ShutdownDrainReason (CIC-204 r3 T2) proves the B1
+// fix end to end through the controller: a drained run's held job is
+// failed with reason "abandoned: server shutdown" (NOT the legacy "approval
+// timed out" a pre-fix drain would have produced), and the run itself fails.
+func TestDispatchAfterGate_ShutdownDrainReason(t *testing.T) {
+	st := testdb.New(t)
+	defer st.Close()
+	ctx := context.Background()
+
+	orgID, err := st.UpsertOrg(ctx, "acme", "Acme")
+	if err != nil {
+		t.Fatalf("upsert org: %v", err)
+	}
+	repoID, err := st.FindOrCreateRepo(ctx, orgID, "github", "acme", "widgets", "main")
+	if err != nil {
+		t.Fatalf("find or create repo: %v", err)
+	}
+	runID, _, err := st.CreateRun(ctx, store.CreateRunOptions{
+		RepoID:        repoID,
+		Event:         "pull_request",
+		Ref:           "main",
+		Sha:           "abc123",
+		Actor:         "pr-9",
+		TriggerSource: store.TriggerForge,
+		IsFork:        false,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	// Create held (pending) jobs for the run.
+	specs := []store.JobSpec{
+		{Name: "build", Executor: "shell", Priority: 100, TimeoutSec: 60},
+	}
+	if _, err := st.CreateJobSpecs(ctx, runID, specs, true); err != nil {
+		t.Fatalf("CreateJobSpecs(hold=true): %v", err)
+	}
+
+	// Dispatch as if the gate was drained on SIGTERM:
+	c := New(st, NoOpForge{}, DefaultConfig(), discardLogger)
+	c.dispatchAfterGate(runID, approvalgates.GateTimedOut, approvalgates.ReasonShutdownDrain)
+
+	// Job must be failed.
+	var jobStatus string
+	if err := st.Pool().QueryRow(ctx,
+		`SELECT status FROM jobs WHERE run_id = $1`, runID).Scan(&jobStatus); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if jobStatus != "failed" {
+		t.Errorf("job status = %q, want failed", jobStatus)
+	}
+
+	// The top-level job's cancel_reason must say "abandoned: server
+	// shutdown", NOT the legacy "approval timed out" a pre-fix drain
+	// would have produced.
+	var jobCancelReason string
+	if err := st.Pool().QueryRow(ctx,
+		`SELECT cancel_reason FROM jobs WHERE run_id = $1 AND status = 'failed'`, runID).Scan(&jobCancelReason); err != nil {
+		t.Fatalf("query job cancel_reason: %v", err)
+	}
+	if jobCancelReason != approvalgates.ReasonShutdownDrain {
+		t.Errorf("job cancel_reason = %q, want %q", jobCancelReason, approvalgates.ReasonShutdownDrain)
+	}
+
+	// Run status must be failed.
+	var runStatus string
+	if err := st.Pool().QueryRow(ctx,
+		`SELECT status FROM runs WHERE id = $1`, runID).Scan(&runStatus); err != nil {
+		t.Fatalf("query run: %v", err)
+	}
+	if runStatus != "failed" {
+		t.Errorf("run status = %q, want failed", runStatus)
 	}
 }
 
@@ -1225,7 +1300,7 @@ func TestDispatchAfterGate_ApprovePromotesJobs(t *testing.T) {
 	}
 
 	c := New(st, NoOpForge{}, DefaultConfig(), discardLogger)
-	c.dispatchAfterGate(runID, approvalgates.GateApproved)
+	c.dispatchAfterGate(runID, approvalgates.GateApproved, "")
 
 	var status string
 	if err := st.Pool().QueryRow(ctx,

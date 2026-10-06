@@ -78,12 +78,21 @@ type Gate struct {
 
 // Manager tracks approval gates and processes callbacks.
 type Manager struct {
-	mu       sync.Mutex
-	gates    map[string]*GateRecord
+	mu    sync.Mutex
+	gates map[string]*GateRecord
+	// provider is the chat provider used to render and close gates.
 	provider chat.ChatProvider
-	// onResolved is called when a gate transitions to a terminal state.
-	// Used to signal a waiter (e.g. a runner job blocked on approval).
-	onResolved func(runID string, state GateState)
+	// onResolved is called when a gate transitions to a terminal state. It
+	// signals a waiter (e.g. a runner job blocked on approval). The third
+	// by-value argument is the reason for the terminal transition so a
+	// caller -- including the drain-on-shutdown drain in main.go -- can
+	// distinguish a normal timeout or denial from a shutdown drain, whose
+	// audit reason must not read "approval timed out" (CIC-204 B1).
+	onResolved func(runID string, state GateState, reason string)
+	// closed is set to true by DrainAll. Once set, a new Open is refused
+	// with an error so a late-arriving webhook cannot open a gate after the
+	// shutdown drain has run (CIC-204 O1).
+	closed bool
 }
 
 // GateRecord is the runtime record for an open gate.
@@ -103,10 +112,30 @@ type GateRecord struct {
 	// Await selects on it to unblock a goroutine that should stop holding
 	// jobs pending.
 	signal chan struct{}
+
+	// terminalReason is the machine-readable reason a gate transitioned
+	// to terminal -- set by onTimeout (ReasonApprovalTimedOut) and
+	// closeOne (the caller-supplied reason, e.g. ReasonShutdownDrain).
+	// Resolve never sets it; a user-driven transition keeps it empty and
+	// the controller falls back to a state-based default.
+	// Empty while pending.
+	terminalReason string
 }
 
+// ReasonApprovalTimedOut is the terminal reason a gate reaches GateTimedOut when
+// its own auto-timeout fires. It is the default for the onTimeout and CloseAll
+// paths.
+const ReasonApprovalTimedOut = "approval timed out"
+
+// ReasonShutdownDrain is the terminal reason a gate reaches GateTimedOut when
+// DrainAll closes it at process shutdown. It is distinct from
+// ReasonApprovalTimedOut so the run's failure audit row can say
+// "abandoned: server shutdown" instead of the misleading "approval timed out"
+// that a restart would otherwise produce (CIC-204 B1).
+const ReasonShutdownDrain = "abandoned: server shutdown"
+
 // NewManager creates a gate manager.
-func NewManager(provider chat.ChatProvider, onResolved func(runID string, state GateState)) *Manager {
+func NewManager(provider chat.ChatProvider, onResolved func(runID string, state GateState, reason string)) *Manager {
 	return &Manager{
 		gates:      map[string]*GateRecord{},
 		provider:   provider,
@@ -140,6 +169,14 @@ func NewManager(provider chat.ChatProvider, onResolved func(runID string, state 
 func (m *Manager) Open(ctx context.Context, g *Gate) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// A manager that DrainAll has closed must refuse to open new gates. A
+	// late-arriving webhook that races the drain would otherwise open a gate
+	// that never gets closed or audited -- the exact "neither audited nor
+	// closed" failure CIC-204 addresses (O1).
+	if m.closed {
+		return fmt.Errorf("approvalgates: manager is closed (shutdown drain in progress) -- refusing new gate for run %q", g.RunID)
+	}
 
 	// CIC-108 B1: a stale auto-timeout from an earlier Open for the same run
 	// must never move a newer gate. Stop the previous record's timer before
@@ -258,9 +295,12 @@ func (m *Manager) Resolve(_ context.Context, runID, actorID, actionID string) er
 	_ = m.provider.CloseApproval(context.Background(), gateCopy.Gate.Channel, string(gateCopy.Gate.MessageID), status)
 
 	// Signal the waiter, OUTSIDE the lock and with the by-value state captured
-	// above, so the callback cannot re-enter and deadlock on m.mu.
+	// above, so the callback cannot re-enter and deadlock on m.mu. A user
+	// resolve carries an empty reason; a shutdown drain carries
+	// ReasonShutdownDrain so the caller (the controller's dispatchAfterGate)
+	// can write the right audit reason (CIC-204 B1).
 	if m.onResolved != nil {
-		m.onResolved(runID, gateCopy.State)
+		m.onResolved(runID, gateCopy.State, "")
 	}
 	return nil
 }
@@ -304,36 +344,39 @@ func (m *Manager) ActorID(runID string) string {
 }
 
 // Await blocks until the gate for runID reaches a terminal state, then
-// returns that state.  It returns GatePending (immediately) when the
-// runID is not yet open.
+// returns that state and its terminal reason. It returns GatePending with
+// reason "" (immediately) when the runID is not yet open.
 //
 // When ctx is cancelled before the gate resolves, Await returns
-// GateTimedOut so the caller can fail the run rather than hang.
-func (m *Manager) Await(ctx context.Context, runID string) GateState {
+// GateTimedOut with reason "" so the caller can fail the run rather
+// than hang -- the empty reason is the caller's cue that this was a
+// cancel-driven timeout, not a real auto-timeout or a drain.
+func (m *Manager) Await(ctx context.Context, runID string) (GateState, string) {
 	m.mu.Lock()
 	rec, ok := m.gates[runID]
 	if !ok {
 		m.mu.Unlock()
-		return GatePending
+		return GatePending, ""
 	}
 	// Copy the signal channel (it is never replaced).
 	sig := rec.signal
 	state := rec.State
+	reason := rec.terminalReason
 	m.mu.Unlock()
 
 	if state != GatePending {
-		return state
+		return state, reason
 	}
 	select {
 	case <-sig:
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		if cur, ok := m.gates[runID]; ok {
-			return cur.State
+			return cur.State, cur.terminalReason
 		}
-		return state
+		return state, reason
 	case <-ctx.Done():
-		return GateTimedOut
+		return GateTimedOut, ""
 	}
 }
 
@@ -353,6 +396,7 @@ func (m *Manager) onTimeout(rec *GateRecord) {
 	}
 	rec.State = GateTimedOut
 	rec.ResumedAt = time.Now()
+	rec.terminalReason = ReasonApprovalTimedOut
 	if rec.timer != nil {
 		rec.timer.Stop()
 	}
@@ -364,19 +408,35 @@ func (m *Manager) onTimeout(rec *GateRecord) {
 	// the by-value state captured above.
 	_ = m.provider.CloseApproval(context.Background(), gateCopy.Gate.Channel, string(gateCopy.Gate.MessageID), chat.ApprovalTimedOut)
 	if m.onResolved != nil {
-		m.onResolved(rec.Gate.RunID, gateCopy.State)
+		m.onResolved(rec.Gate.RunID, gateCopy.State, ReasonApprovalTimedOut)
 	}
 }
 
-// CloseAll resolves a single still-pending gate as a timeout (e.g. on
-// shutdown). It is deliberately named for the shutdown use case in which it is
-// the manager's way of clearing the gate; it accepts the one runID being closed.
+// CloseAll resolves a single still-pending gate as a normal timeout. It is
+// called by the controller's load-failure paths (controller.go:363 and :506)
+// when an approval run fails to load: a gate that was already open for the
+// failing run must be closed. The shutdown drain lives in DrainAll, which is
+// distinct -- it tags the transition with ReasonShutdownDrain and sets the
+// manager's closed flag so late opens are refused.
 //
 // The terminal transition and the value copies happen under the lock; the
 // provider close and the onResolved callback happen OUTSIDE it, so a callback
 // that re-enters the manager (e.g. to read State) cannot deadlock on m.mu.
 // (CIC-108 sub-bug: onResolved was previously called while the lock was held.)
-func (m *Manager) CloseAll(runID string) {
+// closeOne is the shared per-gate terminal step. It moves a still-pending
+// gate to GateTimedOut using the supplied terminal reason; it is used by
+// CloseAll (the load-failure path) and by DrainAll (the shutdown path) so
+// their terminal-side-effect pattern is shared.
+//
+// The state-guard makes it idempotent: a timer that fires after closeOne has
+// already moved the gate is a no-op. A timer that fires AFTER closeOne moved
+// the gate sees the terminal state and is a no-op, which is why the
+// no-double-audit test can exercise the guard directly.
+//
+// The terminal transition happens under the lock; the provider close and the
+// onResolved callback happen OUTSIDE it, so a callback that re-enters the
+// manager cannot deadlock.
+func (m *Manager) closeOne(runID, reason string) {
 	m.mu.Lock()
 	rec, ok := m.gates[runID]
 	if !ok || rec.State != GatePending {
@@ -384,6 +444,7 @@ func (m *Manager) CloseAll(runID string) {
 		return
 	}
 	rec.State = GateTimedOut
+	rec.terminalReason = reason
 	rec.ResumedAt = time.Now()
 	if rec.timer != nil {
 		rec.timer.Stop()
@@ -392,12 +453,63 @@ func (m *Manager) CloseAll(runID string) {
 	gateCopy := *rec
 	m.mu.Unlock()
 
-	// Close the provider-side unconditionally — a caller that passes no onResolved
-	// callback still must not leave interactive buttons open.
+	// Close the provider-side unconditionally -- a caller that passes no
+	// onResolved callback still must not leave interactive buttons open.
 	_ = m.provider.CloseApproval(context.Background(), gateCopy.Gate.Channel, string(gateCopy.Gate.MessageID), chat.ApprovalTimedOut)
 	if m.onResolved != nil {
-		m.onResolved(runID, gateCopy.State)
+		m.onResolved(runID, gateCopy.State, reason)
 	}
+}
+
+// CloseAll moves a still-pending gate to GateTimedOut using the load-failure
+// reason. Its callers are the controller's load-failure paths
+// (controller.go:363 and controller.go:506) -- the terminal-side-effect
+// pattern is shared with the shutdown drain via closeOne.
+//
+// CIC-204 D1 reword: the doc used to say "named for the shutdown use
+// case", which was wrong -- the shutdown drain is DrainAll, not CloseAll.
+func (m *Manager) CloseAll(runID string) {
+	m.closeOne(runID, ReasonApprovalTimedOut)
+}
+
+// DrainAll resolves every still-pending gate as a timed-out. It is the
+// shutdown drain (CIC-204): a gate nobody acted on before the process exits
+// must be moved to a terminal state, its interactive buttons closed, and its
+// transition audited -- otherwise it is "neither audited nor closed" and the
+// run it holds is abandoned with no record. It delegates to CloseAll per runID
+// so the terminal-side-effect pattern (provider close + onResolved outside the
+// lock, with the pending-idempotency guard) is shared. It is race-safe against a
+// gate's own auto-timeout: both CloseAll and onTimeout move a record only while
+// it is still GatePending, so a timer that fires after the drain is a no-op.
+//
+// The snapshot-under-lock-then-close pattern is correct because at shutdown
+// nothing opens a new gate. If ctx is done it stops draining early; whatever
+// was not drained is abandoned by process exit exactly as it was before this
+// method existed, so the partial drain is never worse than no drain. Returns the
+// number of gates it drained.
+func (m *Manager) DrainAll(ctx context.Context) int {
+	m.mu.Lock()
+	pending := make([]string, 0, len(m.gates))
+	for runID, rec := range m.gates {
+		if rec.State == GatePending {
+			pending = append(pending, runID)
+		}
+	}
+	// Set closed under the same lock as the snapshot so the drain is
+	// atomic with respect to a concurrent Open (which also holds m.mu).
+	// A late Open is refused once closed is true (CIC-204 O1).
+	m.closed = true
+	m.mu.Unlock()
+
+	drained := 0
+	for _, runID := range pending {
+		if ctx.Err() != nil {
+			break
+		}
+		m.closeOne(runID, ReasonShutdownDrain)
+		drained++
+	}
+	return drained
 }
 
 // String returns a human-readable name for the gate state.

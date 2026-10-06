@@ -30,7 +30,7 @@ func TestGateAuditEntry_PerState(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			e := gateAuditEntry("run-1", tc.state, tc.actorID)
+			e := gateAuditEntry("run-1", tc.state, tc.actorID, "")
 			if e.Action != tc.wantAction {
 				t.Errorf("action = %v, want %v", e.Action, tc.wantAction)
 			}
@@ -51,7 +51,7 @@ func TestGateAuditEntry_PerState(t *testing.T) {
 
 	// A user state with a blank actor must still fall back to "system" so the
 	// principal_id column is never blank.
-	if e := gateAuditEntry("run-1", approvalgates.GateApproved, ""); e.Actor != "system" {
+	if e := gateAuditEntry("run-1", approvalgates.GateApproved, "", ""); e.Actor != "system" {
 		t.Errorf("blank actor on an approved gate: actor = %q, want %q", e.Actor, "system")
 	}
 }

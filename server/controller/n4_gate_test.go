@@ -48,7 +48,7 @@ func TestN4_ReleaseRunAndFailedCheck(t *testing.T) {
 	cfg.Backpressure = tp
 	c := New(st, fp, cfg, discardLogger)
 
-	c.dispatchAfterGate(runID, approvalgates.GateDenied)
+	c.dispatchAfterGate(runID, approvalgates.GateDenied, "")
 
 	if tp.Count(repoID.String()) != 0 {
 		t.Error("backpressure: slot not released after deny")
@@ -142,7 +142,7 @@ func TestRerunGate_ApprovalPromotes(t *testing.T) {
 	c := New(st, &stubForge{}, cfg, discardLogger)
 
 	// GateApproved path: PromoteTopLevelJobs flips pending -> queued.
-	c.dispatchAfterGate(runID, approvalgates.GateApproved)
+	c.dispatchAfterGate(runID, approvalgates.GateApproved, "")
 
 	row = st.Pool().QueryRow(ctx,
 		"SELECT status FROM jobs WHERE id = $1", jobID)

@@ -525,8 +525,36 @@ func run() error {
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 		defer cancel()
 
-		// GracefulStop lets in-flight runner streams finish rather than
-		// severing every connected runner's session mid-job.
+		// CIC-204 r3 shutdown order:
+		//       1. HTTP shutdown (stop accepting new webhooks).
+		//       2. Drain pending approval gates (ReasonShutdownDrain).
+		//       3. Join in-flight gate-dispatch goroutines (WaitGateDispatch).
+		//       4. Drain in-flight gate-audit writes (waitGateAudit, CIC-193 G1).
+		//       5. gRPC GracefulStop LAST so a runner stream can't
+		//          block the 20 s grace window.
+
+		sdErr := httpServer.Shutdown(shutdownCtx)
+		if sdErr != nil {
+			log.Error("httpServer.Shutdown returned an error", "err", sdErr)
+		}
+
+		if approvalMgr != nil {
+			drained := approvalMgr.DrainAll(shutdownCtx)
+			if drained > 0 {
+				log.Info("drained pending approval gates at shutdown", "gates", drained)
+			}
+		}
+
+		if ctrl != nil {
+			ctrl.WaitGateDispatch(shutdownCtx)
+		}
+
+		// CIC-193 G1: a gate timer may fire during shutdown and dispatch
+		// an audit write that has not yet completed. Drain before the
+		// deferred DB pool close. No-op when gates are disabled.
+		waitGateAudit()
+
+		// 5. gRPC GracefulStop LAST, bounded.
 		stopped := make(chan struct{})
 		go func() {
 			grpcServer.GracefulStop()
@@ -538,12 +566,6 @@ func run() error {
 			grpcServer.Stop()
 		}
 
-		sdErr := httpServer.Shutdown(shutdownCtx)
-		// CIC-193 G1: a gate timeout timer may fire during shutdown and dispatch
-		// an audit write that has not yet completed. Drain those before the deferred
-		// DB pool close so no terminal gate transition is lost. waitGateAudit is a
-		// no-op when gates are disabled.
-		waitGateAudit()
 		return sdErr
 	})
 
@@ -814,9 +836,9 @@ func buildApprovalGates(ctx context.Context, enabled, noopAck bool, allowedCSV s
 	var mu sync.Mutex
 	var closing bool
 	var drainWG sync.WaitGroup
-	onResolved := func(runID string, state approvalgates.GateState) {
-		e := gateAuditEntry(runID, state, mgr.ActorID(runID))
-		log.Info("approval gate resolved", "run", runID, "state", state, "actor", e.Actor)
+	onResolved := func(runID string, state approvalgates.GateState, reason string) {
+		e := gateAuditEntry(runID, state, mgr.ActorID(runID), reason)
+		log.Info("approval gate resolved", "run", runID, "state", state, "actor", e.Actor, "reason", reason)
 		if auditLog == nil {
 			return
 		}
@@ -856,8 +878,11 @@ func buildApprovalGates(ctx context.Context, enabled, noopAck bool, allowedCSV s
 // gateAuditEntry maps a terminal gate transition to its audit entry. The
 // Action reflects the outcome, so a consumer filtering on action = 'approve'
 // sees approvals only (#135 B2). A timeout has no acting user and is recorded
-// as "system".
-func gateAuditEntry(runID string, state approvalgates.GateState, actorID string) audit.Entry {
+// as "system". The reason string is folded into the entry's Reason field when
+// non-empty, so a shutdown drain (ReasonShutdownDrain = "abandoned: server
+// shutdown") is audited distinctly from a normal auto-timeout that reads
+// ReasonApprovalTimedOut = "approval timed out" (CIC-204 B1).
+func gateAuditEntry(runID string, state approvalgates.GateState, actorID, reason string) audit.Entry {
 	action := audit.ActionGateTimeout
 	// Principal + surface depend on the outcome: a human's approval or denial is a
 	// user acting over the chat surface; a timeout (and any future non-user
@@ -880,13 +905,18 @@ func gateAuditEntry(runID string, state approvalgates.GateState, actorID string)
 		// Actor column records "system" rather than a blank principal id.
 		actor = "system"
 	}
+	// Fold the terminal reason into the entry's reason field. An empty reason keeps the "gate <state>" form for a user resolve; a non-empty reason (from a shutdown drain) is the one that matters (CIC-204 B1).
+	r := reason
+	if r == "" {
+		r = "gate " + state.String()
+	}
 	return audit.Entry{
 		Action:        action,
 		Actor:         actor,
 		Target:        runID,
 		PrincipalType: principal,
 		Surface:       surface,
-		Reason:        "gate " + state.String(),
+		Reason:        r,
 	}
 }
 

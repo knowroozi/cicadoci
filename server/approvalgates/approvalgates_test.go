@@ -3,6 +3,7 @@ package approvalgates
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 func TestOpenAndResolve(t *testing.T) {
 	provider := chat.NewSlackProvider()
 	resolved := make(chan GateState, 1)
-	mgr := NewManager(provider, func(_ string, s GateState) {
+	mgr := NewManager(provider, func(_ string, s GateState, _ string) {
 		if s == GateApproved || s == GateDenied {
 			resolved <- s
 		}
@@ -156,7 +157,7 @@ func TestIdempotentResolve(t *testing.T) {
 func TestCloseAllTimesOut(t *testing.T) {
 	provider := chat.NewSlackProvider()
 	resolved := make(chan GateState, 1)
-	mgr := NewManager(provider, func(_ string, s GateState) {
+	mgr := NewManager(provider, func(_ string, s GateState, _ string) {
 		resolved <- s
 	})
 
@@ -349,7 +350,7 @@ func TestFailedPostDropsGate(t *testing.T) {
 func TestStaleTimerDoesNotTimeOutNewerGate(t *testing.T) {
 	provider := chat.NewSlackProvider()
 	resolved := make(chan GateState, 4)
-	mgr := NewManager(provider, func(_ string, s GateState) { resolved <- s })
+	mgr := NewManager(provider, func(_ string, s GateState, _ string) { resolved <- s })
 
 	base := Gate{
 		RunID:   "run-reopen",
@@ -416,7 +417,7 @@ func TestStaleTimerDoesNotTimeOutNewerGate(t *testing.T) {
 func TestTimeoutFiresGate(t *testing.T) {
 	provider := chat.NewSlackProvider()
 	resolved := make(chan GateState, 1)
-	mgr := NewManager(provider, func(_ string, s GateState) { resolved <- s })
+	mgr := NewManager(provider, func(_ string, s GateState, _ string) { resolved <- s })
 
 	gate := Gate{
 		RunID:   "run-timeout",
@@ -454,7 +455,7 @@ func TestTimeoutFiresGate(t *testing.T) {
 func TestResolveBeatsTimeout(t *testing.T) {
 	provider := chat.NewSlackProvider()
 	resolved := make(chan GateState, 4)
-	mgr := NewManager(provider, func(_ string, s GateState) { resolved <- s })
+	mgr := NewManager(provider, func(_ string, s GateState, _ string) { resolved <- s })
 
 	gate := Gate{
 		RunID:   "run-race",
@@ -515,7 +516,7 @@ func TestCallbackRunsOutsideLock(t *testing.T) {
 	provider := chat.NewSlackProvider()
 	done := make(chan GateState, 1)
 	var mgr *Manager
-	mgr = NewManager(provider, func(runID string, s GateState) {
+	mgr = NewManager(provider, func(runID string, s GateState, _ string) {
 		// Re-enter the manager from inside the callback: deadlocks if the
 		// callback is invoked while m.mu is still held.
 		if got := mgr.State(runID); got == s {
@@ -545,5 +546,296 @@ func TestCallbackRunsOutsideLock(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("callback deadlocked on the manager lock (callback-under-lock bug)")
+	}
+}
+
+// TestDrainAllClosesAndAudits is CIC-204's core assertion: before process exit,
+// every still-pending approval gate is moved to a terminal state (GateTimedOut),
+// its interactive buttons are closed, and its transition is handed to onResolved
+// -- i.e. it is audited -- rather than being "neither audited nor closed." The
+// drain is idempotent: a second call drains nothing.
+func TestDrainAllClosesAndAudits(t *testing.T) {
+	provider := chat.NewSlackProvider()
+	var mu sync.Mutex
+	audited := map[string]GateState{}
+	mgr := NewManager(provider, func(runID string, s GateState, _ string) {
+		mu.Lock()
+		audited[runID] = s
+		mu.Unlock()
+	})
+
+	for _, id := range []string{"run-a", "run-b", "run-c"} {
+		gate := Gate{
+			RunID:   id,
+			Reason:  "Deploy?",
+			Allow:   "approve",
+			Deny:    "deny",
+			Allowed: []string{"user-1"},
+			// Zero timeout = no auto-timeout, so the gate stays pending and is
+			// the drain's responsibility to close.
+		}
+		if err := mgr.Open(context.Background(), &gate); err != nil {
+			t.Fatalf("open %s: %v", id, err)
+		}
+		if mgr.State(id) != GatePending {
+			t.Fatalf("%s should be pending, got %v", id, mgr.State(id))
+		}
+	}
+
+	if got := mgr.DrainAll(context.Background()); got != 3 {
+		t.Fatalf("DrainAll drained %d gates, want 3 (no-op second call expected below)", got)
+	}
+	for _, id := range []string{"run-a", "run-b", "run-c"} {
+		if st := mgr.State(id); st != GateTimedOut {
+			t.Errorf("%s state after drain = %v, want GateTimedOut", id, st)
+		}
+		mu.Lock()
+		got, ok := audited[id]
+		mu.Unlock()
+		if !ok {
+			t.Errorf("%s was not audited via onResolved", id)
+		} else if got != GateTimedOut {
+			t.Errorf("%s audited as %v, want GateTimedOut", id, got)
+		}
+	}
+
+	// Idempotent: nothing left to drain.
+	if got := mgr.DrainAll(context.Background()); got != 0 {
+		t.Errorf("second DrainAll drained %d gates, want 0", got)
+	}
+}
+
+// TestDrainAllLateTimerDoesNotDoubleAudit is the race half of CIC-204: a gate
+// whose auto-timeout fires AFTER the drain must not be audited a second time or
+// move off its terminal state.
+//
+// Dwight T1: this test must exercise the pending-guard directly, NOT rely on
+// CloseAll/drainOne to stop the timer (which hides the guard). We open a gate,
+// capture its record by identity, call DrainAll, and then call onTimeout on the
+// live record by hand to force the "late timer" path. The guard
+// (rec.State != GatePending) must make it a no-op.
+func TestDrainAllLateTimerDoesNotDoubleAudit(t *testing.T) {
+	provider := chat.NewSlackProvider()
+	var mu sync.Mutex
+	count := 0
+	mgr := NewManager(provider, func(_ string, _ GateState, _ string) {
+		mu.Lock()
+		count++
+		mu.Unlock()
+	})
+
+	gate := Gate{
+		RunID:   "run-x",
+		Reason:  "Deploy?",
+		Allow:   "approve",
+		Deny:    "deny",
+		Allowed: []string{"user-1"},
+		Timeout: 10 * time.Millisecond,
+	}
+	if err := mgr.Open(context.Background(), &gate); err != nil {
+		t.Fatal(err)
+	}
+
+	// Capture the live record by identity BEFORE the drain, so onTimeout's
+	// guard can be checked against the record DrainAll will move.
+	rec := mgr.recordFor(t, "run-x")
+	if rec == nil {
+		t.Fatal("recordFor returned nil for an open gate")
+	}
+
+	// Drain before the timer can fire.
+	if got := mgr.DrainAll(context.Background()); got != 1 {
+		t.Fatalf("DrainAll drained %d, want 1", got)
+	}
+	if mgr.State("run-x") != GateTimedOut {
+		t.Fatalf("state after drain = %v, want GateTimedOut", mgr.State("run-x"))
+	}
+
+	// Force a "late timer" by calling onTimeout directly on the record.
+	// The pending-guard must make this a no-op: onResolved must not fire
+	// a second time.
+	mgr.onTimeout(rec)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if count != 1 {
+		t.Fatalf("onResolved fired %d times after drain + direct onTimeout, want exactly 1 (no double audit)", count)
+	}
+	if mgr.State("run-x") != GateTimedOut {
+		t.Fatalf("state after direct onTimeout = %v, want GateTimedOut (unchanged)", mgr.State("run-x"))
+	}
+}
+
+// TestDrainAllReasonsShutdownDrain asserts the run's audit row gets a reason
+// of "abandoned: server shutdown" -- not "approval timed out" -- when DrainAll
+// closes the gate. This is the B1 fix: a process restart must not read as a
+// user-facing timeout.
+func TestDrainAllReasonsShutdownDrain(t *testing.T) {
+	provider := chat.NewSlackProvider()
+	var mu sync.Mutex
+	reasons := map[string]string{}
+	mgr := NewManager(provider, func(runID string, _ GateState, reason string) {
+		mu.Lock()
+		reasons[runID] = reason
+		mu.Unlock()
+	})
+
+	gate := Gate{RunID: "run-d", Reason: "Deploy?", Allow: "approve", Deny: "deny", Allowed: []string{"user-1"}}
+	if err := mgr.Open(context.Background(), &gate); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := mgr.DrainAll(context.Background()); got != 1 {
+		t.Fatalf("DrainAll drained %d, want 1", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if got := reasons["run-d"]; got != ReasonShutdownDrain {
+		t.Fatalf("shutdown drain reason = %q, want %q", got, ReasonShutdownDrain)
+	}
+}
+
+// TestDrainAllCancelledCtxStopsEarly is the non-blocking test Dwight asked
+// for: when the shutdown budget is exceeded the drain stops iterating so the
+// process can exit; whatever was not drained is abandoned by process exit,
+// which is the same outcome as no drain at all. The closed flag is still so
+// a concurrent Open is refused.
+func TestDrainAllCancelledCtxStopsEarly(t *testing.T) {
+	provider := chat.NewSlackProvider()
+	mgr := NewManager(provider, func(_ string, _ GateState, _ string) {})
+
+	for _, id := range []string{"a", "b", "c"} {
+		g := Gate{RunID: id, Reason: "r", Allow: "approve", Deny: "deny", Allowed: []string{"u1"}}
+		if err := mgr.Open(context.Background(), &g); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Cancel the ctx before calling DrainAll; it must return without draining
+	// any gate because ctx.Err() is checked at the top of the per-gate loop.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := mgr.DrainAll(ctx); got != 0 {
+		t.Fatalf("DrainAll with a cancelled-then-drained ctx drained %d, want 0", got)
+	}
+
+	// The closed flag is set inside the snapshot lock even when ctx is
+	// already cancelled, so a concurrent Open is still refused.
+	late := Gate{RunID: "late", Reason: "late", Allow: "approve", Deny: "deny", Allowed: []string{"u1"}}
+	if err := mgr.Open(context.Background(), &late); err == nil {
+		t.Fatal("Open after a cancelled-ctx DrainAll succeeded; wanted refusal due to closed flag")
+	}
+}
+
+// TestManagerClosedRefusesOpen is O1: after DrainAll has set the manager's
+// closed flag, Open must refuse a new gate. A late-arriving webhook that
+// races the drain would otherwise open a gate that never gets closed or
+// audited -- the exact "neither audited nor closed" failure CIC-204 addresses.
+// TestAwaitReturnsReasonAfterDrain (CIC-204 r3 T2) proves the B1 fix:
+// a gate drained on SIGTERM surfaces (GateTimedOut,
+// ReasonShutdownDrain) at the controller's await-and-read boundary,
+// and the onResolved callback carries ReasonShutdownDrain so the
+// run-failure audit row says "abandoned: server shutdown".
+func TestAwaitReturnsReasonAfterDrain(t *testing.T) {
+	provider := chat.NewSlackProvider()
+	var gotReason string
+	done := make(chan struct{}, 1)
+	mgr := NewManager(provider, func(runID string, state GateState, reason string) {
+		gotReason = reason
+		done <- struct{}{}
+	})
+	gate := Gate{RunID: "run-drain", Reason: "Deploy?", Allow: "approve", Deny: "deny", Allowed: []string{"u1"}, Timeout: time.Hour}
+	if err := mgr.Open(context.Background(), &gate); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if n := mgr.DrainAll(context.Background()); n != 1 {
+		t.Fatalf("DrainAll = %d, want 1", n)
+	}
+	<-done // onResolved fired outside the lock
+	if gotReason != ReasonShutdownDrain {
+		t.Errorf("onResolved reason = %q, want %q", gotReason, ReasonShutdownDrain)
+	}
+	state, reason := mgr.Await(context.Background(), "run-drain")
+	if state != GateTimedOut {
+		t.Errorf("Await state = %v, want GateTimedOut", state)
+	}
+	if reason != ReasonShutdownDrain {
+		t.Errorf("Await reason = %q, want %q", reason, ReasonShutdownDrain)
+	}
+}
+
+// TestAwaitReturnsReasonAfterAutoTimeout (CIC-204 r3 T2) mirrors the
+// drain test for the auto-timeout case: Await returns
+// (GateTimedOut, ReasonApprovalTimedOut), NOT empty or
+// ReasonShutdownDrain -- so a real auto-timeout keeps its own reason
+// string on the run row.
+func TestAwaitReturnsReasonAfterAutoTimeout(t *testing.T) {
+	provider := chat.NewSlackProvider()
+	var gotReason string
+	done := make(chan struct{}, 1)
+	mgr := NewManager(provider, func(runID string, state GateState, reason string) {
+		gotReason = reason
+		done <- struct{}{}
+	})
+	gate := Gate{RunID: "run-timeout", Reason: "Deploy?", Allow: "approve", Deny: "deny", Allowed: []string{"u1"}, Timeout: 5 * time.Millisecond}
+	if err := mgr.Open(context.Background(), &gate); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	<-done
+	state, reason := mgr.Await(context.Background(), "run-timeout")
+	if state != GateTimedOut {
+		t.Errorf("Await state = %v, want GateTimedOut", state)
+	}
+	if reason != ReasonApprovalTimedOut {
+		t.Errorf("Await reason = %q, want %q", reason, ReasonApprovalTimedOut)
+	}
+	if gotReason != ReasonApprovalTimedOut {
+		t.Errorf("onResolved reason = %q, want %q", gotReason, ReasonApprovalTimedOut)
+	}
+}
+
+// TestResolverResolveDoesNotSetTerminalReason (CIC-204 r3 T2 mutation
+// guard) confirms Resolve leaves terminalReason empty so a user
+// resolution falls back to the controller's state-based default
+// ("approval denied" / "approval approved").
+func TestResolverResolveDoesNotSetTerminalReason(t *testing.T) {
+	provider := chat.NewSlackProvider()
+	mgr := NewManager(provider, func(string, GateState, string) {})
+	gate := Gate{RunID: "resolve-id", Reason: "Deploy?", Allow: "approve", Deny: "deny", Allowed: []string{"U1"}, Timeout: time.Hour}
+	if err := mgr.Open(context.Background(), &gate); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := mgr.Resolve(context.Background(), "resolve-id", "U1", "approve"); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	rec := mgr.recordFor(t, "resolve-id")
+	if rec.terminalReason != "" {
+		t.Errorf("terminalReason = %q after Resolve, want empty", rec.terminalReason)
+	}
+	state, reason := mgr.Await(context.Background(), "resolve-id")
+	if state != GateApproved {
+		t.Errorf("Await state = %v, want GateApproved", state)
+	}
+	if reason != "" {
+		t.Errorf("Await reason = %q, want empty (Resolve never sets it)", reason)
+	}
+}
+
+func TestManagerClosedRefusesOpen(t *testing.T) {
+	provider := chat.NewSlackProvider()
+	mgr := NewManager(provider, func(_ string, _ GateState, _ string) {})
+
+	g := Gate{RunID: "run-1", Reason: "r", Allow: "approve", Deny: "deny", Allowed: []string{"u1"}}
+	if err := mgr.Open(context.Background(), &g); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := mgr.DrainAll(context.Background()); got != 1 {
+		t.Fatalf("DrainAll drained %d, want 1", got)
+	}
+
+	late := Gate{RunID: "late", Reason: "late", Allow: "approve", Deny: "deny", Allowed: []string{"u1"}}
+	if err := mgr.Open(context.Background(), &late); err == nil {
+		t.Fatal("Open after DrainAll succeeded; wanted refusal")
 	}
 }
