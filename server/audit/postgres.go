@@ -64,28 +64,16 @@ func (p *PostgresLog) Append(ctx context.Context, e Entry) (int64, error) {
 	// gets hashed matches the value stored and later read back.
 	e.Timestamp = e.Timestamp.Truncate(time.Microsecond)
 
-	// Hash with the previous hash; e.ID is intentionally zero
-	// and excluded from hashEntry.
-	e.ID = 0
-	e.PrevHash = prev
-	e.Hash = hashEntry(e)
-
-	// payload_hash: raw hash bytes (32 bytes = SHA-256).
-	hb, err := hex.DecodeString(e.Hash)
-	if err != nil {
-		return 0, fmt.Errorf("audit: append: decode hash hex: %w", err)
+	if e.HashVersion == 0 {
+		e.HashVersion = 2
 	}
 
-	// CIC-192: normalize unset principal metadata to the historical INSERT literal
-	// so callers that predate this PR keep their stored-value behaviour. A blank
-	// principal_type defaults to "user" (the old Append INSERT literal was
-	// ('user', principal_type; 'system', surface; NULL, org_id) -- a single
-	// unclassified user-on-one-surface; 'user' is the historical default) and a
-	// blank surface to "system" (the safest label for an unclassified internal
-	// write). A non-blank value is stored verbatim. These fields are NOT part of
-	// the hash (hashEntry is stable -- see
-	// docs/decisions/CIC-192-audit-principal-fidelity.md), so the defaults do
-	// not affect tamper-evidence; only the stored row reflects them.
+	// CIC-192: normalize unset principal metadata to the historical
+	// INSERT literal so callers that predate this PR keep their
+	// stored-value behaviour. A blank principal_type defaults to
+	// "user" and a blank surface to "system". These defaults are
+	// applied BEFORE the hash so that hashv2 (which includes
+	// principal_type + surface) is consistent with the row written.
 	if e.PrincipalType == "" {
 		e.PrincipalType = "user"
 	}
@@ -93,24 +81,40 @@ func (p *PostgresLog) Append(ctx context.Context, e Entry) (int64, error) {
 		e.Surface = "system"
 	}
 
-	// reason and prev_hash go into jsonb metadata.
-	// NOTE: ::text casts are required because jsonb_build_object takes
-	// `any` args and pgx's extended query protocol cannot infer types
-	// without explicit casts.
+	// Hash with the previous hash; e.ID is intentionally zero and
+	// excluded from the hash. hashForRow dispatches on e.HashVersion:
+	// v2 uses hashEntryV2 (includes principal_type + surface + org_id),
+	// v1 uses hashEntry (action/actor/target/reason/timestamp/prev).
+	e.ID = 0
+	e.PrevHash = prev
+	e.Hash = hashForRow(e)
+
+	// payload_hash: raw hash bytes (32 bytes = SHA-256).
+	hb, err := hex.DecodeString(e.Hash)
+	if err != nil {
+		return 0, fmt.Errorf("audit: append: decode hash hex: %w", err)
+	}
+
+	// CIC-205 N1: hash_version is a real column (migration 0006), not
+	// jsonb metadata. It tags which hash algorithm produced
+	// row.Hash so VerifyChain can dispatch per-version.
+	// ::text casts are required because jsonb_build_object takes
+	// `any` args and pgx's extended query protocol cannot infer
+	// types without explicit casts.
 	var id int64
 	err = p.pool.QueryRow(ctx,
 		`INSERT INTO audit_events
-			(org_id, principal_type, principal_id, surface,
-			 action, subject_type, subject_id,
-			 payload_hash, metadata, occurred_at)
-			 VALUES (NULLIF($1::text, '')::uuid, $2, $3, $4,
-			$5, '', $6, $7,
-			jsonb_build_object('reason', $8::text, 'prev_hash', $9::text, 'hash_version', 2),
-			$10, 2)
-			RETURNING id`,
+            (org_id, principal_type, principal_id, surface,
+             action, subject_type, subject_id,
+             payload_hash, metadata, occurred_at, hash_version)
+            VALUES (NULLIF($1::text, '')::uuid, $2, $3, $4,
+              $5, '', $6, $7,
+              jsonb_build_object('reason', $8::text, 'prev_hash', $9::text),
+              $10, $11)
+            RETURNING id`,
 		e.OrgID, e.PrincipalType, e.Actor, e.Surface,
 		string(e.Action), e.Target, hb, e.Reason, prev,
-		e.Timestamp).Scan(&id)
+		e.Timestamp, e.HashVersion).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("audit: insert: %w", err)
 	}

@@ -207,7 +207,7 @@ func hashEntryV2(e Entry) string {
 		Actor:         e.Actor,
 		Target:        e.Target,
 		Reason:        e.Reason,
-		Timestamp:     e.Timestamp,
+		Timestamp:     e.Timestamp.UTC(),
 		PrevHash:      e.PrevHash,
 		PrincipalType: e.PrincipalType,
 		Surface:       e.Surface,

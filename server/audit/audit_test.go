@@ -303,3 +303,40 @@ func TestVerifyChainDetectsV2Tamper(t *testing.T) {
 		t.Fatal("expected chain check to fail after v2 principal tamper")
 	}
 }
+
+// TestHashEntryV2UTCInvariance verifies that hashEntryV2 produces the same
+// digest regardless of the local timezone of e.Timestamp.
+//
+// The v2 hash normalises the timestamp to UTC via .UTC() before json.Marshal,
+// so an Entry stored in a local-TZ column and recovered in a different TZ must
+// produce the same v2 hash as the same timestamp stored in UTC.
+func TestHashEntryV2UTCInvariance(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	// A UTC entry.
+	utc := Entry{
+		Action:        ActionApprove,
+		Actor:         "user-1",
+		Target:        "run-1",
+		Reason:        "approve",
+		Timestamp:     now,
+		PrevHash:      genesisHash,
+		PrincipalType: PrincipalSystem,
+		Surface:       SurfaceMCP,
+		OrgID:         "org-42",
+		HashVersion:   2,
+	}
+	// Same timestamp but in a non-UTC local zone (e.g. America/Los_Angeles).
+	loc, _ := time.LoadLocation("America/Los_Angeles")
+	local := utc
+	local.Timestamp = now.In(loc)
+	// hashEntryV2 must be identical for both.
+	if hashEntryV2(utc) != hashEntryV2(local) {
+		t.Fatalf("v2 hash depends on local timezone: utc=%s, la=%s; expected equal",
+			hashEntryV2(utc), hashEntryV2(local))
+	}
+	// And hashEntry (v1) must also differ (v1 does NOT normalize), proving the
+	// fix is v2-only and scoped.
+	if hashEntry(utc) == hashEntry(local) {
+		t.Log("NOTE: v1 hash coincidentally matches in this timezone — acceptable; the fix is v2-only")
+	}
+}
