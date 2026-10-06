@@ -243,19 +243,19 @@ func TestBuildApprovalGates(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	t.Run("disabled builds nothing", func(t *testing.T) {
-		mgr, approvers, err := buildApprovalGates(ctx, false, true, "U1", audit.NewMemoryLog(), log)
+		mgr, approvers, _, err := buildApprovalGates(ctx, false, true, "U1", audit.NewMemoryLog(), log)
 		if err != nil || mgr != nil || approvers != nil {
 			t.Fatalf("got (%v, %v, %v), want (nil, nil, nil)", mgr, approvers, err)
 		}
 	})
 	t.Run("enabled without noop ack refuses startup", func(t *testing.T) {
-		mgr, _, err := buildApprovalGates(ctx, true, false, "U1", audit.NewMemoryLog(), log)
+		mgr, _, _, err := buildApprovalGates(ctx, true, false, "U1", audit.NewMemoryLog(), log)
 		if err == nil || mgr != nil {
 			t.Fatalf("got (%v, %v), want (nil, error)", mgr, err)
 		}
 	})
 	t.Run("enabled with noop ack builds manager and parses allow-list", func(t *testing.T) {
-		mgr, approvers, err := buildApprovalGates(ctx, true, true, " U1, ,U2 ", audit.NewMemoryLog(), log)
+		mgr, approvers, _, err := buildApprovalGates(ctx, true, true, " U1, ,U2 ", audit.NewMemoryLog(), log)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -268,7 +268,7 @@ func TestBuildApprovalGates(t *testing.T) {
 	})
 	t.Run("resolution writes an audit row with the outcome action and actor", func(t *testing.T) {
 		al := audit.NewMemoryLog()
-		mgr, approvers, err := buildApprovalGates(ctx, true, true, "U1", al, log)
+		mgr, approvers, waitGateAudit, err := buildApprovalGates(ctx, true, true, "U1", al, log)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -278,6 +278,9 @@ func TestBuildApprovalGates(t *testing.T) {
 		if err := mgr.Resolve(ctx, "run-1", "U1", "deny"); err != nil {
 			t.Fatalf("Resolve: %v", err)
 		}
+		// CIC-193 G1: onResolved now dispatches the audit write asynchronously and
+		// the wiring joins it; drain before asserting the row exists.
+		waitGateAudit()
 		entries, err := al.List(ctx, 0, 0)
 		if err != nil {
 			t.Fatalf("List: %v", err)

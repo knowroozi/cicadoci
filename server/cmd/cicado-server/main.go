@@ -22,6 +22,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -394,7 +395,7 @@ func run() error {
 	// only ChatProvider today is the no-op one (a real Slack provider is
 	// CIC-138). Channel and timeout come from CIC-160's ApprovalChannel /
 	// ApprovalTimeout above.
-	approvalMgr, approvers, err := buildApprovalGates(ctx, *f.approvalgatesEnabled,
+	approvalMgr, approvers, waitGateAudit, err := buildApprovalGates(ctx, *f.approvalgatesEnabled,
 		*f.insecureApprovalgatesNoop, *f.approvalgatesAllowed, auditLog, log)
 	if err != nil {
 		return err
@@ -506,7 +507,13 @@ func run() error {
 			grpcServer.Stop()
 		}
 
-		return httpServer.Shutdown(shutdownCtx)
+		sdErr := httpServer.Shutdown(shutdownCtx)
+		// CIC-193 G1: a gate timeout timer may fire during shutdown and dispatch
+		// an audit write that has not yet completed. Drain those before the deferred
+		// DB pool close so no terminal gate transition is lost. waitGateAudit is a
+		// no-op when gates are disabled.
+		waitGateAudit()
+		return sdErr
 	})
 
 	return group.Wait()
@@ -732,24 +739,61 @@ func splitAllowList(csv string) []string {
 // requires noopAck (--insecure-approvalgates-noop): without it startup is
 // refused, so a production deploy cannot silently run inert gates (#135 B4).
 func buildApprovalGates(ctx context.Context, enabled, noopAck bool, allowedCSV string,
-	auditLog audit.Log, log *slog.Logger) (*approvalgates.Manager, []string, error) {
+	auditLog audit.Log, log *slog.Logger) (*approvalgates.Manager, []string, func(), error) {
 	if !enabled {
-		return nil, nil, nil
+		// No gates, no in-flight audit writes to drain.
+		return nil, nil, func() {}, nil
 	}
 	if !noopAck {
-		return nil, nil, errors.New("--approvalgates-enabled has no real chat provider yet (CIC-138); " +
+		return nil, nil, nil, errors.New("--approvalgates-enabled has no real chat provider yet (CIC-138); " +
 			"gates would post nothing and could never be resolved. Pass --insecure-approvalgates-noop " +
 			"(CICADO_INSECURE_APPROVALGATES_NOOP=true) to run them inert for development")
 	}
 	var mgr *approvalgates.Manager
+	// CIC-193 G1: a gate transition can reach onResolved on a timer goroutine
+	// (time.AfterFunc) or from a resolve request AFTER the main shutdown
+	// flow has moved on; a pool close could race such an in-flight write. The
+	// close of the manager and the join of any in-flight writes are guarded by
+	// one mutex so that the check-then-Add below is atomic with the
+	// wait-func: a resolution that lands after closing flips runs the audit
+	// write synchronously and cannot Add() after the waiter has returned.
+	// waitGateAudit turns the gate on for shutdown and joins the pre-shutdown
+	// in-flight writes; the shutdown path calls it after httpServer.Shutdown
+	// and before the DB pool closes. It is a no-op when gates are disabled or
+	// auditLog is nil. CloseAll itself is a load-failure path (controller.go),
+	// not a SIGTERM handler -- the timer-fires-after-shutdown and
+	// abandoned-pending cases are tracked as CIC-204, out of scope here.
+	var mu sync.Mutex
+	var closing bool
+	var drainWG sync.WaitGroup
 	onResolved := func(runID string, state approvalgates.GateState) {
 		e := gateAuditEntry(runID, state, mgr.ActorID(runID))
 		log.Info("approval gate resolved", "run", runID, "state", state, "actor", e.Actor)
-		if auditLog != nil {
-			if _, err := auditLog.Append(ctx, e); err != nil {
-				log.Error("approvalgates: audit append failed", "run", runID, "err", err)
-			}
+		if auditLog == nil {
+			return
 		}
+		mu.Lock()
+		if closing {
+			// Shutdown has begun: run the write synchronously so the transition is
+			// not lost and cannot Add() after the waiter has returned. The write
+			// itself is bounded by appendGateAudit's own timeout so a hung pool
+			// connection cannot block shutdown.
+			mu.Unlock()
+			appendGateAudit(ctx, auditLog, e, log, runID)
+			return
+		}
+		drainWG.Add(1)
+		mu.Unlock()
+		defer drainWG.Done()
+		appendGateAudit(ctx, auditLog, e, log, runID)
+	}
+	// waitGateAudit is safe to call in the shutdown path; it is a no-op when
+	// gates are disabled (the !enabled early return yields a no-op func).
+	waitGateAudit := func() {
+		mu.Lock()
+		closing = true // under the same lock as onResolved's check-then-Add
+		mu.Unlock()
+		drainWG.Wait()
 	}
 	mgr = approvalgates.NewManager(chat.NewNoOpProvider(), onResolved)
 	approvers := splitAllowList(allowedCSV)
@@ -758,7 +802,7 @@ func buildApprovalGates(ctx context.Context, enabled, noopAck bool, allowedCSV s
 	}
 	log.Warn("approvalgates enabled with the NO-OP chat provider: gates are inert (nothing is posted, nothing resolves them, dispatch is not blocked)",
 		"allow", approvers)
-	return mgr, approvers, nil
+	return mgr, approvers, waitGateAudit, nil
 }
 
 // gateAuditEntry maps a terminal gate transition to its audit entry. The
@@ -795,5 +839,31 @@ func gateAuditEntry(runID string, state approvalgates.GateState, actorID string)
 		PrincipalType: principal,
 		Surface:       surface,
 		Reason:        "gate " + state.String(),
+	}
+}
+
+// appendGateAudit records a terminal approval-gate transition to the audit log
+// on a context that is DETACHED from the signal context but BOUNDED by a 5s
+// timeout. A gate can reach a terminal state -- and therefore fire onResolved --
+// during graceful shutdown: a gate timeout whose timer fires just after shutdown
+// began, or a gate resolve that lands as the HTTP server drains. If it used the
+// signal-canceled request context directly, the append would fail with
+// context.Canceled and the terminal transition would go unaudited. Detaching
+// (context.WithoutCancel) lets the audit write survive the SIGTERM; the 5s
+// timeout mirrors the other bounded shutdown contexts in this program (the 20s
+// graceful-shutdown ctx, runnersvc's offline ctx) so a hung DB connection cannot
+// block shutdown. It is a no-op when auditLog is nil. The wiring's drain
+// wait-func joins an in-flight write so the Postgres pool is not closed mid-
+// write. CloseAll is a load-failure path (controller.go), not a SIGTERM handler;
+// the timer-fires-after-shutdown and abandoned-pending cases are tracked as
+// CIC-204, out of scope here.
+func appendGateAudit(ctx context.Context, auditLog audit.Log, e audit.Entry, log *slog.Logger, runID string) {
+	if auditLog == nil {
+		return
+	}
+	appendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if _, err := auditLog.Append(appendCtx, e); err != nil {
+		log.Error("approvalgates: audit append failed", "run", runID, "err", err)
 	}
 }
