@@ -568,7 +568,7 @@ func (c *Controller) LoadAndCreateJobs(
 			// A workflow matched the event but produced no jobs
 			// (DAG build failure, validation error, or store insert error).
 			// The run was expected to do work; finalise as failed.
-			if err := c.store.FinalizeRunToFailed(ctx, runID); err != nil {
+			if _, ferr := c.store.FinalizeRunToFailed(ctx, runID); ferr != nil {
 				c.log.Warn("failed to finalise matched-but-failed run",
 					"run", runID, "repo", repoID, "err", err)
 			}

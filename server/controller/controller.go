@@ -274,7 +274,7 @@ func (c *Controller) HandlePush(payload webhook.PushPayload) error {
 		c.log.Warn("job creation failed for push run", "run", runID, "err", loadErr)
 		// A load failure is a server error, not a zero-match: finalise the
 		// run as failed so it does not stay 'pending' forever.
-		if ferr := c.store.FinalizeRunToFailed(ctx, runID); ferr != nil {
+		if _, ferr := c.store.FinalizeRunToFailed(ctx, runID); ferr != nil {
 			c.log.Warn("failed to finalise push run after job creation error",
 				"run", runID, "err", ferr)
 		}
@@ -386,7 +386,7 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 		c.log.Warn("job creation failed for PR run", "run", runID, "err", loadErr)
 		// A load failure is a server error, not a zero-match: finalise the
 		// run as failed so it does not stay pending forever.
-		if ferr := c.store.FinalizeRunToFailed(ctx, runID); ferr != nil {
+		if _, ferr := c.store.FinalizeRunToFailed(ctx, runID); ferr != nil {
 			c.log.Error("controller: failed to finalise PR run after job creation error",
 				"run", runID, "err", ferr)
 		}
@@ -532,7 +532,7 @@ func (c *Controller) rerun(fullName, sha, source string) error {
 		prAction, orig.IsFork, cloneURL, checkoutRef, gateRerun)
 	if loadErr != nil {
 		c.log.Warn("job creation failed for re-run", "run", runID, "err", loadErr)
-		if ferr := c.store.FinalizeRunToFailed(ctx, runID); ferr != nil {
+		if _, ferr := c.store.FinalizeRunToFailed(ctx, runID); ferr != nil {
 			c.log.Warn("controller: failed to finalise re-run after job creation error",
 				"run", runID, "err", ferr)
 		}
@@ -1062,7 +1062,7 @@ func (c *Controller) dispatchAfterGate(runID uuid.UUID, state approvalgates.Gate
 	case approvalgates.GateApproved:
 		if err := c.store.PromoteTopLevelJobs(ctx, runID); err != nil {
 			c.log.Error("approvalgates: PromoteTopLevelJobs failed after approval", "run", runID, "err", err)
-			if ferr2 := c.store.FinalizeRunToFailed(ctx, runID); ferr2 != nil {
+			if _, ferr2 := c.store.FinalizeRunToFailed(ctx, runID); ferr2 != nil {
 				c.log.Warn("approvalgates: FinalizeRunToFailed after PromoteTopLevelJobs failure",
 					"run", runID, "err", ferr2)
 			}
@@ -1086,14 +1086,19 @@ func (c *Controller) dispatchAfterGate(runID uuid.UUID, state approvalgates.Gate
 		if err := c.store.FailAllJobs(ctx, runID, reason); err != nil {
 			c.log.Error("approvalgates: FailAllJobs failed", "run", runID, "err", err)
 		}
-		if err := c.store.FinalizeRunToFailed(ctx, runID); err != nil {
-			c.log.Error("approvalgates: FinalizeRunToFailed failed", "run", runID, "err", err)
+		moved, ferr := c.store.FinalizeRunToFailed(ctx, runID)
+		if ferr != nil {
+			c.log.Error("approvalgates: FinalizeRunToFailed failed", "run", runID, "err", ferr)
 		}
-		// CIC-182 N4: release the backpressure slot and report the
-		// check as cancelled, otherwise the slot leaks forever and
-		// the forge check stays in_progress.
-		c.ReleaseRun(runID)
-		c.reportFailed(ctx, runID)
+		// CIC-208 F1: only release the back-pressure slot and
+		// report the forge check as failed when we actually moved
+		// the row. A run already cancelled by CancelGate has
+		// status="cancelled", so FinalizeRunToFailed returns (false, nil)
+		// and these side effects are correctly skipped.
+		if moved {
+			c.ReleaseRun(runID)
+			c.reportFailed(ctx, runID)
+		}
 	}
 }
 

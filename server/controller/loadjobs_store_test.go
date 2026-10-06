@@ -252,8 +252,12 @@ func TestFinalizeRunToFailed(t *testing.T) {
 	}
 
 	// Flip to failed.
-	if err := st.FinalizeRunToFailed(ctx, runID); err != nil {
-		t.Fatalf("FinalizeRunToFailed: %v", err)
+	moved, ferr := st.FinalizeRunToFailed(ctx, runID)
+	if ferr != nil {
+		t.Fatalf("FinalizeRunToFailed: %v", ferr)
+	}
+	if !moved {
+		t.Fatalf("FinalizeRunToFailed should return moved=true for pending run")
 	}
 
 	// Verify.
@@ -265,9 +269,13 @@ func TestFinalizeRunToFailed(t *testing.T) {
 		t.Fatalf("status = %q, want failed", run.Status)
 	}
 
-	// Idempotent: second call should be a no-op.
-	if err := st.FinalizeRunToFailed(ctx, runID); err != nil {
-		t.Fatalf("second FinalizeRunToFailed: %v", err)
+	// Idempotent: second call should be a no-op and return moved=false.
+	moved2, ferr := st.FinalizeRunToFailed(ctx, runID)
+	if ferr != nil {
+		t.Fatalf("second FinalizeRunToFailed: %v", ferr)
+	}
+	if moved2 {
+		t.Fatalf("second FinalizeRunToFailed should return moved=false, got true")
 	}
 	// Status should still be 'failed'.
 	run, err = st.GetRun(ctx, runID)

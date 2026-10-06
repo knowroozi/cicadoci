@@ -151,18 +151,18 @@ func (s *Store) FinalizeRunToSucceeded(ctx context.Context, runID uuid.UUID) err
 // matched the event but its jobs could not be created
 // (e.g., DAG build failure, validation failure, job insert error).
 // It is a no-op when the run is already in a non-pending state.
-func (s *Store) FinalizeRunToFailed(ctx context.Context, runID uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `
+func (s *Store) FinalizeRunToFailed(ctx context.Context, runID uuid.UUID) (bool, error) {
+	res, err := s.pool.Exec(ctx, `
         UPDATE runs
         SET status        = 'failed',
-            finished_at   = now()
-        WHERE id          = $1
-        AND status        = 'pending'
-     `, runID)
+            finished_at    = now()
+        WHERE id             = $1
+        AND status          = 'pending'
+       `, runID)
 	if err != nil {
-		return fmt.Errorf("FinalizeRunToFailed: %w", err)
+		return false, fmt.Errorf("FinalizeRunToFailed: %w", err)
 	}
-	return nil
+	return res.RowsAffected() > 0, nil
 }
 
 // ── Job spec for creation ───────────────────────────────────────────────────────

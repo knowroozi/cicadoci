@@ -134,6 +134,11 @@ const ReasonApprovalTimedOut = "approval timed out"
 // that a restart would otherwise produce (CIC-204 B1).
 const ReasonShutdownDrain = "abandoned: server shutdown"
 
+// ReasonRunCancelled is the terminal reason a still-pending gate that
+// belongs to a cancelled run is moved to GateTimedOut. CIC-208 F2:
+// the cancel-side close must not read as a timeout.
+const ReasonRunCancelled = "cancelled: run cancelled"
+
 // NewManager creates a gate manager.
 func NewManager(provider chat.ChatProvider, onResolved func(runID string, state GateState, reason string)) *Manager {
 	return &Manager{
@@ -526,4 +531,17 @@ func (s GateState) String() string {
 	default:
 		return fmt.Sprintf("GateState(%d)", int(s))
 	}
+}
+
+// CancelGate closes a still-pending gate for a run that has been cancelled.
+// It is the cancel-side counterpart to CloseAll (load-failure/shutdown):
+// the ticket is CIC-208 — a cancellation must not leave a dangling gate
+// record (timer + map entry) that nobody resolves.
+//
+// It delegates to CloseAll, which already handles the terminal transition,
+// provider-side button close, and onResolved signal. The distinct name
+// documents intent at the call site: when a run is cancelled, its gate
+// must be closed, even if no one resolved it.
+func (m *Manager) CancelGate(runID string) {
+	m.closeOne(runID, ReasonRunCancelled)
 }

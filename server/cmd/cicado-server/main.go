@@ -454,6 +454,15 @@ func run() error {
 			// (gated/pending case); the active-job case is handled by
 			// advanceRun.
 			fireTerminal := func(_ context.Context, rid uuid.UUID) {
+				// CIC-208: close the open approval-gate record if one is
+				// pending, so a run cancel must not leave a dangling gate
+				// (timer + map entry) that nobody resolves. onResolved
+				// fires dispatchAfterGate, which is a no-op when the run
+				// is already terminated. Guarded by the outer apiWriteDeps
+				// block, so this is safe when approvalMgr is nil.
+				if approvalMgr != nil {
+					approvalMgr.CancelGate(rid.String())
+				}
 				ctrl.ReleaseRun(rid)
 				go func() {
 					ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
