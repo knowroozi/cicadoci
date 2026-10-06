@@ -1937,5 +1937,23 @@
     "prLinks": [
       "https://github.com/cicadoci/core/pull/143"
     ]
+  },
+  {
+    "identifier": "CIC-206",
+    "title": "Run-level cancel: POST /api/v1/runs/{id}/cancel, plus optional rerun with ActionRerun",
+    "description": "Follow-up to [CIC-194](https://linear.app/cicadoci/issue/CIC-194/no-operator-surface-to-set-secrets-or-cancelrerun-a-run-secretsput-and) (PR [cicadoci/core#143](https://linear.app/cicadoci/review/cic-194-operator-write-surface-secrets-putdelete-job-cancel-audited-637dae6b5767)), which ships job-level cancel only.\n\n**Scope**\n\n* Add `POST /api/v1/runs/{id}/cancel` that cancels every non-terminal job of a run. Needs a jobs-by-run listing in the store, which does not exist yet.\n* Optionally add rerun (`ActionRerun` audit event).\n* Same rules as [CIC-194](https://linear.app/cicadoci/issue/CIC-194/no-operator-surface-to-set-secrets-or-cancelrerun-a-run-secretsput-and): behind the existing auth + audit chain, fail-closed, no raw database errors to the client, audit row only when something actually changed (unknown or finished run must not write a false `ActionCancel` row).\n* CLI: `cicado run cancel \u003crunID\u003e`.\n\n**Out of scope for** [cicadoci/core#143](https://linear.app/cicadoci/review/cic-194-operator-write-surface-secrets-putdelete-job-cancel-audited-637dae6b5767) (Dwight review, 2026-10-06).",
+    "state": "completed",
+    "completedAt": "2026-10-06T12:30:10.696Z",
+    "createdAt": "2026-10-06T03:04:26.788Z",
+    "labels": [],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-206/run-level-cancel-post-apiv1runsidcancel-plus-optional-rerun-with",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/145"
+    ]
   }
 ]
