@@ -76,3 +76,15 @@ documented as a known gap.
 ## References
 - Linear: CIC-195, CIC-196
 - Related: CIC-191 (#136, client group kill), CIC-152 (`--entrypoint ""`)
+
+## CIC-210 — Multi-line env values
+
+`writeEnvFile` rejected values with embedded `\n`; the shell executor
+accepted them. Multi-line values (PEM/SSH bundles, X.509 certificates) are
+common secrets in CI/CD workflows but cannot be represented in a docker
+`--env-file`.
+
+Split path: single-line values use the existing `--env-file`; multi-line
+values are passed as `--env KEY=value` flags. The tradeoff (multi-line
+values visible in the docker CLI's argv) is documented and deliberate; see
+`docs/decisions/CIC-210-multiline-env.md`.

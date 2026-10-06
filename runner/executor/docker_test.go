@@ -112,7 +112,7 @@ func TestDockerRunArgsNetworkOff(t *testing.T) {
 		Image:   "alpine",
 		Command: []string{"sh", "-c", "true"},
 		// NetworkEnabled is false: the default-off posture.
-	}, "cicado-test", "")
+	}, "cicado-test", "", nil)
 	if !subsequence(off, "--network", "none") {
 		t.Errorf("network-off step was not run under --network none: %v", off)
 	}
@@ -121,7 +121,7 @@ func TestDockerRunArgsNetworkOff(t *testing.T) {
 		Image:          "alpine",
 		Command:        []string{"sh", "-c", "true"},
 		NetworkEnabled: true,
-	}, "cicado-test", "")
+	}, "cicado-test", "", nil)
 	if i := indexOf(on, "--network"); i >= 0 {
 		t.Errorf("network-enabled step forced a --network mode it should not have: %v", on[i:min(i+2, len(on))])
 	}
@@ -136,7 +136,7 @@ func TestDockerRunArgsShapes(t *testing.T) {
 		Image:   "alpine",
 		Command: []string{"/bin/sh", "-c", "echo hi"},
 		Env:     map[string]string{"ZED": "1", "ALPHA": "2"},
-	}, "cicado-test", "/tmp/secure-env-file")
+	}, "cicado-test", "/tmp/secure-env-file", nil)
 
 	if !subsequence(args, "run", "--rm") {
 		t.Errorf("expected leading 'run --rm', got %v", args)
@@ -173,7 +173,7 @@ func TestDockerRunArgsDisablesImageEntrypoint(t *testing.T) {
 	args := dockerRunArgs("/host/ws", Step{
 		Image:   "python", // a hypothetical image with ENTRYPOINT ["python"]
 		Command: []string{"/bin/sh", "-c", "echo build"},
-	}, "cicado-test", "")
+	}, "cicado-test", "", nil)
 
 	// --entrypoint must appear and its value must be the empty string, which is
 	// what disables the image's entrypoint.
@@ -372,7 +372,7 @@ func TestDockerRunArgs_NoSecretsInArgs(t *testing.T) {
 		Env:     map[string]string{"GIT_PASSWORD": "s3cr3t", "API_KEY": "abc123"},
 	}
 	envFile := "/tmp/.cicado-env-xyz/env"
-	args := dockerRunArgs("/host/ws", spec, "cicado-test1", envFile)
+	args := dockerRunArgs("/host/ws", spec, "cicado-test1", envFile, nil)
 
 	// No -e flags may appear.
 	for i, a := range args {
@@ -396,13 +396,36 @@ func TestDockerRunArgs_NoSecretsInArgs(t *testing.T) {
 	}
 }
 
+// TestDockerRunArgs_MultiLineNoSecretsInArgs verifies CIC-210 B1:
+// multi-line keys appear as --env K key only, never --env K=value.
+func TestDockerRunArgs_MultiLineNoSecretsInArgs(t *testing.T) {
+	spec := Step{
+		Image:   "golang:1.21",
+		Command: []string{"/bin/sh", "-c", "build"},
+		Env:     map[string]string{"GITHUB_TOKEN": "ghp_ABC\nmore"},
+	}
+	// No single-line values in the env file for this step.
+	args := dockerRunArgs("/host/ws", spec, "cicado-test1", "", []string{"GITHUB_TOKEN"})
+
+	// --env GITHUB_TOKEN must be present.
+	if !subsequence(args, "--env", "GITHUB_TOKEN") {
+		t.Errorf("expected --env GITHUB_TOKEN, got %v", args)
+	}
+	// Secret must not appear in any argument.
+	for _, a := range args {
+		if strings.Contains(a, "ghp_ABC") {
+			t.Errorf("secret in argv: %v", args)
+		}
+	}
+}
+
 // TestDockerRunArgsIncludesName pins CIC-195: --name is present and its
 // value is the provided container name argument.
 func TestDockerRunArgsIncludesName(t *testing.T) {
 	args := dockerRunArgs("/ws", Step{
 		Image:   "alpine",
 		Command: []string{"true"},
-	}, "cicado-42", "")
+	}, "cicado-42", "", nil)
 
 	i := indexOf(args, "--name")
 	if i < 0 || i+1 >= len(args) {
@@ -421,7 +444,7 @@ func TestWriteEnvFile_Basic(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := map[string]string{"FOO": "bar", "BAZ": "qux"}
-	path, cleanup, err := writeEnvFile(ws, env)
+	path, _, cleanup, err := writeEnvFile(ws, env)
 	if err != nil {
 		t.Fatalf("writeEnvFile: %v", err)
 	}
@@ -446,28 +469,138 @@ func TestWriteEnvFile_Basic(t *testing.T) {
 	}
 }
 
-// TestWriteEnvFile_RejectsNewlines verifies that a value with a newline
-// is rejected (security: prevents file injection).
-func TestWriteEnvFile_RejectsNewlines(t *testing.T) {
-	ws, _ := os.MkdirTemp("", "cicado-evf-test")
-	defer os.RemoveAll(ws)
-	env := map[string]string{"BAD": "line1\nLINE2"}
-	_, cleanup, err := writeEnvFile(ws, env)
-	if err == nil {
-		t.Fatal("expected error for newline in env value")
+// TestWriteEnvFile_MultiLineNoFile verifies that when all env values contain
+// a newline, no env file is created and all values are returned as --env args.
+func TestWriteEnvFile_MultiLineNoFile(t *testing.T) {
+	env := map[string]string{
+		"SSH_KEY": "---BEGIN---\nabc\n---END---",
+		"CERT":    "line1\nline2",
+	}
+	path, multiline, cleanup, err := writeEnvFile("", env)
+	if err != nil {
+		t.Fatalf("writeEnvFile: %v", err)
 	}
 	cleanup()
-	if _, err := os.Stat(ws); err == nil || !os.IsNotExist(err) {
-		// Best-effory cleanup on error
-		os.RemoveAll(ws)
+	if path != "" {
+		t.Errorf("expected empty env-file path when all values are multi-line, got %q", path)
 	}
+	if len(multiline) != 2 {
+		t.Fatalf("expected 2 --env args, got %d: %v", len(multiline), multiline)
+	}
+	// CIC-210 B1: multiline is a list of keys only; the value
+	// (with the newline) is appended to cmd.Env by the caller, not argv.
+	if len(multiline) != 2 || multiline[0] != "CERT" || multiline[1] != "SSH_KEY" {
+		t.Fatalf("expected [CERT SSH_KEY], got %v", multiline)
+	}
+	// No newline should appear in the key list.
+	for _, k := range multiline {
+		if containsNewline(k) {
+			t.Errorf("key %q should not contain a newline", k)
+		}
+	}
+}
+
+// TestWriteEnvFile_MixedSingleAndMulti verifies that single-line values go to
+// the env file and multi-line values are returned as --env args.
+func TestWriteEnvFile_MixedSingleAndMulti(t *testing.T) {
+	ws, _ := os.MkdirTemp("", "cicado-evf-mix")
+	defer os.RemoveAll(ws)
+	env := map[string]string{
+		"PLAIN":       "hello",
+		"MULTI":       "l1\nl2",
+		"MY_LIB_PATH": "/usr/bin",
+	}
+	path, multiline, cleanup, err := writeEnvFile(ws, env)
+	if err != nil {
+		t.Fatalf("writeEnvFile: %v", err)
+	}
+	defer cleanup()
+	if path == "" {
+		t.Fatal("expected a non-empty env-file path for single-line values")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read env file: %v", err)
+	}
+	// The env file must contain the single-line values.
+	for _, key := range []string{"PLAIN=hello", "MY_LIB_PATH=/usr/bin"} {
+		if !contains(string(content), key+"\n") {
+			t.Errorf("expected %q in env file, got:\n%s", key, content)
+		}
+	}
+	// The env file must NOT contain the multi-line key.
+	if contains(string(content), "MULTI=") {
+		t.Error("multi-line key MULTI should not appear in env file")
+	}
+	// Multiline returns exactly one --env arg.
+	// CIC-210 B1: multiline contains keys only; value appended to cmd.Env.
+	if len(multiline) != 1 || multiline[0] != "MULTI" {
+		t.Errorf("unexpected multiline args: %v", multiline)
+	}
+}
+
+// TestDockerRunArgs_MultiLineEnvEndToEnd verifies the full pipeline:
+// writeEnvFile returns the --env args and dockerRunArgs adds them.
+func TestDockerRunArgs_MultiLineEnvEndToEnd(t *testing.T) {
+	env := map[string]string{
+		"SSH_KEY": "key1\nkey2",
+	}
+	_, multiline, _, err := writeEnvFile("", env)
+	if err != nil {
+		t.Fatalf("writeEnvFile: %v", err)
+	}
+	args := dockerRunArgs("/ws", Step{
+		Image:   "alpine",
+		Command: []string{"sh", "-c", "true"},
+		Env:     env,
+	}, "cicado-ml", "", multiline)
+	// CIC-210 B1: --env K (key only, no value in argv).
+	// The value is appended to cmd.Env, not to docker argv.
+	if !subsequence(args, "--env", "SSH_KEY") {
+		t.Errorf("expected --env SSH_KEY in args, got %v", args)
+	}
+	// The value must NOT appear in the args.
+	for _, a := range args {
+		if len(a) > 10 && a[len(a)-10:] == "key1\nkey2" {
+			t.Errorf("multi-line value leaked into docker argv: %q", a)
+		}
+	}
+	// No --env-file should appear.
+	for i, a := range args {
+		if a == "--env-file" {
+			t.Errorf("unexpected --env-file at position %d: %v", i, args)
+		}
+	}
+}
+
+// contains reports whether needle appears in s.
+func contains(s, needle string) bool {
+	return len(s) >= len(needle) && indexOfStr(s, needle) >= 0
+}
+
+func indexOfStr(s, needle string) int {
+	for i := 0; i <= len(s)-len(needle); i++ {
+		if s[i:i+len(needle)] == needle {
+			return i
+		}
+	}
+	return -1
+}
+
+func containsNewline(s string) bool {
+	for _, c := range s {
+		if c == '\n' || c == '\r' {
+			return true
+		}
+	}
+	return false
 }
 
 // TestWriteEnvFile_NoEnv returns empty path and no-op cleanup for empty env.
 func TestWriteEnvFile_NoEnv(t *testing.T) {
 	ws := filepath.Join(t.TempDir(), "ws")
 	_ = os.Mkdir(ws, 0o700)
-	path, cleanup, err := writeEnvFile(ws, nil)
+	path, _, cleanup, err := writeEnvFile(ws, nil)
 	if err != nil {
 		t.Fatalf("writeEnvFile(nil): %v", err)
 	}
@@ -484,14 +617,14 @@ func TestDockerRunArgsWithEnvFile(t *testing.T) {
 
 	// with env
 	step := Step{Image: "alpine", Command: []string{"sh", "-c", "true"}}
-	args := dockerRunArgs(ws, step, "cicado-1", "/ws/.cicado-env-xyz/env")
+	args := dockerRunArgs(ws, step, "cicado-1", "/ws/.cicado-env-xyz/env", nil)
 	if !subsequence(args, "--env-file", "/ws/.cicado-env-xyz/env") {
 		t.Errorf("expected --env-file in args, got %v", args)
 	}
 
 	// without env
 	envStep := Step{Image: "alpine", Command: []string{"sh", "-c", "true"}}
-	args2 := dockerRunArgs(ws, envStep, "cicado-2", "")
+	args2 := dockerRunArgs(ws, envStep, "cicado-2", "", nil)
 	for _, a := range args2 {
 		if a == "--env-file" {
 			t.Errorf("expected no --env-file for empty path, got %v", args2)
@@ -504,7 +637,7 @@ func TestDockerRunArgsWithEnvFile(t *testing.T) {
 // and envFilePath is "", no --env-file flag is added.
 func TestDockerRunArgs_EmptyEnvNoEnvFile(t *testing.T) {
 	step := Step{Image: "alpine", Command: []string{"true"}}
-	args := dockerRunArgs("/ws", step, "cicado-0", "")
+	args := dockerRunArgs("/ws", step, "cicado-0", "", nil)
 	for _, a := range args {
 		if a == "--env-file" {
 			t.Errorf("no --env-file should be present for empty env, got %v", args)
@@ -544,7 +677,7 @@ func TestDockerRunStep_EnvVisibility(t *testing.T) {
 // temp dir it creates before validating is removed on the error path).
 func TestWriteEnvFile_RejectsNewlineKey(t *testing.T) {
 	env := map[string]string{"BAD\nKEY": "line1\nLINE2"}
-	path, cleanup, err := writeEnvFile("", env)
+	path, _, cleanup, err := writeEnvFile("", env)
 	if err == nil {
 		t.Fatal("writeEnvFile: expected error for newline in key, got nil")
 	}
@@ -581,5 +714,125 @@ func TestIsValidEnvKey(t *testing.T) {
 		if got != c.want {
 			t.Errorf("isValidEnvKey(%q) = %t; want %t", c.key, got, c.want)
 		}
+	}
+}
+
+// TestCliEnvDeny verifies CIC-210 B2: denylisted CLI env var names are
+// never written to the docker --env-file, even when a step defines a
+// multi-line value.
+func TestCliEnvDeny(t *testing.T) {
+	denied := []string{
+		"DOCKER_HOST",
+		"DOCKER_CERT_PATH",
+		"HOME",
+		"XDG_CONFIG_HOME",
+		"PATH",
+		"TMPDIR",
+		"HTTP_PROXY",
+		"HTTPS_PROXY",
+		"SSL_CERT_FILE",
+	}
+	for _, k := range denied {
+		if !cliEnvDenied(k) {
+			t.Errorf("cliEnvDenied(%q) = false, want true", k)
+		}
+		// case-insensitive
+		if !cliEnvDenied(strings.ToUpper(k)) {
+			t.Errorf("cliEnvDenied(%q) = false, want true (upper)", strings.ToUpper(k))
+		}
+		// docker_* prefix
+		if !cliEnvDenied("DOCKER_foo") {
+			t.Errorf("cliEnvDenied(DOCKER_foo) = false, want true")
+		}
+	}
+}
+
+// TestCliEnvNotDenied verifies allowed keys are not denylisted.
+func TestCliEnvNotDenied(t *testing.T) {
+	allowed := []string{
+		"GITHUB_TOKEN",
+		"API_KEY",
+		"MY_SECRET",
+		"FOO_BAR",
+		"HOME_PATH", // not HOME
+	}
+	for _, k := range allowed {
+		if cliEnvDenied(k) {
+			t.Errorf("cliEnvDenied(%q) = true, want false", k)
+		}
+	}
+}
+
+// TestWriteEnvFile_DenylistKeys tests that denylisted multi-line keys are
+// rejected with an error (D1), single-line denylisted keys pass through,
+// and allowed keys (single+multi-line) behave correctly.
+func TestWriteEnvFile_DenylistKeys(t *testing.T) {
+	ws := filepath.Join(t.TempDir(), "ws")
+	if err := os.Mkdir(ws, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// D1: single-line denylisted keys are NOT intercepted — the value
+	// never reaches the host docker CLI env, so these are fine.
+	envSingle := map[string]string{
+		"HTTP_PROXY": "http://proxy.example:8080",
+		"PATH":       "/usr/local/bin",
+		"API_KEY":    "mysecret",
+		"FOO_BAR":    "OK",
+	}
+	envFilePath, multiline, cleanup, err := writeEnvFile(ws, envSingle)
+	if err != nil {
+		t.Fatal("single-line denylisted keys should not error:", err)
+	}
+	defer cleanup()
+
+	data, err := os.ReadFile(envFilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataStr := string(data)
+	for _, want := range []string{"HTTP_PROXY=http://proxy.example:8080", "API_KEY=mysecret", "FOO_BAR=OK"} {
+		if !strings.Contains(dataStr, want) {
+			t.Errorf("single-line key: expected %q in env file, got: %s", want, dataStr)
+		}
+	}
+	if len(multiline) != 0 {
+		t.Errorf("no multi-line keys expected, got: %v", multiline)
+	}
+
+	// D1: multi-line denylisted keys are rejected with an error.
+	for _, k := range []string{"HTTP_PROXY", "DOCKER_HOST", "XDG_CONFIG_HOME", "PATH", "TMPDIR"} {
+		envMulti := map[string]string{k: "val1\nval2", "API_KEY": "ok"}
+		_, _, c2, err := writeEnvFile(ws, envMulti)
+		if err == nil {
+			c2()
+			t.Errorf("multi-line denylisted key %q should have failed", k)
+		}
+	}
+
+	// D1: lower-case denylisted keys are also rejected (case-insensitive).
+	envLC := map[string]string{"http_proxy": "a\nb", "API_KEY": "ok"}
+	_, _, _, err = writeEnvFile(ws, envLC)
+	if err == nil {
+		t.Error("lower-case multi-line denylisted key should have failed")
+	}
+
+	// Allowed multi-line key flows through multiLineEnv.
+	envOK := map[string]string{"GITHUB_TOKEN": "ghp_\nline2", "API_KEY": "mysecret"}
+	envFilePath, multiLineEnv, cleanup, err := writeEnvFile(ws, envOK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	data, err = os.ReadFile(envFilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataStr = string(data)
+	if !strings.Contains(dataStr, "API_KEY=mysecret") {
+		t.Errorf("expected API_KEY in env file, got: %s", dataStr)
+	}
+	if len(multiLineEnv) != 1 || multiLineEnv[0] != "GITHUB_TOKEN" {
+		t.Errorf("expected GITHUB_TOKEN in multiLineEnv, got: %v", multiLineEnv)
 	}
 }

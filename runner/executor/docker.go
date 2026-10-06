@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -133,8 +134,9 @@ func (d *Docker) Workspace() string {
 // RunStep runs one step in a fresh container, streaming output to sink as it
 // arrives. See the type doc for the fresh-per-step / shared-workspace model
 // and the CIC-195 follow-up on killing the container on cancel.
-// CIC-195 B4 + CIC-196 B1: step env via --env-file in an OS temp dir;
-// the docker client's own env stays at os.Environ().
+// CIC-195 B4 + CIC-196 B1/CIC-210 B1: step env via --env-file in an
+// OS temp dir; multi-line env keys go through --env K (key only, B1)
+// appended to cmd.Env so they never enter docker's CLI argv.
 func (d *Docker) RunStep(ctx context.Context, step Step, sink OutputSink) (Result, error) {
 	if len(step.Command) == 0 {
 		return Result{}, errors.New("docker: step has no command")
@@ -159,16 +161,21 @@ func (d *Docker) RunStep(ctx context.Context, step Step, sink OutputSink) (Resul
 	d.mu.Unlock()
 
 	cName := d.containerName(jobID)
-	envFilePath, cancelEnvFile, err := writeEnvFile("", step.Env)
+	envFilePath, multilineEnv, cancelEnvFile, err := writeEnvFile("", step.Env)
 	if err != nil {
 		return Result{}, fmt.Errorf("docker: env-file: %w", err)
 	}
 	defer cancelEnvFile()
 
-	args := dockerRunArgs(d.Workspace(), step, cName, envFilePath)
+	args := dockerRunArgs(d.Workspace(), step, cName, envFilePath, multilineEnv)
 	//nolint:gosec // Building the run from a workflow's own fields is this package's job.
 	cmd := exec.CommandContext(stepCtx, dockerBin, args...)
 	cmd.Env = os.Environ()
+	// CIC-210 B1: append multi-line env values to cmd.Env so they
+	// are in the child process environment, not in docker argv.
+	for _, k := range multilineEnv {
+		cmd.Env = append(cmd.Env, k+"="+step.Env[k])
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
@@ -253,20 +260,52 @@ func (d *Docker) Cleanup(_ context.Context) error {
 	return nil
 }
 
-// writeEnvFile writes step.Env to a 0600 env file in a fresh 0700 dir under the
-// OS temp dir — not the workspace — so it cannot be globbed or archived as an
-// artifact (S2). Keys are validated by isValidEnvKey and values with a newline
-// are rejected; both are defenses against a step steering a runner-host variable
-// into the container. CIC-196 B1/C1. The workspace argument is accepted for
-// call-site symmetry with the executor but is intentionally unused.
-func writeEnvFile(_ string, env map[string]string) (string, func(), error) {
+// cliEnvDenylist: env keys that the docker CLI itself reads before
+// executing docker run (config dir, credential helpers, daemon
+// address, proxies, CA paths). A step-supplied multi-line value
+// for one of these would enter the host CLI's env via cmd.Env and
+// override the operator's authoritative value. writeEnvFile
+// rejects multi-line denylisted keys with an error; single-line
+// values pass through the env file untouched.
+// Case-insensitive; DOCKER_* prefix matches.
+var cliEnvDenylist = map[string]bool{
+	"HOME":            true,
+	"XDG_CONFIG_HOME": true,
+	"PATH":            true,
+	"TMPDIR":          true,
+	"HTTP_PROXY":      true,
+	"HTTPS_PROXY":     true,
+	"NO_PROXY":        true,
+	"ALL_PROXY":       true,
+	"SSL_CERT_FILE":   true,
+	"SSL_CERT_DIR":    true,
+}
+
+// cliEnvDenied reports whether k matches the CLI env denylist.
+func cliEnvDenied(k string) bool {
+	upper := strings.ToUpper(k)
+	if _, ok := cliEnvDenylist[upper]; ok {
+		return true
+	}
+	return strings.HasPrefix(upper, "DOCKER_")
+}
+
+// writeEnvFile writes single-line step.Env values to a 0600 env file in a fresh
+// 0700 dir under the OS temp dir so they are not visible in the docker client's
+// process listing (CIC-196 B1). Multi-line values (PEM/SSH key/ certificate
+// blobs) cannot be represented in a Docker --env-file record; they are returned
+// as keys only — the caller emits --env K (no value in argv, so 'ps' cannot
+// expose the secret) and appends K=value to cmd.Env after os.Environ()
+// (CIC-210 B1).
+func writeEnvFile(_ string, env map[string]string) (string, []string, func(), error) {
+	empty := func() (string, []string, func(), error) { return "", nil, func() {}, nil }
 	if len(env) == 0 {
-		return "", func() {}, nil
+		return empty()
 	}
 	// S2: a 0600 file in a 0700 dir under the OS temp dir, outside the workspace.
 	dir, err := os.MkdirTemp("", "cicado-env-")
 	if err != nil {
-		return "", func() {}, fmt.Errorf("create env dir: %w", err)
+		return "", nil, func() {}, fmt.Errorf("create env dir: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
 	keys := make([]string, 0, len(env))
@@ -275,27 +314,53 @@ func writeEnvFile(_ string, env map[string]string) (string, func(), error) {
 	}
 	sort.Strings(keys)
 	var buf []byte
+	var multiline []string
 	for _, k := range keys {
 		if !isValidEnvKey(k) {
 			cleanup()
-			return "", func() {}, fmt.Errorf("invalid env key %q", k)
+			return "", nil, func() {}, fmt.Errorf("invalid env key %q", k)
 		}
 		v := env[k]
 		if containsNL(v) {
-			cleanup()
-			return "", func() {}, fmt.Errorf("env value for %q contains a newline", k)
+			// D1: denylist multi-line values only — a single-line
+			// HTTP_PROXY/PATH/DOCKER_BUILDKIT is a legitimate env
+			// var the operator set; only multi-line denylisted
+			// keys are rejected (error, not skip).
+			if cliEnvDenied(k) {
+				err := fmt.Errorf("denylisted multi-line env key %q", k)
+				cleanup()
+				return "", nil, func() {}, err
+			}
+			// --env-file is one record per line; a literal newline in v
+			// would truncate the record. For these keys the value is
+			// not written to the env file; only the key goes on the
+			// command line as `--env K`, and the value reaches the
+			// docker CLI via cmd.Env (see the multiline handling below).
+			multiline = append(multiline, k)
+			continue
 		}
 		buf = append(buf, []byte(k+"="+v+"\n")...)
+	}
+	if len(buf) == 0 {
+		// All values were multi-line; drop the empty temp dir.
+		cleanup()
+		return "", multiline, func() {}, nil
 	}
 	path := filepath.Join(dir, "env")
 	if err := os.WriteFile(path, buf, 0o600); err != nil {
 		cleanup()
-		return "", func() {}, fmt.Errorf("write env file: %w", err)
+		return "", nil, func() {}, fmt.Errorf("write env file: %w", err)
 	}
-	return path, cleanup, nil
+	return path, multiline, cleanup, nil
 }
 
-// containsNL returns true if s has a newline or carriage return.
+// containsNL reports whether s contains a newline or carriage-return
+// character. Used by writeEnvFile to route multi-line values past the
+// --env-file limitation.
+//
+// CIC-210 B2: denylisted keys are rejected only when their value
+// is multi-line; a single-line denylisted key (e.g. HTTP_PROXY)
+// is a legitimate env var and passes through the env file.
 func containsNL(s string) bool {
 	for _, c := range s {
 		if c == '\n' || c == '\r' {
@@ -347,7 +412,7 @@ func isValidEnvKey(s string) bool {
 // CIC-196 B1: the step's env is passed via --env-file rather than as repeated
 // -e KEY=VALUE flags that would be visible in the docker client's argv;
 // containerName is globally unique (CIC-195 B4, atomic counter).
-func dockerRunArgs(workspace string, step Step, containerName string, envFilePath string) []string {
+func dockerRunArgs(workspace string, step Step, containerName string, envFilePath string, multilineEnv []string) []string {
 	// --rm tears the container down when the step exits, so we never accumulate
 	// them on the host.
 	args := []string{"run", "--rm", "--name", containerName}
@@ -370,6 +435,13 @@ func dockerRunArgs(workspace string, step Step, containerName string, envFilePat
 	// owns — instead of -e flags, but only when there is env to inject.
 	if envFilePath != "" {
 		args = append(args, "--env-file", envFilePath)
+	}
+	// Multi-line env values cannot go in an --env-file.
+	// CIC-210 B1: emit --env K (key only, no value in argv) so the
+	// multi-line secret is not visible in 'ps'; the caller appends
+	// K=value to cmd.Env after os.Environ().
+	for _, k := range multilineEnv {
+		args = append(args, "--env", k)
 	}
 
 	// --entrypoint "" disables the image's ENTRYPOINT so the step's command runs
