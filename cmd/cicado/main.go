@@ -53,6 +53,10 @@ func run(args []string) error {
 	switch args[0] {
 	case "validate":
 		return cmdValidate(args[1:])
+	case "secrets":
+		return cmdSecrets(args[1:])
+	case "run":
+		return cmdRun(args[1:])
 	case "--help", "-h", "help":
 		usage(os.Stdout)
 		return nil
@@ -71,6 +75,14 @@ Usage:
 Commands:
   validate <file> [--] [<more files>]
       Parse and structurally validate CICaDo workflow YAML files.
+  secrets set --org O --repo R --name N --value V   (or --value-stdin)
+      Store a repo- or org-scoped secret on the server (CIC-194).
+  secrets delete --org O --repo R --name N
+      Delete a secret from the server.
+  run cancel [--reason R] <jobID>
+      Request cancellation of a job on its runner (flags precede the job id).
+  Each operator command takes --server URL and --token T (or env
+  CICADO_SERVER / CICADO_API_TOKEN).
   help
       Show this message.
 `)

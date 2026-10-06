@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"cicadoci.com/cicado/server/api"
 	"cicadoci.com/cicado/server/approvalgates"
 	"cicadoci.com/cicado/server/audit"
 )
@@ -317,5 +318,36 @@ func TestGateAuditEntry(t *testing.T) {
 		if e.Reason != "gate "+tc.state.String() {
 			t.Errorf("gateAuditEntry(%v).Reason = %q", tc.state, e.Reason)
 		}
+	}
+}
+
+// TestApiAuthOpts pins CIC-194 S1: the operator write surface is armed ONLY
+// when a token is present, so an --insecure-api (tokenless) server exposes no
+// write routes at all, whereas a token present adds exactly the two options
+// (WithWriteDeps + WithAPIToken), and in that order. Extracted from run() as
+// apiAuthOpts (R4) so the two branches are table-tested and cannot drift.
+func TestApiAuthOpts(t *testing.T) {
+	cases := []struct {
+		name    string
+		token   string
+		deps    api.WriteDeps
+		wantLen int
+	}{
+		{name: "no token -> no options (insecure-api: no write surface)", token: "", wantLen: 0},
+		{name: "token -> write deps + token options", token: "secret-token", deps: api.WriteDeps{}, wantLen: 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := apiAuthOpts(c.token, c.deps)
+			if len(got) != c.wantLen {
+				t.Fatalf("apiAuthOpts(%q) returned %d options, want %d", c.token, len(got), c.wantLen)
+			}
+			// A token path must arm BOTH the write-deps route and its bearer
+			// gate -- a write route without the token would be an open operator
+			// surface, the exact hole S1 closes.
+			if c.wantLen > 0 && len(got) != 2 {
+				t.Errorf("token path expected exactly 2 options (write deps + token), got %d", len(got))
+			}
+		})
 	}
 }

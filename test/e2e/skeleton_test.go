@@ -10,10 +10,15 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -30,6 +35,8 @@ import (
 	"cicadoci.com/cicado/internal/testdb"
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
 	"cicadoci.com/cicado/runner"
+	"cicadoci.com/cicado/server/api"
+	"cicadoci.com/cicado/server/audit"
 	"cicadoci.com/cicado/server/auth"
 	"cicadoci.com/cicado/server/dispatch"
 	"cicadoci.com/cicado/server/queue"
@@ -104,6 +111,88 @@ func startServerWithSecrets(t *testing.T, ctx context.Context, secretStore secre
 		addr:       listener.Addr().String(),
 		log:        log,
 	}
+}
+
+// startWriteSurface stands up the CIC-194 operator write surface (secrets
+// PUT/DELETE/LIST + job cancel) over HTTP against the SAME store, queue, and
+// secret store the harness runs, gated by a real operator API token (S1: the
+// write routes are armed only with a token). It returns the base URL, the
+// operator token, and a fresh Postgres audit log so a test can assert the
+// write-surface audit rows (secret.put / cancel) and that a secret value never
+// reaches an audit subject_id.
+func startWriteSurface(t *testing.T, st *store.Store, q *queue.Postgres, secretStore secrets.Store) (*httptest.Server, string, *audit.PostgresLog) {
+	t.Helper()
+	token := "e2e-operator-token"
+	au := audit.NewPostgresLog(st.Pool())
+	h := api.New(st,
+		api.WithWriteDeps(api.WriteDeps{
+			SecretStore: secretStore,
+			Cancel:      q.RequestCancel,
+			Audit:       au,
+		}),
+		api.WithAPIToken(token),
+	)
+	return httptest.NewServer(h), token, au
+}
+
+// putSecretViaAPI issues the CIC-194 operator secret PUT through the real HTTP
+// write surface (not the in-process secrets.Store), so the round trip is the
+// production path: auth check, body decode, uuid validation, secrets.Put, audit.
+func putSecretViaAPI(t *testing.T, ws *httptest.Server, token string, ctx context.Context, org, repo uuid.UUID, name, value string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{
+		"org_id": org.String(), "repo_id": repo.String(), "name": name, "value": value,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ws.URL+"/api/v1/secrets", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build put request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("secret put via API: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("secret put via API status=%d body=%s", resp.StatusCode, b)
+	}
+}
+
+// cancelJobViaAPI issues the CIC-194 operator job-cancel through the real HTTP
+// write surface.
+func cancelJobViaAPI(t *testing.T, ws *httptest.Server, token string, ctx context.Context, jobID uuid.UUID, reason string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"reason": reason})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		ws.URL+"/api/v1/jobs/"+jobID.String()+"/cancel", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build cancel request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("job cancel via API: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("job cancel via API status=%d body=%s", resp.StatusCode, b)
+	}
+}
+
+// auditActionExists returns the subject_id + principal_id of the newest
+// write-surface audit row matching action and time >= since, or ""/""/false
+// when none exists yet. Occurrence timing is checked by the caller via since.
+func auditActionExists(ctx context.Context, pool *pgxpool.Pool, action string, since time.Time) (subjectID, principalID string, ok bool) {
+	err := pool.QueryRow(ctx,
+		"SELECT coalesce(subject_id,''), coalesce(principal_id,'') "+
+			"FROM audit_events WHERE action = $1 AND occurred_at >= $2 "+
+			"ORDER BY id DESC LIMIT 1", action, since).Scan(&subjectID, &principalID)
+	if err != nil {
+		return "", "", false
+	}
+	return subjectID, principalID, true
 }
 
 // mintRegistrationToken creates an org and a registration token carrying labels.
@@ -557,16 +646,17 @@ func TestSecretDelivery(t *testing.T) {
 	}, withSecretEnv(`{"DEPLOY_TOKEN":"${{ secrets.DEPLOY_TOKEN }}"}`, "DEPLOY_TOKEN"))
 
 	// Store the secret before any runner exists, so it is in place when the
-	// job is claimed.
+	// job is claimed -- via the CIC-194 operator API route (T1), not an
+	// in-process Put call, so the acceptance exercises the real put path.
 	var orgID, repoID uuid.UUID
 	if err := h.store.Pool().QueryRow(ctx, `
 		SELECT r.org_id, r.id FROM jobs j JOIN runs ru ON ru.id = j.run_id
 		  JOIN repos r ON r.id = ru.repo_id WHERE j.id = $1`, jobID).Scan(&orgID, &repoID); err != nil {
 		t.Fatalf("find repo: %v", err)
 	}
-	if err := secretStore.Put(ctx, orgID.String(), repoID.String(), "DEPLOY_TOKEN", []byte(value), nil); err != nil {
-		t.Fatalf("put secret: %v", err)
-	}
+	ws, wtok, _ := startWriteSurface(t, h.store, h.queue, secretStore)
+	defer ws.Close()
+	putSecretViaAPI(t, ws, wtok, ctx, orgID, repoID, "DEPLOY_TOKEN", value)
 
 	h.startRunner(t, ctx, regToken)
 
@@ -582,6 +672,83 @@ func TestSecretDelivery(t *testing.T) {
 	}
 	if strings.Contains(logs, value) {
 		t.Errorf("secret value reached the stored logs unmasked:\n%s", logs)
+	}
+}
+
+// TestOperatorWriteSurfaceE2E is the CIC-194 T1 acceptance: an operator writes
+// a secret AND cancels a running job through the real HTTP write surface, each
+// audited. It pins the write surface end to end: the API routes, the audit rows
+// with the operator principal, and the credential never reaching the audit
+// subject_id. Delivery + log masking of an API-PUT secret is proven by
+// TestSecretDelivery (which now PUTs through the API route); this test focuses
+// on the audit-row invariant for both writes, so it cancels a separate long
+// job and never awaits that job's logs (a cancelled step does not terminalize
+// its logs, so awaiting them on the cancelled job would race).
+func TestOperatorWriteSurfaceE2E(t *testing.T) {
+	if testing.Short() {
+		t.Skip("needs a database and spawns processes")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	secretStore := secrets.NewMemory(key)
+
+	h := startServerWithSecrets(t, ctx, secretStore)
+	regToken := h.mintRegistrationToken(t, []string{"linux", "shell"})
+
+	ws, wtok, _ := startWriteSurface(t, h.store, h.queue, secretStore)
+	defer ws.Close()
+
+	// t0 guards the audit-time filter so the asserts see only this test's rows.
+	t0 := time.Now().Add(-time.Second)
+
+	// Part 1: PUT the operator secret THROUGH the API (not in-process), and
+	// assert the resulting audit row: right principal, right subject, no value.
+	long := h.seedJob(t, [][]string{{"sh", "-c", "sleep 30"}})
+	var orgID, repoID uuid.UUID
+	if err := h.store.Pool().QueryRow(ctx, `
+		SELECT r.org_id, r.id FROM jobs j JOIN runs ru ON ru.id = j.run_id
+		  JOIN repos r ON r.id = ru.repo_id WHERE j.id = $1`, long).Scan(&orgID, &repoID); err != nil {
+		t.Fatalf("find repo: %v", err)
+	}
+	putSecretViaAPI(t, ws, wtok, ctx, orgID, repoID, "DEPLOY_TOKEN", "s3cr3t-e2e-op")
+	if subj, princ, ok := auditActionExists(ctx, h.store.Pool(), "secret.put", t0); !ok {
+		t.Fatalf("no audit_events row for secret.put")
+	} else {
+		if princ != "api-operator" {
+			t.Errorf("secret.put principal = %q, want api-operator", princ)
+		}
+		if !strings.Contains(subj, "DEPLOY_TOKEN") || strings.Contains(subj, "s3cr3t-e2e-op") {
+			t.Errorf("secret.put subject = %q, want .../DEPLOY_TOKEN without the raw value", subj)
+		}
+	}
+
+	// Part 2: get the long job running, then cancel it THROUGH the API, and
+	// assert the audit row. The audit write is synchronous in the handler, so
+	// it is present the instant the request returns 200, independent of the
+	// runner's (heartbeat-timed) terminal transition.
+	h.startRunner(t, ctx, regToken)
+	awaitJobStatus(t, h.store.Pool(), long, 60*time.Second, "running")
+	cancelJobViaAPI(t, ws, wtok, ctx, long, "operator stop via API")
+	// The audit write is synchronous in the handler, so it is present the
+	// instant the request returns 200, independent of the runner's terminal
+	// transition. R2: additionally await the terminal 'cancelled' status the
+	// heartbeat-driven runner reports, proving the cancel actually took effect.
+	awaitJobStatus(t, h.store.Pool(), long, 60*time.Second, "cancelled")
+	if subj, princ, ok := auditActionExists(ctx, h.store.Pool(), "cancel", t0); !ok {
+		t.Fatalf("no audit_events row for cancel")
+	} else {
+		if princ != "api-operator" {
+			t.Errorf("cancel principal = %q, want api-operator", princ)
+		}
+		if subj != long.String() {
+			t.Errorf("cancel subject = %q, want the cancelled job id %s", subj, long)
+		}
 	}
 }
 

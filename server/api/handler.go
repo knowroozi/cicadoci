@@ -40,6 +40,7 @@ type Handler struct {
 	auth            authenticator
 	webhookReceiver *webhook.Receiver // M3 webhook receiver; nil until WithWebhookReceiver opts it in
 	sseHandler      http.Handler      // per-job live log stream (CIC-82); nil until WithSSEHandler opts it in
+	writes          WriteDeps         // CIC-194 operator write surface; zero == no write routes
 
 	handler http.Handler // pre-composed middleware chain, assembled once at startup and frozen in place after that point.
 }
@@ -53,6 +54,7 @@ type options struct {
 	auth            authenticator
 	webhookReceiver *webhook.Receiver
 	sseHandler      http.Handler
+	writes          WriteDeps // CIC-194 operator write surface; zero == no write routes
 }
 
 func WithLogger(l *slog.Logger) Option         { return func(o *options) { o.logger = l } }
@@ -134,7 +136,7 @@ func New(r store.Reader, opts ...Option) *Handler {
 		o.logger = slog.Default()
 	}
 
-	h := &Handler{reader: r, logger: o.logger, auth: o.auth, webhookReceiver: o.webhookReceiver, sseHandler: o.sseHandler}
+	h := &Handler{reader: r, logger: o.logger, auth: o.auth, webhookReceiver: o.webhookReceiver, sseHandler: o.sseHandler, writes: o.writes}
 	mux := h.buildMux()
 	h.handler = buildChain(h, mux, o.timeout)
 	if o.sseHandler != nil {
@@ -168,6 +170,21 @@ func (h *Handler) buildMux() http.Handler {
 	mux.HandleFunc("GET /api/v1/runs/{id}", h.getRun)
 	mux.HandleFunc("GET /api/v1/runners", h.listRunners)
 	mux.HandleFunc("POST /api/v1/validate", h.handleValidate)
+
+	// CIC-194 operator write surface. Each route is registered only when its
+	// capability is wired, so a server without a secrets key or a cancel path
+	// never exposes a broken write route (fail-closed by absence). These routes
+	// flow through the same auth + per-request-timeout chain as every other
+	// /api/v1 route; the write handlers additionally self-audit via h.auditWrite
+	// (a separate handler-level seam, not a layer of this chain).
+	if h.writes.SecretStore != nil {
+		mux.HandleFunc("POST /api/v1/secrets", h.handlePutSecret)
+		mux.HandleFunc("DELETE /api/v1/secrets", h.handleDeleteSecret)
+		mux.HandleFunc("GET /api/v1/secrets", h.handleListSecrets)
+	}
+	if h.writes.Cancel != nil {
+		mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", h.handleCancelJob)
+	}
 
 	// Webhook receiver (M3).  Registered here, not as a middleware, because
 	// it is wired in via WithWebhookReceiver and lives outside this builder's scope.

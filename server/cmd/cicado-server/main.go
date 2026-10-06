@@ -439,9 +439,14 @@ func run() error {
 		api.WithWebhookReceiver(webhookReceiver),
 		api.WithSSEHandler(sse),
 	}
-	if *apiToken != "" {
-		apiOpts = append(apiOpts, api.WithAPIToken(*apiToken))
-	}
+	// CIC-150 B4 + CIC-194 S1: the operator write surface (secrets
+	// PUT/DELETE + job cancel) is armed ONLY when a real token is present,
+	// via apiAuthOpts (extracted so it is table-tested on both branches).
+	apiOpts = append(apiOpts, apiAuthOpts(*apiToken, api.WriteDeps{
+		SecretStore: secretsStore,
+		Cancel:      q.RequestCancel,
+		Audit:       auditLog,
+	})...)
 
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
@@ -635,6 +640,23 @@ func apiStartupGuard(apiToken string, insecureAPI bool) error {
 			"(fail-open; for local development only)")
 	}
 	return nil
+}
+
+// apiAuthOpts builds the token-authenticated option set for the API server and
+// is the single place CIC-194 S1 is enforced: the operator write surface
+// (secrets PUT/DELETE + job cancel) is armed ONLY when a real token is present.
+// An --insecure-api server (no token) therefore gets no write routes at all, so
+// the credential-less operator surface never exists. A token present returns the
+// write-deps option plus the token authenticator, in that order. Extracted from
+// run() so both branches are table-tested (TestApiAuthOpts, R4).
+func apiAuthOpts(apiToken string, deps api.WriteDeps) []api.Option {
+	if apiToken == "" {
+		return nil
+	}
+	return []api.Option{
+		api.WithWriteDeps(deps),
+		api.WithAPIToken(apiToken),
+	}
 }
 
 // envInt64Or resolves a flag value with a CICADO_* env-var fallback.
