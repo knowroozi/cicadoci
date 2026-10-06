@@ -1,0 +1,83 @@
+name: Linear Done Log
+
+on:
+  schedule:
+     - cron: '0 2 * * *' # daily at 02:00 UTC
+  workflow_dispatch:
+
+jobs:
+  update-log:
+    runs-on: ubuntu-latest
+    # Top-level permissions: only write to repository contents.
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: linear-done-log
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run linear-done-log script
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          go run ./scripts/linear-done-log/main.go
+
+      - name: Commit changes if any
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet docs/linear-done-log.json; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No changes to commit"
+          else
+            git add docs/linear-done-log.json
+            git commit -m "chore: update Linear Done log"
+            # H1: --force-with-lease instead of --force. The automation branch is
+            # owned by this workflow, but a plain --force would clobber a manual
+            # push; --force-with-lease fails if the remote ref moved so we do not
+            # silently lose commits.
+            git push origin HEAD:automation/linear-done-log \
+              --force-with-lease=automation/linear-done-log
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure exactly one PR exists (W1/R1)
+        if: steps.commit.outputs.changed == 'true'
+        run: |
+          # W1: build the PR body from a real multi-line string instead of a
+          # literal "\n" (bash double-quotes do not expand \n). Writing to a file
+          # and using --body-file gives GitHub a correctly formatted body.
+          PR_TITLE="chore: Linear Done log ($(date -u +%Y-%m-%d))"
+          cat > /tmp/pr-body.md <<EOF
+          Regenerated daily by the linear-done-log workflow (GitHub Actions run ${{ github.run_id }}; run URL ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+          Data-only change: docs/linear-done-log.json was appended/deduped/sorted
+          from Linear's GraphQL API; owner-level descriptions preserved.
+          EOF
+          PR=$(gh pr list --base master --head automation/linear-done-log --json number --state open -q '.[0].number // empty')
+          if [ -z "$PR" ]; then
+            echo "Creating PR..."
+            gh pr create \
+              --title "$PR_TITLE" \
+              --base master \
+              --head automation/linear-done-log \
+              --body-file /tmp/pr-body.md
+          else
+            echo "PR #$PR already open; refreshing its body."
+            gh pr edit "$PR" --title "$PR_TITLE" --body-file /tmp/pr-body.md
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,16 @@
+[
+  {
+    "identifier": "CIC-001",
+    "title": "Sample done ticket",
+    "description": "A description",
+    "state": "Done",
+    "completedAt": "2026-09-30T12:00:00Z",
+    "createdAt": "2026-09-01T08:00:00Z",
+    "labels": ["backend"],
+    "priority": "high",
+    "assignee": "alice",
+    "project": "projA",
+    "url": "https://linear.app/issue/CIC-001",
+    "prLinks": []
+  }
+]
