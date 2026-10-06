@@ -169,3 +169,155 @@ func TestPostgresEmptyChain(t *testing.T) {
 		t.Fatalf("empty chain: %v", err)
 	}
 }
+
+// TestPostgresPrincipalFidelity pins the CIC-192 fix: a stored row must carry
+// the Entry's real principal_type, surface, and org_id, not the historical
+// hardcoded 'user'/'system' literals. Regression: a system-initiated event
+// (e.g. a gate timeout) was stored as principal_type='user', principal_id='system'.
+func TestPostgresPrincipalFidelity(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	db := testdb.New(t)
+	log := audit.NewPostgresLog(db.Pool())
+
+	// Seed a real org: org_id is a foreign key into orgs, so a non-empty
+	// OrgID must reference an existing org. The empty-OrgID case below still
+	// exercises the NULL path (NULLIF -> NULL) without a seed.
+	var org string
+	if err := db.Pool().QueryRow(ctx,
+		`INSERT INTO orgs (slug, name, created_at, updated_at)
+		VALUES ($1, $2, now(), now()) ON CONFLICT (slug) DO UPDATE SET updated_at = now() RETURNING id`,
+		"fidelity-org", "Fidelity Org").Scan(&org); err != nil {
+		t.Fatalf("seed org: %v", err)
+	}
+
+	// A system-initiated event must NOT be stored as user/system.
+	id, err := log.Append(ctx, audit.Entry{
+		Action:        audit.ActionGateTimeout,
+		Actor:         "gate-controller",
+		Target:        "run-42",
+		Reason:        "approval gate timed out",
+		PrincipalType: "system",
+		Surface:       "chat",
+		OrgID:         org,
+	})
+	if err != nil {
+		t.Fatalf("append system entry: %v", err)
+	}
+	got, err := log.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("get system entry: %v", err)
+	}
+	if got.Action != audit.ActionGateTimeout {
+		t.Errorf("action = %q; want %q", got.Action, audit.ActionGateTimeout)
+	}
+	if got.PrincipalType != "system" {
+		t.Errorf("principal_type = %q; want %q (CIC-192 bug: was 'user')", got.PrincipalType, "system")
+	}
+	if got.Surface != "chat" {
+		t.Errorf("surface = %q; want %q (CIC-192 bug: was 'system')", got.Surface, "chat")
+	}
+	if got.Actor != "gate-controller" {
+		t.Errorf("principal_id = %q; want gate-controller", got.Actor)
+	}
+	if got.OrgID != org {
+		t.Errorf("org_id = %q; want %q", got.OrgID, org)
+	}
+
+	// A runner principal surfaces distinctly from a user.
+	id2, err := log.Append(ctx, audit.Entry{
+		Action:        audit.ActionCreateRun,
+		Actor:         "runner:7",
+		Target:        "job-9",
+		Reason:        "job started",
+		PrincipalType: "runner",
+		Surface:       "mcp",
+	})
+	if err != nil {
+		t.Fatalf("append runner entry: %v", err)
+	}
+	got2, err := log.Get(ctx, id2)
+	if err != nil {
+		t.Fatalf("get runner entry: %v", err)
+	}
+	if got2.PrincipalType != "runner" {
+		t.Errorf("principal_type = %q; want runner", got2.PrincipalType)
+	}
+	if got2.Surface != "mcp" {
+		t.Errorf("surface = %q; want mcp", got2.Surface)
+	}
+	if got2.OrgID != "" {
+		t.Errorf("org_id = %q; want empty (stored as NULL)", got2.OrgID)
+	}
+
+	// An unset principal defaults to the historical literals.
+	id3, err := log.Append(ctx, audit.Entry{
+		Action: audit.ActionApprove,
+		Actor:  "alice",
+		Target: "job-1",
+		Reason: "no principal set",
+	})
+	if err != nil {
+		t.Fatalf("append default entry: %v", err)
+	}
+	got3, err := log.Get(ctx, id3)
+	if err != nil {
+		t.Fatalf("get default entry: %v", err)
+	}
+	if got3.PrincipalType != "user" {
+		t.Errorf("default principal_type = %q; want user", got3.PrincipalType)
+	}
+	if got3.Surface != "system" {
+		t.Errorf("default surface = %q; want system", got3.Surface)
+	}
+
+	// The hash chain must still verify: hashEntry is unchanged (stable), so the
+	// new fields do not affect the chain.
+	if err := log.VerifyChain(ctx); err != nil {
+		t.Errorf("verify chain after fidelity inserts: %v", err)
+	}
+}
+
+// TestPostgresPrincipalViaList confirms the new fields also round-trip through
+// the List read path, not just Get.
+func TestPostgresPrincipalViaList(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	db := testdb.New(t)
+	log := audit.NewPostgresLog(db.Pool())
+
+	_, err := log.Append(ctx, audit.Entry{
+		Action:        audit.ActionGateTimeout,
+		Actor:         "gate-controller",
+		Target:        "run-42",
+		Reason:        "resolved via chat",
+		PrincipalType: "agent",
+		Surface:       "chat",
+	})
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	entries, err := log.List(ctx, 0, 100)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var found *audit.Entry
+	for i := range entries {
+		if entries[i].Reason == "resolved via chat" {
+			found = &entries[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("appended entry not found in List result")
+	}
+	if found.Surface != "chat" {
+		t.Errorf("List surface = %q; want chat", found.Surface)
+	}
+	if found.PrincipalType != "agent" {
+		t.Errorf("List principal_type = %q; want agent", found.PrincipalType)
+	}
+	if found.Actor != "gate-controller" {
+		t.Errorf("List principal_id = %q; want gate-controller", found.Actor)
+	}
+}

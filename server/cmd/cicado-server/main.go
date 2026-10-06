@@ -767,20 +767,33 @@ func buildApprovalGates(ctx context.Context, enabled, noopAck bool, allowedCSV s
 // as "system".
 func gateAuditEntry(runID string, state approvalgates.GateState, actorID string) audit.Entry {
 	action := audit.ActionGateTimeout
+	// Principal + surface depend on the outcome: a human's approval or denial is a
+	// user acting over the chat surface; a timeout (and any future non-user
+	// terminal state) is a system event with no acting user. Keep these in sync
+	// with the per-state unit test TestGateAuditEntry.*.
+	principal, surface := audit.PrincipalSystem, audit.SurfaceSystem
 	switch state {
 	case approvalgates.GateApproved:
 		action = audit.ActionApprove
+		principal, surface = audit.PrincipalUser, audit.SurfaceChat
 	case approvalgates.GateDenied:
 		action = audit.ActionDeny
+		principal, surface = audit.PrincipalUser, audit.SurfaceChat
+	default:
+		// GateTimedOut and any future system-initiated terminal state.
 	}
 	actor := actorID
-	if actor == "" || state == approvalgates.GateTimedOut {
+	if principal == audit.PrincipalSystem || actor == "" {
+		// A timeout (and any system-initiated terminal) has no acting user, so the
+		// Actor column records "system" rather than a blank principal id.
 		actor = "system"
 	}
 	return audit.Entry{
-		Action: action,
-		Actor:  actor,
-		Target: runID,
-		Reason: "gate " + state.String(),
+		Action:        action,
+		Actor:         actor,
+		Target:        runID,
+		PrincipalType: principal,
+		Surface:       surface,
+		Reason:        "gate " + state.String(),
 	}
 }

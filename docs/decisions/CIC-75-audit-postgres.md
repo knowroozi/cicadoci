@@ -66,3 +66,11 @@ early.
 The call sites are CIC-08's responsibility (when CIC-71 wires
 main.go). This PR makes the chokepoint usable; CIC-08 wires the
 surfaces through it.
+
+### Follow-up: CIC-192
+
+CIC-192 (audit principal fidelity) extended `PostgresLog` to store a real
+`principal_type`, `surface`, and `org_id` rather than the hardcoded defaults,
+and -- following this document's stability-first precedent -- deliberately
+**kept `hashEntry` unchanged**, so the three new fields are stored but not
+tamper-evident. See `docs/decisions/CIC-192-audit-principal-fidelity.md`.

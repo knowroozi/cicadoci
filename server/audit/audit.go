@@ -39,6 +39,26 @@ const (
 	ActionSecretDelete Action = "secret.delete"
 )
 
+// Principal-type and surface labels, as valid in the audit_events CHECK sets
+// (see server/store/migrations/0001_init.sql). Named constants keep callers in
+// sync with those sets and avoid scattered magic strings.
+const (
+	// Principal labels (principal_type CHECK: user, runner, agent, token, system).
+	PrincipalUser   = "user"
+	PrincipalSystem = "system"
+	PrincipalRunner = "runner"
+	PrincipalAgent  = "agent"
+	PrincipalToken  = "token"
+
+	// Surface labels (surface CHECK: web, chat, mcp, api, forge, system).
+	SurfaceWeb    = "web"
+	SurfaceChat   = "chat"
+	SurfaceMCP    = "mcp"
+	SurfaceAPI    = "api"
+	SurfaceForge  = "forge"
+	SurfaceSystem = "system"
+)
+
 // Entry is a single audit log entry.
 type Entry struct {
 	// ID is a monotonic sequence number.
@@ -52,6 +72,33 @@ type Entry struct {
 
 	// Target is what the action was applied to.
 	Target string
+
+	// PrincipalType is the kind of principal that performed the action: one of
+	// user, runner, agent, token, or system (the audit_events.principal_type
+	// CHECK set). PostgresLog stores it verbatim; an empty value defaults to
+	// "user" — the historical default, so callers that do not set the field
+	// keep their previous behaviour.
+	//
+	// CIC-192: this field existed nowhere before, so the PostgresLog hardcoded
+	// 'user' for every row, and a system-initiated event (e.g. a gate timeout)
+	// was recorded as a user event. Callers must set it to reflect reality.
+	PrincipalType string
+
+	// OrgID is the UUID of the org the principal belongs to, or the empty
+	// string for "no org" (written as NULL by PostgresLog; the column is uuid
+	// with ON DELETE SET NULL). CIC-192: the column is already nullable, so
+	// leaving this unset preserves the previous (always-NULL) behaviour.
+	OrgID string
+
+	// Surface is the ingress surface that originated the action: one of web,
+	// chat, mcp, api, forge, system (the audit_events.surface CHECK set).
+	// PostgresLog stores it verbatim; an empty value defaults to "system" — the
+	// historical default.
+	//
+	// CIC-192: this field existed nowhere before, so the PostgresLog hardcoded
+	// 'system' for every row, and a chat- or api-originated event was recorded
+	// as a system event. Callers must set it to reflect the real surface.
+	Surface string
 
 	// Reason is a human-readable reason.
 	Reason string

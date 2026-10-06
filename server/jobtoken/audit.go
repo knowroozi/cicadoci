@@ -39,11 +39,13 @@ func NewAuditLog(l audit.Log, logger *slog.Logger) *AuditLog {
 
 func (a *AuditLog) Issue(ctx context.Context, t Token) error {
 	_, err := a.log.Append(ctx, audit.Entry{
-		Action:    "jobtoken.issue",
-		Actor:     t.Claims.Issuer,
-		Target:    fmt.Sprintf("run:%s job:%s", t.Claims.RunID, t.Claims.JobID),
-		Reason:    fmt.Sprintf("scopes=%v", t.Claims.Scopes),
-		Timestamp: t.IssuedAt,
+		Action:        "jobtoken.issue",
+		PrincipalType: audit.PrincipalSystem, // issuer mints the job token, a system action
+		Surface:       audit.SurfaceSystem,
+		Actor:         t.Claims.Issuer,
+		Target:        fmt.Sprintf("run:%s job:%s", t.Claims.RunID, t.Claims.JobID),
+		Reason:        fmt.Sprintf("scopes=%v", t.Claims.Scopes),
+		Timestamp:     t.IssuedAt,
 	})
 	if err != nil {
 		a.slog.Warn("jobtoken audit issue failed",
@@ -54,11 +56,13 @@ func (a *AuditLog) Issue(ctx context.Context, t Token) error {
 
 func (a *AuditLog) Use(ctx context.Context, t Token) error {
 	_, err := a.log.Append(ctx, audit.Entry{
-		Action:    "jobtoken.use",
-		Actor:     t.Claims.Issuer,
-		Target:    fmt.Sprintf("run:%s job:%s", t.Claims.RunID, t.Claims.JobID),
-		Reason:    "verify",
-		Timestamp: time.Now(),
+		Action:        "jobtoken.use",
+		PrincipalType: audit.PrincipalToken, // the exercising principal is the job's token itself
+		Surface:       audit.SurfaceSystem,
+		Actor:         t.ID.String(), // the token's own uuid, not the server-side Issuer
+		Target:        fmt.Sprintf("run:%s job:%s", t.Claims.RunID, t.Claims.JobID),
+		Reason:        "verify",
+		Timestamp:     time.Now(),
 	})
 	if err != nil {
 		a.slog.Warn("jobtoken audit use failed",
@@ -69,11 +73,13 @@ func (a *AuditLog) Use(ctx context.Context, t Token) error {
 
 func (a *AuditLog) Revoke(ctx context.Context, id uuid.UUID, at time.Time) error {
 	_, err := a.log.Append(ctx, audit.Entry{
-		Action:    "jobtoken.revoke",
-		Actor:     "system",
-		Target:    fmt.Sprintf("token:%s", id),
-		Reason:    "revoked",
-		Timestamp: at,
+		Action:        "jobtoken.revoke",
+		PrincipalType: audit.PrincipalSystem, // revocation is a system action
+		Surface:       audit.SurfaceSystem,
+		Actor:         audit.PrincipalSystem,
+		Target:        fmt.Sprintf("token:%s", id),
+		Reason:        "revoked",
+		Timestamp:     at,
 	})
 	if err != nil {
 		a.slog.Warn("jobtoken audit revoke failed",

@@ -38,6 +38,12 @@ import (
 // pullRequestEvent is the GitHub webhook event type for PRs.
 const pullRequestEvent = "pull_request"
 
+// rerequestActor is the actor string recorded when a run is created from a
+// GitHub check-suite rerequest rather than a push/PR event — there is no
+// human acting, so it is an automated system source. It is the value
+// emitAudit keys on to classify that run's audit entry as a system principal.
+const rerequestActor = "github-rerequest"
+
 // errNoApprovalChannel is returned by validateApprovalChannel when
 // Config.ApprovalChannel is empty.  It signals that a gate should
 // not be opened rather than falling back to a default channel (B2).
@@ -248,7 +254,7 @@ func (c *Controller) HandlePush(payload webhook.PushPayload) error {
 
 	// Audit the run creation.  Non-fatal: audit failure shouldn't
 	// prevent the run from executing.
-	c.emitAudit(ctx, runID, "push", payload.Pusher.Email, owner, repoName, branch)
+	c.emitAudit(ctx, runID, orgID, "push", payload.Pusher.Email, owner, repoName, branch)
 	return nil
 }
 
@@ -363,13 +369,13 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 			c.cfg.ApprovalGates.CloseAll(runID.String())
 		}
 		c.finishIfNoJobs(ctx, runID, loadErr)
-		c.emitAudit(ctx, runID, pullRequestEvent, actor, owner, repoName, branch)
+		c.emitAudit(ctx, runID, orgID, pullRequestEvent, actor, owner, repoName, branch)
 		return nil
 	}
 	c.finishIfNoJobs(ctx, runID, loadErr)
 
 	// Audit the run creation with the PR author login as the actor.
-	c.emitAudit(ctx, runID, pullRequestEvent, actor, owner, repoName, branch)
+	c.emitAudit(ctx, runID, orgID, pullRequestEvent, actor, owner, repoName, branch)
 
 	// If a gate was opened, start the async waiter that promotes or
 	// fails the held jobs when the gate resolves (CIC-182 B3).
@@ -455,7 +461,7 @@ func (c *Controller) rerun(fullName, sha, source string) error {
 		Event:         orig.Event,
 		Ref:           orig.Ref,
 		Sha:           sha,
-		Actor:         "github-rerequest",
+		Actor:         rerequestActor,
 		TriggerSource: store.TriggerForge,
 		IsFork:        orig.IsFork,
 	})
@@ -512,7 +518,7 @@ func (c *Controller) rerun(fullName, sha, source string) error {
 		go c.awaitGateAndDispatch(runID)
 	}
 	c.finishIfNoJobs(ctx, runID, loadErr)
-	c.emitAudit(ctx, runID, source, "github-rerequest", owner, repoName, orig.Ref)
+	c.emitAudit(ctx, runID, orgID, source, rerequestActor, owner, repoName, orig.Ref)
 	return nil
 }
 
@@ -955,16 +961,29 @@ var _ webhook.Dispatcher = (*Controller)(nil)
 func (c *Controller) emitAudit(
 	ctx context.Context,
 	runID uuid.UUID,
+	orgID uuid.UUID,
 	eventType, actor, owner, repo, branch string,
 ) {
 	if c.cfg.Audit == nil {
 		return
 	}
+	// Surface is "forge" for every run-creation event: they all originate from a
+	// GitHub webhook (push, PR, or a check rerequest). The principal defaults to
+	// "user" (the pusher or PR author, whose id flows through as Actor -- the
+	// documented PR-author path, CIC-192 A1) except the rerequest source, which
+	// is an automated GitHub action with no acting user, so it is "system".
+	principalType := audit.PrincipalUser
+	if actor == rerequestActor {
+		principalType = audit.PrincipalSystem
+	}
 	_, err := c.cfg.Audit.Append(ctx, audit.Entry{
-		Action: audit.ActionCreateRun,
-		Actor:  actor,
-		Target: fmt.Sprintf("run/%s", runID.String()),
-		Reason: fmt.Sprintf("%s on %s/%s branch %q", eventType, owner, repo, branch),
+		Action:        audit.ActionCreateRun,
+		Actor:         actor,
+		Target:        fmt.Sprintf("run/%s", runID.String()),
+		PrincipalType: principalType,
+		OrgID:         orgID.String(),
+		Surface:       audit.SurfaceForge,
+		Reason:        fmt.Sprintf("%s on %s/%s branch %q", eventType, owner, repo, branch),
 	})
 	if err != nil {
 		c.log.Warn("audit append failed", "run", runID, "action", "create_run", "err", err)

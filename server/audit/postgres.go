@@ -76,6 +76,23 @@ func (p *PostgresLog) Append(ctx context.Context, e Entry) (int64, error) {
 		return 0, fmt.Errorf("audit: append: decode hash hex: %w", err)
 	}
 
+	// CIC-192: normalize unset principal metadata to the historical INSERT literal
+	// so callers that predate this PR keep their stored-value behaviour. A blank
+	// principal_type defaults to "user" (the old Append INSERT literal was
+	// ('user', principal_type; 'system', surface; NULL, org_id) -- a single
+	// unclassified user-on-one-surface; 'user' is the historical default) and a
+	// blank surface to "system" (the safest label for an unclassified internal
+	// write). A non-blank value is stored verbatim. These fields are NOT part of
+	// the hash (hashEntry is stable -- see
+	// docs/decisions/CIC-192-audit-principal-fidelity.md), so the defaults do
+	// not affect tamper-evidence; only the stored row reflects them.
+	if e.PrincipalType == "" {
+		e.PrincipalType = "user"
+	}
+	if e.Surface == "" {
+		e.Surface = "system"
+	}
+
 	// reason and prev_hash go into jsonb metadata.
 	// NOTE: ::text casts are required because jsonb_build_object takes
 	// `any` args and pgx's extended query protocol cannot infer types
@@ -86,12 +103,13 @@ func (p *PostgresLog) Append(ctx context.Context, e Entry) (int64, error) {
 			(org_id, principal_type, principal_id, surface,
 			 action, subject_type, subject_id,
 			 payload_hash, metadata, occurred_at)
-			 VALUES (NULL, 'user', $1, 'system',
-			  $2, '', $3, $4,
-			  jsonb_build_object('reason', $5::text, 'prev_hash', $6::text),
-			  $7)
-			 RETURNING id`,
-		e.Actor, string(e.Action), e.Target, hb, e.Reason, prev,
+			 VALUES (NULLIF($1::text, '')::uuid, $2, $3, $4,
+			$5, '', $6, $7,
+			jsonb_build_object('reason', $8::text, 'prev_hash', $9::text),
+			$10)
+			RETURNING id`,
+		e.OrgID, e.PrincipalType, e.Actor, e.Surface,
+		string(e.Action), e.Target, hb, e.Reason, prev,
 		e.Timestamp).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("audit: insert: %w", err)
@@ -110,27 +128,33 @@ func (p *PostgresLog) Get(ctx context.Context, id int64) (Entry, error) {
 		reason     string
 		prevHash   string
 	)
+	var orgID, principalType, surface string
 	err := p.pool.QueryRow(ctx,
 		`SELECT occurred_at, principal_id, action,
 			coalesce(subject_id, ''), payload_hash,
 			coalesce(metadata->>'reason', ''),
-			coalesce(metadata->>'prev_hash', '')
-			 FROM audit_events WHERE id = $1`,
+			coalesce(metadata->>'prev_hash', ''),
+			coalesce(org_id::text, ''), coalesce(principal_type, ''), coalesce(surface, '')
+		 FROM audit_events WHERE id = $1`,
 		id).Scan(&occurredAt, &principal, &action,
-		&subjID, &payloadB, &reason, &prevHash)
+		&subjID, &payloadB, &reason, &prevHash,
+		&orgID, &principalType, &surface)
 	if err != nil {
 		// pgx returns pgx.ErrNoRows, not sql.ErrNoRows.
 		return Entry{}, fmt.Errorf("audit: get: %w", err)
 	}
 	return Entry{
-		ID:        id,
-		Action:    Action(action),
-		Actor:     principal,
-		Target:    subjID,
-		Reason:    reason,
-		Timestamp: occurredAt,
-		Hash:      hex.EncodeToString(payloadB),
-		PrevHash:  prevHash,
+		ID:            id,
+		Action:        Action(action),
+		Actor:         principal,
+		Target:        subjID,
+		Reason:        reason,
+		Timestamp:     occurredAt,
+		Hash:          hex.EncodeToString(payloadB),
+		PrevHash:      prevHash,
+		OrgID:         orgID,
+		PrincipalType: principalType,
+		Surface:       surface,
 	}, nil
 }
 
@@ -144,7 +168,8 @@ func (p *PostgresLog) List(ctx context.Context, afterID int64, limit int) ([]Ent
 			coalesce(subject_id, ''),
 			payload_hash,
 			coalesce(metadata->>'reason', ''),
-			coalesce(metadata->>'prev_hash', '')
+			coalesce(metadata->>'prev_hash', ''),
+			coalesce(org_id::text, ''), coalesce(principal_type, ''), coalesce(surface, '')
 			 FROM audit_events
 			 WHERE id > $1 ORDER BY id ASC LIMIT $2`,
 		afterID, limit)
@@ -165,19 +190,23 @@ func (p *PostgresLog) List(ctx context.Context, afterID int64, limit int) ([]Ent
 			reason    string
 			prevHash  string
 		)
+		var orgID, principalType, surface string
 		if err := rows.Scan(&id, &occurred, &principal, &action,
-			&subjID, &payloadB, &reason, &prevHash); err != nil {
+			&subjID, &payloadB, &reason, &prevHash, &orgID, &principalType, &surface); err != nil {
 			return nil, fmt.Errorf("audit: list scan: %w", err)
 		}
 		out = append(out, Entry{
-			ID:        id,
-			Action:    Action(action),
-			Actor:     principal,
-			Target:    subjID,
-			Reason:    reason,
-			Timestamp: occurred,
-			Hash:      hex.EncodeToString(payloadB),
-			PrevHash:  prevHash,
+			ID:            id,
+			Action:        Action(action),
+			Actor:         principal,
+			Target:        subjID,
+			Reason:        reason,
+			Timestamp:     occurred,
+			Hash:          hex.EncodeToString(payloadB),
+			PrevHash:      prevHash,
+			OrgID:         orgID,
+			PrincipalType: principalType,
+			Surface:       surface,
 		})
 	}
 	if err := rows.Err(); err != nil {

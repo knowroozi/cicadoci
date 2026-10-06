@@ -79,7 +79,7 @@ func TestMaybeOpenGate_NilManager(t *testing.T) {
 func TestEmitAudit_NilAudit(t *testing.T) {
 	// With Audit = nil, emitAudit must not panic.
 	c := New(nil, nil, Config{Audit: nil}, nil)
-	c.emitAudit(context.Background(), uuid.New(), "push", "user@x.com", "owner", "repo", "main")
+	c.emitAudit(context.Background(), uuid.New(), uuid.New(), "push", "user@x.com", "owner", "repo", "main")
 	// No panic is the assertion.
 }
 
@@ -88,7 +88,8 @@ func TestEmitAudit_WithMemoryLog(t *testing.T) {
 	c := New(nil, nil, Config{Audit: memLog}, nil)
 
 	runID := uuid.New()
-	c.emitAudit(context.Background(), runID, "push", "user@x.com", "acme", "widgets", "main")
+	orgID := uuid.New()
+	c.emitAudit(context.Background(), runID, orgID, "push", "user@x.com", "acme", "widgets", "main")
 
 	entries, _ := memLog.List(context.Background(), 0, 10)
 	if len(entries) != 1 {
@@ -103,6 +104,45 @@ func TestEmitAudit_WithMemoryLog(t *testing.T) {
 	}
 	if e.Target != "run/"+runID.String() {
 		t.Errorf("target = %q, want %q", e.Target, "run/"+runID.String())
+	}
+	// CIC-192 A1: emitAudit records the run's org and (forge/user) principal so the
+	// audit trail is not org-less for run-creation events.
+	if e.OrgID != orgID.String() {
+		t.Errorf("org_id = %q, want %q (the repo's orgID must be recorded)", e.OrgID, orgID.String())
+	}
+	if e.Surface != "forge" {
+		t.Errorf("surface = %q, want %q", e.Surface, "forge")
+	}
+	if e.PrincipalType != "user" {
+		// The push/PR author is a human user.
+		t.Errorf("principal_type = %q, want %q", e.PrincipalType, "user")
+	}
+}
+
+// TestEmitAudit_RerequestIsSystem: the rerequest source (a GitHub "re-run button"
+// action, actor = "github-rerequest") must be recorded as a system principal, not a
+// user, because no acting user is attributable to it.
+func TestEmitAudit_RerequestIsSystem(t *testing.T) {
+	memLog := audit.NewMemoryLog()
+	c := New(nil, nil, Config{Audit: memLog}, nil)
+
+	runID := uuid.New()
+	orgID := uuid.New()
+	c.emitAudit(context.Background(), runID, orgID, "rerequest", "github-rerequest", "acme", "widgets", "main")
+
+	entries, _ := memLog.List(context.Background(), 0, 10)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(entries))
+	}
+	e := entries[0]
+	if e.PrincipalType != "system" {
+		t.Errorf("rerequest principal_type = %q, want %q", e.PrincipalType, "system")
+	}
+	if e.OrgID != orgID.String() {
+		t.Errorf("rerequest org_id = %q, want %q", e.OrgID, orgID.String())
+	}
+	if e.Surface != "forge" {
+		t.Errorf("rerequest surface = %q, want %q", e.Surface, "forge")
 	}
 }
 
