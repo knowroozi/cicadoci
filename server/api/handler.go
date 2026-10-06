@@ -185,6 +185,9 @@ func (h *Handler) buildMux() http.Handler {
 	if h.writes.Cancel != nil {
 		mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", h.handleCancelJob)
 	}
+	if h.writes.CancelRun != nil {
+		mux.HandleFunc("POST /api/v1/runs/{id}/cancel", h.handleCancelRun)
+	}
 
 	// Webhook receiver (M3).  Registered here, not as a middleware, because
 	// it is wired in via WithWebhookReceiver and lives outside this builder's scope.

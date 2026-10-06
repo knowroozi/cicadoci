@@ -178,13 +178,15 @@ func cmdSecretDelete(args []string) error {
 // cmdRun dispatches `cicado run <cancel> ...`.
 func cmdRun(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("run: missing action; usage: cicado run cancel --reason R <jobID>")
+		return fmt.Errorf("run: missing action; usage: cicado run cancel --reason R <jobID> | cicado run cancel-run --reason R <runID>")
 	}
 	switch args[0] {
 	case "cancel":
 		return cmdRunCancel(args[1:])
+	case "cancel-run":
+		return cmdRunCancelRun(args[1:])
 	default:
-		return fmt.Errorf("run: unknown action %q (try 'cancel')", args[0])
+		return fmt.Errorf("run: unknown action %q (try 'cancel', 'cancel-run')", args[0])
 	}
 }
 
@@ -216,7 +218,7 @@ func cmdRunCancel(args []string) error {
 	if err != nil {
 		return fmt.Errorf("run cancel: encoding request: %w", err)
 	}
-	status, out, err := doRequest(runCtx, http.MethodPost, server+"/api/v1/jobs/"+jobID+"/cancel", token, body)
+	status, out, err := doRequest(runCtx, http.MethodPost, server+"/api/v1/jobs/"+url.PathEscape(jobID)+"/cancel", token, body)
 	if err != nil {
 		return fmt.Errorf("run cancel: %w", err)
 	}
@@ -224,6 +226,47 @@ func cmdRunCancel(args []string) error {
 		return fmt.Errorf("run cancel: server returned %d: %s", status, string(out))
 	}
 	if _, err := fmt.Fprintf(os.Stdout, "cancel requested for job %s\n", jobID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// cmdRunCancelRun implements `cicado run cancel-run --reason R <runID>`
+// (CIC-206). It requests cancellation of every active job of the run
+// via POST /api/v1/runs/{id}/cancel.
+func cmdRunCancelRun(args []string) error {
+	fs := flag.NewFlagSet("run cancel-run", flag.ContinueOnError)
+	var (
+		server string
+		token  string
+		reason string
+	)
+	fs.StringVar(&server, "server", envOr("CICADO_SERVER", ""), "server base URL")
+	fs.StringVar(&token, "token", envOr("CICADO_API_TOKEN", ""), "operator bearer token")
+	fs.StringVar(&reason, "reason", "cancelled by operator via CLI", "cancel reason")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	remaining := fs.Args()
+	if len(remaining) != 1 {
+		return fmt.Errorf("run cancel-run: exactly one run id is required (after any flags)")
+	}
+	runID := remaining[0]
+	if server == "" {
+		return fmt.Errorf("run cancel-run: --server is required (or set CICADO_SERVER)")
+	}
+	body, err := json.Marshal(cancelPayload{Reason: reason})
+	if err != nil {
+		return fmt.Errorf("run cancel-run: encoding request: %w", err)
+	}
+	status, out, err := doRequest(runCtx, http.MethodPost, server+"/api/v1/runs/"+url.PathEscape(runID)+"/cancel", token, body)
+	if err != nil {
+		return fmt.Errorf("run cancel-run: %w", err)
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("run cancel-run: server returned %d: %s", status, string(out))
+	}
+	if _, err := fmt.Fprintf(os.Stdout, "cancel requested for run %s\n", runID); err != nil {
 		return err
 	}
 	return nil

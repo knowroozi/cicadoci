@@ -39,7 +39,11 @@ type WriteDeps struct {
 	// Cancel requests job cancellation (queue.RequestCancel); nil -> route absent.
 	Cancel func(ctx context.Context, jobID uuid.UUID, reason string) (queue.CancelResult, error)
 	// Audit is appended for every write; nil -> audits are no-ops.
-	Audit audit.Log
+	// CancelRun cancels every active job of a run (CIC-206); nil -> route
+	// absent.  Returns true when at least one job was active, so the
+	// handler audits only on a real state change.
+	CancelRun func(ctx context.Context, runID uuid.UUID, reason string) (bool, error)
+	Audit     audit.Log
 }
 
 // WithWriteDeps arms CIC-194's operator write routes through the same auth +
@@ -230,6 +234,54 @@ func (h *Handler) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 		Reason: reason,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"active": res.Active, "runner_id": res.RunnerID.String()})
+}
+
+// handleCancelRun serves POST /api/v1/runs/{id}/cancel (CIC-206): it cancels
+// every active job of the run (queued, claimed, running) via the per-job
+// cancel path and writes a single ActionCancel audit row naming the run as
+// the target. A run with no active jobs, or one that does not exist, is a
+// no-op that reports 404 and writes no audit row (C1: audit only on a real
+// state change; a no-op cancel is not audited).
+func (h *Handler) handleCancelRun(w http.ResponseWriter, r *http.Request) {
+	runID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, h.logger, http.StatusBadRequest, errCodeBadRequest, "invalid run id", nil)
+		return
+	}
+	var body cancelJobBody
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, h.logger, http.StatusBadRequest, errCodeBadRequest, "invalid cancel body", err)
+			return
+		}
+	}
+	reason := body.Reason
+	if reason == "" {
+		reason = "cancelled by operator via API"
+	}
+	active, err := h.writes.CancelRun(r.Context(), runID, reason)
+	// B2: audit when something was touched, even when err is non-nil (partial
+	// failure). A cancelled run with a 500 response has no audit gap.
+	if active {
+		h.auditWrite(r.Context(), audit.Entry{
+			Action: audit.ActionCancel,
+			Actor:  operatorActor,
+			Target: runID.String(),
+			Reason: reason,
+		})
+	}
+	// B2: on partial failure, the audit has been written; return 500 so an
+	// operator knows to investigate, but the audit row is intact.
+	if err != nil {
+		writeError(w, h.logger, http.StatusInternalServerError, errCodeInternal, "could not complete run cancel", err)
+		return
+	}
+	// C1: no audit on a no-op cancel (unknown run or all terminal jobs).
+	if !active {
+		writeError(w, h.logger, http.StatusNotFound, errCodeNotFound, "run not found or no active jobs", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"active": true})
 }
 
 // secretTarget renders the (org, repo, name) identity for an audit Target

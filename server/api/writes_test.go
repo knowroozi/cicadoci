@@ -5,6 +5,7 @@ package api_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -369,5 +370,88 @@ func TestWriteSurface_InvalidJobIDIsBadRequest(t *testing.T) {
 
 	if code, _ := doRequest(t, srv, http.MethodPost, "/api/v1/jobs/not-a-uuid/cancel", `{}`); code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", code)
+	}
+}
+
+// TestWriteSurface_CancelRun (CIC-206) verifies that POST /api/v1/runs/{id}/cancel
+// invokes CancelRun with the correct runID + reason and audits when the run
+// had active jobs.
+func TestWriteSurface_CancelRun(t *testing.T) {
+	var gotRun uuid.UUID
+	var gotReason string
+	h := api.New(fakeReaderForWrites(),
+		api.WithWriteDeps(api.WriteDeps{
+			CancelRun: func(_ context.Context, runID uuid.UUID, reason string) (bool, error) {
+				gotRun = runID
+				gotReason = reason
+				return true, nil
+			},
+			Audit: &recordingAudit{},
+		}))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	runID := uuid.MustParse("44444444-4444-4444-4444-444444444444")
+	code, _ := doRequest(t, srv, http.MethodPost, "/api/v1/runs/"+runID.String()+"/cancel", "{\"reason\":\"run stop\"}")
+	if code != http.StatusOK {
+		t.Fatalf("POST /runs/{id}/cancel status = %d, want 200", code)
+	}
+	if gotRun != runID || gotReason != "run stop" {
+		t.Fatalf("CancelRun got run=%s reason=%q, want %s / run stop", gotRun, gotReason, runID)
+	}
+}
+
+// TestWriteSurface_FalseCancelRunIs404AndUnaudited (CIC-206) verifies that a
+// run-level cancel for a run with no active jobs (CancelRun returns false) is
+// a 404 and writes NO audit row.
+func TestWriteSurface_FalseCancelRunIs404AndUnaudited(t *testing.T) {
+	au := &recordingAudit{}
+	h := api.New(fakeReaderForWrites(),
+		api.WithWriteDeps(api.WriteDeps{
+			CancelRun: func(_ context.Context, _ uuid.UUID, _ string) (bool, error) {
+				return false, nil
+			},
+			Audit: au,
+		}))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	runID := uuid.MustParse("55555555-5555-5555-5555-555555555555")
+	code, _ := doRequest(t, srv, http.MethodPost, "/api/v1/runs/"+runID.String()+"/cancel", "")
+	if code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for a run with no active jobs", code)
+	}
+	if len(au.entries) != 0 {
+		t.Errorf("a non-active run-level cancel must NOT audit: %d entries", len(au.entries))
+	}
+}
+
+// TestWriteSurface_PartialCancelAuditsBefore500 (CIC-206, B2) verifies that
+// on a partial failure (CancelRun returns (true, err)) the audit row is
+// written before the 500 is returned. This is the B2 audit-first fix.
+func TestWriteSurface_PartialCancelAuditsBefore500(t *testing.T) {
+	au := &recordingAudit{}
+	h := api.New(fakeReaderForWrites(),
+		api.WithWriteDeps(api.WriteDeps{
+			CancelRun: func(_ context.Context, runID uuid.UUID, reason string) (bool, error) {
+				// Simulate partial failure: one job was cancelled (touched=true),
+				// but a RequestCancel failed for another job.
+				return true, errors.New("partial: one job failed to cancel")
+			},
+			Audit: au,
+		}))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	runID := uuid.MustParse("66666666-6666-6666-6666-666666666666")
+	code, _ := doRequest(t, srv, http.MethodPost, "/api/v1/runs/"+runID.String()+"/cancel", "{\"reason\":\"operator\"}")
+	if code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 on partial failure", code)
+	}
+	if len(au.entries) != 1 {
+		t.Fatalf("partial cancel: %d audit rows, want 1 (audit-first)", len(au.entries))
+	}
+	if au.entries[0].Action != audit.ActionCancel {
+		t.Errorf("audit action = %q, want %q", au.entries[0].Action, audit.ActionCancel)
 	}
 }

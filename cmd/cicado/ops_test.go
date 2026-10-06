@@ -142,3 +142,42 @@ func TestCmdSecretSet_RequiresServer(t *testing.T) {
 		t.Fatal("expected an error when --server is unset")
 	}
 }
+
+// TestCmdRunCancelRun_SendsCancel (CIC-206) drives `cicado run cancel-run`
+// against a stub server and asserts it issues an authenticated POST to
+// /api/v1/runs/{id}/cancel carrying the reason and the bearer token.
+func TestCmdRunCancelRun_SendsCancel(t *testing.T) {
+	var gotAuth, gotBody, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"active":true}`))
+	}))
+	defer srv.Close()
+
+	err := cmdRun([]string{"cancel-run", "--server", srv.URL, "--token", "op-token",
+		"--reason", "manual stop", "33333333-3333-3333-3333-333333333333"})
+	if err != nil {
+		t.Fatalf("cmdRun cancel-run: %v", err)
+	}
+	if gotPath != "/api/v1/runs/33333333-3333-3333-3333-333333333333/cancel" {
+		t.Fatalf("path = %q, want /api/v1/runs/33333333-3333-3333-3333-333333333333/cancel", gotPath)
+	}
+	if gotAuth != "Bearer op-token" {
+		t.Errorf("auth = %q, want Bearer op-token", gotAuth)
+	}
+	if !strings.Contains(gotBody, `"reason":"manual stop"`) {
+		t.Errorf("body = %q, want reason", gotBody)
+	}
+}
+
+// TestCmdRunCancelRun_RequiresRunID (CIC-206) pins that a missing run id is a
+// client error.
+func TestCmdRunCancelRun_RequiresRunID(t *testing.T) {
+	if err := cmdRun([]string{"cancel-run", "--server", "http://unused"}); err == nil {
+		t.Fatal("cmdRun cancel-run: expected error for missing run id")
+	}
+}

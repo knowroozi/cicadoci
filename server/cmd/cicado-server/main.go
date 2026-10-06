@@ -445,7 +445,33 @@ func run() error {
 	apiOpts = append(apiOpts, apiAuthOpts(*apiToken, api.WriteDeps{
 		SecretStore: secretsStore,
 		Cancel:      q.RequestCancel,
-		Audit:       auditLog,
+		CancelRun: func(ctx context.Context, runID uuid.UUID, reason string) (bool, error) {
+			// fireTerminal releases the run's backpressure slot and runs
+			// RunCompleted in a child goroutine (matching the OnRunTerminal
+			// pattern at main.go:286) so it does not block the HTTP
+			// request on a GitHub round-trip. CancelRunJobs calls it
+			// after the tx commit ONLY when it finalized the run
+			// (gated/pending case); the active-job case is handled by
+			// advanceRun.
+			fireTerminal := func(_ context.Context, rid uuid.UUID) {
+				ctrl.ReleaseRun(rid)
+				go func() {
+					ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel2()
+					if err := ctrl.RunCompleted(ctx2, rid, "cancelled"); err != nil {
+						log.Warn("run-terminal hook after cancel failed", "run_id", rid, "error", err)
+					}
+				}()
+			}
+			return st.CancelRunJobs(ctx, runID, reason,
+				func(ctx context.Context, jobID uuid.UUID, reason string) error {
+					_, err := q.RequestCancel(ctx, jobID, reason)
+					return err
+				},
+				fireTerminal,
+			)
+		},
+		Audit: auditLog,
 	})...)
 
 	httpServer := &http.Server{

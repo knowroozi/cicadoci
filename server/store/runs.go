@@ -516,3 +516,157 @@ func (s *Store) CountRunJobs(ctx context.Context, runID uuid.UUID) (int, error) 
 	}
 	return n, nil
 }
+
+// CancelRunJobs cancels every non-terminal job of a run and, when the run
+// has no active (queued/claimed/running) jobs, finalizes the run to
+// 'cancelled' and fires the terminal hook.
+//
+// The operation is a single transaction. A FOR UPDATE lock on the runs
+// row (R1) ensures no concurrent advanceRun can interfere: a job that
+// finishes between the read and write is caught by the tx-level lock.
+//
+// B1: a gate-held run has all jobs 'pending' (not in the cancel scanner's
+// path). The tx UPDATEs them to 'cancelled' and finalizes the run.
+//
+// Active (queued/claimed/running) jobs are terminalized by the
+// dispatcher's cancel scanner and the runner's cancel path, which call
+// advanceRun. CancelRunJobs does NOT finalize the run when active jobs
+// remain; the cancel scanner + advanceRun finalize and fire the hook.
+//
+// B2: a per-job cancel failure is joined; the loop continues so the other
+// active jobs still get the doorbell; the handler audits when touched.
+//
+// CIC-208 (follow-up, not implemented here): the open approval gate
+// record (timer + map entry) is NOT closed by this method.
+//
+// fireTerminal is called after the tx commit ONLY when THIS call
+// finalized the run (the gated/pending-only case). advanceRun fires it
+// for the active-job case.
+//
+// Returns (touched, err).
+//   - touched=true: at least one job was cancelled or the run was
+//     finalized. The handler must audit when touched=true, even if
+//     err != nil.
+//   - touched=false: no non-terminal jobs existed. No audit row.
+//   - err: nil on full success; errors.Join on partial failure; raw
+//     error otherwise.
+func (s *Store) CancelRunJobs(
+	ctx context.Context,
+	runID uuid.UUID,
+	reason string,
+	cancelJob func(ctx context.Context, jobID uuid.UUID, reason string) error,
+	fireTerminal func(ctx context.Context, runID uuid.UUID),
+) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("store: cancel-run begin %s: %w", runID, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// R1: lock the run row so a concurrent advanceRun (cancel scanner or
+	// runner path) blocks until this tx commits. Without this lock,
+	// a job could finish in the window between reading ActiveJobIDs
+	// outside the tx and the tx commit, promoting a dependent that
+	// escapes the cancel or missing the run-finalize.
+	var runStatus string
+	err = tx.QueryRow(ctx, `SELECT status FROM runs WHERE id = $1 FOR UPDATE`, runID).Scan(&runStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil // run does not exist; no-op
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: cancel-run lock %s: %w", runID, err)
+	}
+	// Already-finalised run: no-op, no hook fires, no audit row.
+	if runStatus != "pending" && runStatus != "running" {
+		return false, nil
+	}
+
+	// Cancel top-level pending jobs (gated or dependent-only).
+	res, err := tx.Exec(ctx, `
+        UPDATE jobs SET status = 'cancelled', cancel_reason = $2, finished_at = now()
+          WHERE run_id = $1
+        AND status = 'pending'
+        AND NOT EXISTS (SELECT 1 FROM job_dependencies WHERE job_id = jobs.id)`,
+		runID, reason)
+	if err != nil {
+		return false, fmt.Errorf("store: cancel-run top-level pending %s: %w", runID, err)
+	}
+	touched := res.RowsAffected() > 0
+
+	// Cancel dependent pending jobs as well.
+	res, err = tx.Exec(ctx, `
+        UPDATE jobs SET status = 'cancelled', cancel_reason = $2, finished_at = now()
+          WHERE run_id = $1 AND status = 'pending'`, runID, reason)
+	if err != nil {
+		return touched, fmt.Errorf("store: cancel-run dependent pending %s: %w", runID, err)
+	}
+	if res.RowsAffected() > 0 {
+		touched = true
+	}
+
+	// Read the active job IDs INSIDE the tx so newly-promoted jobs that
+	// were pending before we started the tx are caught here too.
+	rows, err := tx.Query(ctx, `
+        SELECT id FROM jobs
+         WHERE run_id = $1
+           AND status IN ('queued', 'claimed', 'running')`, runID)
+	if err != nil {
+		return touched, fmt.Errorf("store: cancel-run active check %s: %w", runID, err)
+	}
+	activeIDs := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var jid uuid.UUID
+		if err := rows.Scan(&jid); err != nil {
+			rows.Close()
+			return touched, fmt.Errorf("store: cancel-run active scan %s: %w", runID, err)
+		}
+		activeIDs = append(activeIDs, jid)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return touched, fmt.Errorf("store: cancel-run active rows err %s: %w", runID, err)
+	}
+
+	// Finalize the run to 'cancelled' ONLY when no active jobs remain.
+	// With active jobs present, the cancel scanner + advanceRun will finalize
+	// and fire the terminal hook. No finalize here => no double-finalize.
+	fire := len(activeIDs) == 0
+	if fire {
+		res, err = tx.Exec(ctx, `
+        UPDATE runs
+        SET status     = 'cancelled',
+            finished_at = now()
+        WHERE id       = $1
+        AND status   IN ('pending', 'running')`, runID)
+		if err != nil {
+			return touched, fmt.Errorf("store: cancel-run finalize %s: %w", runID, err)
+		}
+		fire = res.RowsAffected() > 0
+		if fire {
+			touched = true
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return touched, fmt.Errorf("store: cancel-run commit %s: %w", runID, err)
+	}
+
+	// Fire the terminal hook after the tx commit — matches the queue's
+	// pattern (advanceRun commits, then q.fire runs outside the tx).
+	// Fire only when THIS call finalized the run.
+	if fire && fireTerminal != nil {
+		fireTerminal(ctx, runID)
+	}
+
+	// Ring the cancel doorbell for active jobs.
+	// B2: continue on per-job error; errors.Join; do not abort.
+	var joinErr error
+	for _, jid := range activeIDs {
+		if err := cancelJob(ctx, jid, reason); err != nil {
+			joinErr = errors.Join(joinErr, err)
+			continue
+		}
+		touched = true
+	}
+	return touched, joinErr
+}
