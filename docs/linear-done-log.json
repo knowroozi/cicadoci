@@ -1955,5 +1955,125 @@
     "prLinks": [
       "https://github.com/cicadoci/core/pull/145"
     ]
+  },
+  {
+    "identifier": "CIC-204",
+    "title": "approvalgates: gates still pending at shutdown, or whose timer fires after the audit drain, are neither audited nor closed",
+    "description": "Found by PR review of [cicadoci/core#141](https://linear.app/cicadoci/review/fixes-cic-193-audit-terminal-approval-gate-transition-even-after-a1e127aa31cd) ([CIC-193](https://linear.app/cicadoci/issue/CIC-193/approvalgates-onresolved-audit-write-uses-runs-signal-ctx-so-gate)), 2026-10-06. Follow-up split out of [CIC-193](https://linear.app/cicadoci/issue/CIC-193/approvalgates-onresolved-audit-write-uses-runs-signal-ctx-so-gate), which only fixes audit writes for gates resolved *during* shutdown.\n\n## What's wrong\n\n1. A gate still `pending` when the server shuts down is never moved to a terminal state, never audited, and its chat message (Slack buttons) is left open.\n2. A gate whose timeout timer fires after the audit drain/pool close hits a closed audit sink, so the timeout resolution is neither audited nor closed.\n\nEvery state-changing action must write an audit event, so both paths break that invariant.\n\n## Fix\n\n* On shutdown, resolve (or explicitly abandon) all pending gates before the audit drain, writing an audit event and calling `CloseApproval` for each.\n* Stop gate timers before the audit drain, or make a post-drain timer fire a no-op that is logged.\n* `-race` tests for both paths.\n\nRelated: [CIC-193](https://linear.app/cicadoci/issue/CIC-193/approvalgates-onresolved-audit-write-uses-runs-signal-ctx-so-gate) (shutdown audit ctx), [CIC-108](https://linear.app/cicadoci/issue/CIC-108/approvalgatesmanager-timeout-never-enforced-data-race-in-resolve) (Manager timeout), CCD-26 (hive card).",
+    "state": "completed",
+    "completedAt": "2026-10-06T15:50:55.178Z",
+    "createdAt": "2026-10-06T01:20:45.827Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-204/approvalgates-gates-still-pending-at-shutdown-or-whose-timer-fires",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/144",
+      "https://github.com/cicadoci/core/pull/150"
+    ]
+  },
+  {
+    "identifier": "CIC-205",
+    "title": "Audit: versioned hash v2 that folds principal_type, surface and org_id into the hash chain (+ backfill of historical rows)",
+    "description": "Follow-up out of [CIC-192](https://linear.app/cicadoci/issue/CIC-192/audit-postgreslogappend-hard-codes-principal-typeuser-and) (PR [cicadoci/core#140](https://linear.app/cicadoci/review/fixes-cic-192-store-real-principal-type-surface-org-id-in-audit-events-ba51d61d681c)), requested in review 2026-10-06.\n\n## What's wrong\n\n[CIC-192](https://linear.app/cicadoci/issue/CIC-192/audit-postgreslogappend-hard-codes-principal-typeuser-and) makes `PostgresLog.Append` store the real `principal_type`, `surface` and `org_id`. To keep existing hash chains valid, the audit hash was left unchanged, so these three fields are **not tamper-evident**: editing them in the database does not break the chain.\n\n## Fix\n\n* Introduce a versioned audit hash (v2) that includes `principal_type`, `surface` and `org_id`. Keep v1 verification for existing rows (record the hash version per row or per chain segment).\n* Decide the migration path for historical rows: backfill `org_id` and principal fields where derivable, or mark them v1.\n* Tests: tamper each of the three fields and confirm verification fails under v2; v1 rows still verify.\n\nReferenced from `docs/decisions/CIC-192-audit-principal-fidelity.md` (line \\~53). Related: [CIC-192](https://linear.app/cicadoci/issue/CIC-192/audit-postgreslogappend-hard-codes-principal-typeuser-and).",
+    "state": "completed",
+    "completedAt": "2026-10-06T17:02:33.503Z",
+    "createdAt": "2026-10-06T01:50:09.853Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-205/audit-versioned-hash-v2-that-folds-principal-type-surface-and-org-id",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/151",
+      "https://github.com/cicadoci/core/pull/153"
+    ]
+  },
+  {
+    "identifier": "CIC-182",
+    "title": "CIC-162 part 2: approval gate dispatch blocking + resolve path",
+    "description": "Follow-up split from [CIC-162](https://linear.app/cicadoci/issue/CIC-162/approval-gates-cannot-gate-anything-manager-never-built-in-maingo). PR [cicadoci/core#135](https://linear.app/cicadoci/review/featapprovalgatesmain-wire-approval-gates-end-to-end-cic-162-8f3ee4d60eb3) is rescoped to \"Refs [CIC-162](https://linear.app/cicadoci/issue/CIC-162/approval-gates-cannot-gate-anything-manager-never-built-in-maingo) (part 1)\". Part 1 builds the approval-gate Manager in `main.go` behind a fail-closed requirement for a real chat provider, fixes the audit actions, and reuses [cicadoci/core#129](https://linear.app/cicadoci/review/featcic-160-add-approvalchannel-config-approvalchannel-helper-f530c7b2c9e2)'s `ApprovalChannel`. This ticket covers everything part 1 does **not** deliver toward [CIC-162](https://linear.app/cicadoci/issue/CIC-162/approval-gates-cannot-gate-anything-manager-never-built-in-maingo)'s acceptance.\n\n## Scope\n\n1. **Workflow-declared gates.** A gate opens only for a job or environment the workflow declares as gated (for example `environment:` with required approval, or an explicit gate in the schema). It no longer opens for every PR run: today `controller.maybeOpenGate` opens one \"for every PR run as a placeholder\" (`server/controller/controller.go` \\~:694–720).\n2. **Dispatch blocking.** A gated job stays `pending` and isn't claimable until the gate is approved. On **deny** or **timeout** the job fails (with a clear reason), and its `needs` dependents are skipped. Today nothing outside `server/approvalgates` reads `Manager.State`, and `onResolved` isn't connected to the queue or dispatch.\n3. **A Resolve caller.** The Slack interaction handler is [CIC-138](https://linear.app/cicadoci/issue/CIC-138/no-real-slack-integration-on-master-cic-49-socket-mode-events-api-is) and not on master, so add an **audited API resolve endpoint** (for example `POST /api/v1/approvals/{run}/resolve`, behind the [CIC-150](https://linear.app/cicadoci/issue/CIC-150/http-api-is-unauthenticated-in-the-shipped-binary-live-job-logs-get) bearer auth). It calls `Manager.Resolve` with the acting user's identity, and the Manager's allow-list is enforced. The Slack handler ([CIC-138](https://linear.app/cicadoci/issue/CIC-138/no-real-slack-integration-on-master-cic-49-socket-mode-events-api-is)) later calls the same path.\n4. **Audit.** Every transition writes an audit event with the correct action and actor: approve, deny, timeout, and a **rejected unauthorized attempt**. Per `approvalgates.go:198` the caller must audit the rejection, so the endpoint does this.\n5. **e2e test.** A workflow with a gate runs a gated job that doesn't dispatch. An authorized approve dispatches it. An unauthorized resolve is rejected and audited. A gate timeout fails the job. Each case asserts the audit rows.\n\n## Acceptance\n\nAll five scope items are merged and covered by the e2e test. The M7 exit criterion in `project-docs/01-project-plan.md` (line \\~104: \"approved … unauthorized approval attempts are rejected and audited\") is demonstrably met by the API path.\n\n## Dependencies\n\n* Blocked by PR [cicadoci/core#135](https://linear.app/cicadoci/review/featapprovalgatesmain-wire-approval-gates-end-to-end-cic-162-8f3ee4d60eb3) ([CIC-162](https://linear.app/cicadoci/issue/CIC-162/approval-gates-cannot-gate-anything-manager-never-built-in-maingo) part 1: Manager construction, audit-action mapping) and PR [cicadoci/core#129](https://linear.app/cicadoci/review/featcic-160-add-approvalchannel-config-approvalchannel-helper-f530c7b2c9e2) ([CIC-160](https://linear.app/cicadoci/issue/CIC-160/approvalgates-controllermaybeopengate-sets-channel-to-the-pr-number): `ApprovalChannel` config).\n* Relates to [CIC-138](https://linear.app/cicadoci/issue/CIC-138/no-real-slack-integration-on-master-cic-49-socket-mode-events-api-is): the Slack interaction handler becomes a second Resolve caller.",
+    "state": "completed",
+    "completedAt": "2026-10-06T17:07:51.038Z",
+    "createdAt": "2026-10-05T00:17:06.917Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-182/cic-162-part-2-approval-gate-dispatch-blocking-resolve-path",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/138"
+    ]
+  },
+  {
+    "identifier": "CIC-210",
+    "title": "Docker executor rejects any env value containing a newline, so multi-line secrets (PEM keys, certs) break every step that uses them",
+    "description": "Found by QC on master `6debce1` (introduced by [cicadoci/core#139](https://linear.app/cicadoci/review/fixes-cic-196-refs-cic-195-docker-env-file-security-env-key-validation-82215568f6ae), [CIC-196](https://linear.app/cicadoci/issue/CIC-196/security-docker-executor-passes-step-env-incl-resolved-secrets-as) fix).\n\n## What happens\n\n`writeEnvFile` (runner/executor/docker.go \\~:256-296) writes `step.Env` to a `--env-file` and returns an error when any value contains `\\n` or `\\r` (`containsNL`). `RunStep` turns that into an executor error: `docker: env-file: env value for \"X\" contains a newline`.\n\n`step.Env` includes resolved secrets (`runner/job.go`: `stepEnv := secretexpr.Resolve(stepRaw, secrets)`). Common secrets are multi-line: SSH private keys, PEM TLS keys/certs, GPG keys, service-account JSON. With the docker executor, any step that maps one of these into its env now fails before the container starts. The Shell executor accepts the same value (it uses `cmd.Env`), so the two executors behave differently for the same workflow.\n\nThe rejection is right for the env-file format, which cannot carry a newline. The problem is that there is no other path for such values.\n\n## Fix (options)\n\n* Pass multi-line values without argv or env-file: export `KEY` with no value (`-e KEY`) and set it in the docker client's own process env for that key only. An earlier pass of [CIC-196](https://linear.app/cicadoci/issue/CIC-196/security-docker-executor-passes-step-env-incl-resolved-secrets-as) rejected this because a step-chosen key in the client env can redirect docker's own config (`DOCKER_HOST`, `DOCKER_CONFIG`). That risk is closed if only keys that are not `DOCKER_*` and are on the `isValidEnvKey` set are used, and only for values with newlines.\n* Or write each multi-line value to a 0600 file and mount it read-only, exposing `KEY_FILE` (a documented convention).\n\nEither way, add a test with a multi-line value (PEM-shaped) that asserts the container sees the exact bytes, and document the behaviour.\n\nRelated: [CIC-196](https://linear.app/cicadoci/issue/CIC-196/security-docker-executor-passes-step-env-incl-resolved-secrets-as) (Done), [CIC-195](https://linear.app/cicadoci/issue/CIC-195/docker-executor-never-stops-the-container-on-timeoutcancel-cic-191). No CI is running, so verify locally, including `go test -tags docker ./runner/executor/...` on a host with Docker.",
+    "state": "completed",
+    "completedAt": "2026-10-06T19:05:31.873Z",
+    "createdAt": "2026-10-06T08:55:51.985Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-210/docker-executor-rejects-any-env-value-containing-a-newline-so-multi",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/146"
+    ]
+  },
+  {
+    "identifier": "CIC-208",
+    "title": "Run cancel: close open approval-gate record when cancelling a gate-held run",
+    "description": "Follow-up to [CIC-206](https://linear.app/cicadoci/issue/CIC-206/run-level-cancel-post-apiv1runsidcancel-plus-optional-rerun-with) (PR [cicadoci/core#145](https://linear.app/cicadoci/review/serverapistorecli-cic-206-run-level-cancel-post-apiv1runsidcancel-4454eb5775c2)). Run-level cancel now fails gate-held runs via FailAllJobs, but the approval gate record itself is not closed, so it may stay open/pending after cancel.\n\nAcceptance:\n\n* Cancelling a run with an open gate closes/cancels the gate record (no later approve can resume it).\n* Audit row for the gate close.\n* DB test: gated-pending run cancel, then approve attempt is rejected.",
+    "state": "completed",
+    "completedAt": "2026-10-06T19:05:47.875Z",
+    "createdAt": "2026-10-06T08:44:24.820Z",
+    "labels": [],
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "assignee": "Kaveh Nowroozi",
+    "project": "",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-208/run-cancel-close-open-approval-gate-record-when-cancelling-a-gate-held",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/148"
+    ]
+  },
+  {
+    "identifier": "CIC-211",
+    "title": "Audit hash v2 is defeated by a downgrade: hash_version is unhashed and VerifyChain trusts it, so principal_type/surface/org_id can be altered undetected",
+    "description": "Found by QC on master `d838260` ([CIC-205](https://linear.app/cicadoci/issue/CIC-205/audit-versioned-hash-v2-that-folds-principal-type-surface-and-org-id), [cicadoci/core#151](https://linear.app/cicadoci/review/cic-205-audit-hash-v2-hashversion-hashentryv2-hashforrow-dispatch-4386d31a57af) / [cicadoci/core#153](https://linear.app/cicadoci/review/cic-205-follow-up-hashentryv2-normalises-timestamp-to-utc-a14429e7494f)). Security invariant: the audit chain must be tamper-evident.\n\n## What happens\n\n* Migration 0006 adds `audit_events.hash_version` (1 or 2). `hashEntryV2` covers `principal_type`, `surface`, `org_id`; the v1 `hashEntry` does not.\n* `PostgresLog.VerifyChain` (server/audit/postgres.go \\~:231) reads `hash_version` from each row and calls `hashForRow`, which picks v1 or v2 **from that column**. `hash_version` itself is not part of either hash.\n* So someone with write access to the table can change a v2 row's `principal_type`, `surface` or `org_id` and set `hash_version = 1`. The v1 hash ignores those fields, so it still matches and `prev_hash` linkage is unchanged: **VerifyChain passes**. The v2 protection therefore protects nothing. For example, an operator write can be relabelled as `principal_type='system'`.\n* `PostgresLog.Append` also accepts a caller-set `HashVersion` (it only defaults 0 → 2), so code can still write new v1 rows after the cutover.\n\n## Fix\n\n* In VerifyChain, enforce monotonic versions: once a v2 row is seen, every later row must be v2, and fail on any v1 row after it. Better still, record the cutover (the first v2 id) somewhere outside the editable row, or include `hash_version` in the v2 hash input. Note that a downgrade of the *first* v2 row is caught only by the cutover-record option.\n* In Append, always write version 2 and reject or ignore a caller-supplied version below 2.\n* Tests: tamper a v2 row (change principal_type + set hash_version=1) → VerifyChain must fail; Append with HashVersion=1 → stored as 2 or an error.\n\nAlso: the migration 0006 header still says \"DRAFT … defaults to 1 … until the Go code is updated to write version 2\". The Go code now writes 2 (sent to docs).\n\nNo CI runs, so verify locally: `./scripts/with-postgres.sh go test -race ./server/audit/...`.",
+    "state": "completed",
+    "completedAt": "2026-10-07T02:51:39.845Z",
+    "createdAt": "2026-10-06T20:55:59.453Z",
+    "labels": [
+      "Bug"
+    ],
+    "priority": 2,
+    "priorityLabel": "High",
+    "assignee": "Kaveh Nowroozi",
+    "project": "CICaDo MVP",
+    "milestone": "",
+    "url": "https://linear.app/cicadoci/issue/CIC-211/audit-hash-v2-is-defeated-by-a-downgrade-hash-version-is-unhashed-and",
+    "prLinks": [
+      "https://github.com/cicadoci/core/pull/155"
+    ]
   }
 ]
