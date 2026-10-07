@@ -29,9 +29,15 @@ refresh it, so it drifts silently between PRs.
    the refreshed artifacts, not the merge step — a merge commit can't carry
    what the author already wrote on the branch.
 4. **Staleness signal:** the graph reflects `meta.json.gitCommitHash` /
-   `project.gitCommitHash`; it is stale when `git diff --name-only <graphCommit>..HEAD -- .`
-   (project-scoped, ignoring `.ua/`) is non-empty. `/understand-diff` prints this warning
+   `project.gitCommitHash`; it is stale when `git diff --name-only <graphCommit>..HEAD -- . ':!.ua'`
+   (project-scoped, **ignoring `.ua/`** so the artifacts the refresh itself commits
+  don't re-trigger staleness forever) is non-empty. `/understand-diff` prints this warning
    automatically — a warning is a "refresh the graph" signal, not a reason to skip the diff.
+   Because a squash-merge deletes the feature-branch ref, `gitCommitHash` may no longer exist in
+  a fresh clone of `master`, and a raw `git diff <graphCommit>..HEAD` then dies with
+   `fatal: bad revision`. `scripts/ua-staleness` (`make check-ua-staleness`) detects that up front via
+   `git cat-file -e <hash>^{commit}` and reports it as `unreachable` (treat as stale, run a full
+   `/understand`) instead of erroring (CIC-86).
 5. **Versioning:** the three artifacts plus `.ua/config.json` and `.ua/.understandignore` are
    checked in; the scratch (`/understand`-generated) material (`.ua/.trash-*/`,
    `.ua/intermediate/`) and the transient `.ua/diff-overlay.json` are git-ignored.

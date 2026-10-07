@@ -130,6 +130,15 @@ test-all: ## Unit + integration tests (needs CICADO_TEST_DATABASE_URL)
 test-e2e: ## Walking skeleton end to end against a throwaway Postgres
 	./scripts/with-postgres.sh go test ./test/e2e/... -race -count=1 -v
 
+.PHONY: check-ua-staleness
+check-ua-staleness: ## Report knowledge-graph (`.ua/`) freshness; warn-only, degrade gracefully on an unreachable recorded commit (CIC-86)
+	@go run ./scripts/ua-staleness .
+
+# In CI (CI=1) the same check is strict: a stale or unreachable graph fails the job.
+.PHONY: check-ua-staleness-strict
+check-ua-staleness-strict: ## Fails when the `.ua/` graph is stale or its recorded commit is unreachable (CIC-86)
+	@CI=1 go run ./scripts/ua-staleness .
+
 .PHONY: lint
 lint: ## Run golangci-lint
 	$(GOLANGCILINT) run ./...

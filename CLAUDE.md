@@ -91,6 +91,11 @@ Cadence:
     commits don't re-trigger staleness forever) is non-empty.  `/understand-diff`
     prints this warning automatically — treat a warning as a "refresh the
     graph" signal, never a reason to skip the diff.
+- **Fail gracefully on an unreachable recorded commit (CIC-86):** a squash-merge deletes the
+   feature-branch ref, so `gitCommitHash` may no longer exist in a fresh clone of `master` —
+   and a raw `git diff <graphCommit>..HEAD` dies with `fatal: bad revision`. `scripts/ua-staleness`
+    (`make check-ua-staleness`) detects that up front via `git cat-file -e <hash>^{commit}` and
+    reports it as `unreachable` (treat as stale, run a full `/understand`) instead of erroring.
 
 The data directory is mostly scratch: `.ua/.trash-*/` and `.ua/intermediate/` are git-ignored;
 only the three artifacts plus `.ua/config.json` and `.ua/.understandignore` are checked in.
