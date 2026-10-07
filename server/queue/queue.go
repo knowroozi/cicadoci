@@ -111,6 +111,7 @@ type Step struct {
 	Env            map[string]string
 	TimeoutSeconds int32
 	NetworkEnabled bool
+	If             string // CIC-118: step `if:` conditional; empty = "success"
 }
 
 // TerminalState is the set of states a job can finish in.
