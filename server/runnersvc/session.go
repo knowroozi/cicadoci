@@ -558,6 +558,8 @@ func AssignmentFor(job queue.ClaimedJob) *runnerv1.ServerMessage {
 			Env:            st.Env,
 			TimeoutSeconds: uint32(st.TimeoutSeconds),
 			NetworkEnabled: st.NetworkEnabled,
+			// CIC-118: carry the `if:` conditional so the runner can enforce it.
+			IfCondition: st.If,
 		})
 	}
 
