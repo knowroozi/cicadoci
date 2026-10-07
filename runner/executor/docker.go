@@ -260,14 +260,57 @@ func (d *Docker) Cleanup(_ context.Context) error {
 	return nil
 }
 
-// cliEnvDenylist: env keys that the docker CLI itself reads before
-// executing docker run (config dir, credential helpers, daemon
-// address, proxies, CA paths). A step-supplied multi-line value
-// for one of these would enter the host CLI's env via cmd.Env and
-// override the operator's authoritative value. writeEnvFile
-// rejects multi-line denylisted keys with an error; single-line
-// values pass through the env file untouched.
-// Case-insensitive; DOCKER_* prefix matches.
+// cliEnvDenylist: case-insensitive list of env var names that a multi-line
+// step-supplied value must never enter the host docker CLI's process
+// environment (cmd.Env). Step env comes from the workflow file, which a PR
+// author controls; a multi-line value is appended to cmd.Env after
+// os.Environ(), so a denylisted key would override the runner's own value
+// of that key, which the docker CLI process on the runner host reads.
+//
+// Single-line denylisted keys are fine: writeEnvFile writes them into the
+// --env-file (a 0600 file the container reads), not cmd.Env, so they never
+// reach the host docker CLI process. Only multi-line keys are denylisted.
+//
+// Membership, by family:
+//
+// Host identity / proxy / cert:
+//
+//	HOME, XDG_CONFIG_HOME, PATH, TMPDIR
+//	DOCKER_* (prefix)
+//	HTTP_PROXY, HTTPS_PROXY, NO_PROXY, ALL_PROXY
+//	SSL_CERT_FILE, SSL_CERT_DIR
+//
+// glibc dynamic-loader + UNSECURE_ENVVARS:
+//
+//	GCONV_PATH, LOCPATH, NLSPATH, MALLOC_TRACE, HOSTALIASES,
+//	LOCALDOMAIN, RES_OPTIONS, RESOLV_HOST_CONF,
+//	GETCONF_DIR, NIS_PATH, TZDIR
+//
+// glibc loader prefix:
+//
+//	LD_   LD_PRELOAD, LD_LIBRARY_PATH, LD_AUDIT, LD_DEBUG, LD_BIND_NOW, ...
+//
+// macOS linker prefix:
+//
+//	DYLD_   DYLD_INSERT_LIBRARIES, DYLD_LIBRARY_PATH, DYLD_FORK_PARENT, ...
+//
+// Go runtime semantic vars: the five knobs the Go runtime of a compiled
+// binary reads at process start, per the Go docs:
+//
+//	GODEBUG, GOTRACEBACK, GOGC, GOMEMLIMIT, GOMAXPROCS
+//
+// Go toolchain vars (GOFLAGS, GOEXPERIMENT, GOMODCACHE, GOROOT, GOPATH,
+// GOBIN, ...) are read only by go build/go mod, not by a compiled
+// binary's runtime; they are not in this denylist. A bare "GO" prefix
+// is not used either (would match unrelated keys like GONG, GOLD).
+//
+// B1: writeEnvFile additionally rejects any multi-line key that is already
+// set in the runner's own environment (os.LookupEnv), so a step cannot
+// override any runner-supplied secret. No fixed denylist covers all
+// operator-supplied keys.
+//
+// See docs/decisions/CIC-212-docker-env-denylist.md for the full
+// rationale and the preferred allowlist/0600-mount mitigation.
 var cliEnvDenylist = map[string]bool{
 	"HOME":            true,
 	"XDG_CONFIG_HOME": true,
@@ -279,15 +322,68 @@ var cliEnvDenylist = map[string]bool{
 	"ALL_PROXY":       true,
 	"SSL_CERT_FILE":   true,
 	"SSL_CERT_DIR":    true,
+	// glibc loader var: charset-module search path — attacker can supply a
+	// glibc charset-module search path: attacker can supply a custom .so
+	// that glibc loads on iconv() calls.
+	"GCONV_PATH": true,
+	// glibc UNSECURE_ENVVARS: glibc ignores these in secure (setuid) mode;
+	// the docker CLI binary on a distro is sometimes setuid, so block them.
+	"LOCPATH":          true,
+	"NLSPATH":          true,
+	"MALLOC_TRACE":     true,
+	"HOSTALIASES":      true,
+	"LOCALDOMAIN":      true,
+	"RES_OPTIONS":      true,
+	"RESOLV_HOST_CONF": true,
+	"GETCONF_DIR":      true,
+	"NIS_PATH":         true,
+	"TZDIR":            true,
+	// Go runtime semantic vars: the five knobs the Go runtime of a
+	// compiled binary reads at process start.
+	"GODEBUG":     true,
+	"GOTRACEBACK": true,
+	"GOGC":        true,
+	"GOMEMLIMIT":  true,
+	"GOMAXPROCS":  true,
 }
 
-// cliEnvDenied reports whether k matches the CLI env denylist.
+// cliEnvPrefixDenylist is a case-insensitive list of uppercase env var name
+// prefixes that must be blocked from entering the host docker CLI process env
+// in a multi-line step value.  Three families:
+//
+//   - "DOCKER_" — docker CLI config / daemon knobs (CIC-210 B2 original).
+//   - "LD_"     — GNU dynamic loader vars on Linux:
+//     LD_PRELOAD, LD_LIBRARY_PATH, LD_AUDIT, LD_DEBUG,
+//     LD_ASSUME_KERNEL, LD_HACK, …
+//     A step-supplied multi-line LD_PRELOAD value in cmd.Env would
+//     cause glibc to load that shared object into the host docker
+//     CLI process → code execution / privilege escalation on the
+//     runner host.
+//   - "DYLD_"   — macOS dynamic linker vars (equivalent to LD_* on macOS):
+//     DYLD_INSERT_LIBRARIES, DYLD_LIBRARY_PATH, DYLD_FRAMEWORK_PATH,
+//     DYLD_BINDER, DYLD_ROOT_PATH, …
+//
+// Not used: bare "GO" prefix (would be over-broad for non-Go user names).
+var cliEnvPrefixDenylist = []string{
+	"DOCKER_",
+	"LD_",
+	"DYLD_",
+}
+
+// cliEnvDenied reports whether multi-line step env key k must be rejected
+// before it reaches the host docker CLI process env via cmd.Env.
+// Case-insensitive.
 func cliEnvDenied(k string) bool {
 	upper := strings.ToUpper(k)
 	if _, ok := cliEnvDenylist[upper]; ok {
 		return true
 	}
-	return strings.HasPrefix(upper, "DOCKER_")
+	for _, pfx := range cliEnvPrefixDenylist {
+		if strings.HasPrefix(upper, pfx) {
+			return true
+		}
+	}
+	return false
 }
 
 // writeEnvFile writes single-line step.Env values to a 0600 env file in a fresh
@@ -322,10 +418,20 @@ func writeEnvFile(_ string, env map[string]string) (string, []string, func(), er
 		}
 		v := env[k]
 		if containsNL(v) {
-			// D1: denylist multi-line values only — a single-line
-			// HTTP_PROXY/PATH/DOCKER_BUILDKIT is a legitimate env
-			// var the operator set; only multi-line denylisted
-			// keys are rejected (error, not skip).
+			// Single-line denylisted keys (HTTP_PROXY, etc.) go into the
+			// --env-file (a 0600 file the container reads), not cmd.Env, so
+			// they never reach the host docker CLI. Only multi-line keys
+			// (which have to go through cmd.Env) are denylisted here.
+			// B1 (CIC-212): refuse a multi-line key that is already set in
+			// the runner's own environment so a step cannot override any
+			// runner-supplied secret via cmd.Env. No fixed denylist covers
+			// all operator-supplied keys.
+			if _, set := os.LookupEnv(k); set {
+				cleanup()
+				return "", nil, func() {}, fmt.Errorf(
+					"multi-line env key %q already set in runner env", k,
+				)
+			}
 			if cliEnvDenied(k) {
 				err := fmt.Errorf("denylisted multi-line env key %q", k)
 				cleanup()

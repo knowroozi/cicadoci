@@ -717,20 +717,52 @@ func TestIsValidEnvKey(t *testing.T) {
 	}
 }
 
-// TestCliEnvDeny verifies CIC-210 B2: denylisted CLI env var names are
-// never written to the docker --env-file, even when a step defines a
-// multi-line value.
+// TestCliEnvDeny verifies CIC-210 B2 + CIC-212: denylisted CLI env var
+// names are never written to the docker --env-file or the host CLI's cmd.Env,
+// even when a step defines a multi-line value. CIC-212 added the glibc / macOS
+// loader vars and Go runtime vars that a multi-line value could exploit on the
+// host.
 func TestCliEnvDeny(t *testing.T) {
 	denied := []string{
+		// Docker CLI config / proxy / CA.
 		"DOCKER_HOST",
 		"DOCKER_CERT_PATH",
+		"DOCKER_BUILDKIT",
 		"HOME",
 		"XDG_CONFIG_HOME",
 		"PATH",
 		"TMPDIR",
 		"HTTP_PROXY",
 		"HTTPS_PROXY",
+		"NO_PROXY",
+		"ALL_PROXY",
 		"SSL_CERT_FILE",
+		"SSL_CERT_DIR",
+		// glibc loader / UNSECURE_ENVVARS + macOS linker + Go runtime (CIC-212).
+		"LD_PRELOAD",
+		"LD_LIBRARY_PATH",
+		"LD_AUDIT",
+		"LD_DEBUG",
+		"GCONV_PATH",
+		"LOCPATH",
+		"NLSPATH",
+		"MALLOC_TRACE",
+		"HOSTALIASES",
+		"LOCALDOMAIN",
+		"RES_OPTIONS",
+		"RESOLV_HOST_CONF",
+		"GETCONF_DIR",
+		"NIS_PATH",
+		"TZDIR",
+		"DYLD_INSERT_LIBRARIES",
+		"DYLD_LIBRARY_PATH",
+		"DYLD_FRAMEWORK_PATH",
+		// Go runtime semantic vars (the five the Go runtime of a compiled binary reads).
+		"GODEBUG",
+		"GOTRACEBACK",
+		"GOGC",
+		"GOMEMLIMIT",
+		"GOMAXPROCS",
 	}
 	for _, k := range denied {
 		if !cliEnvDenied(k) {
@@ -740,14 +772,22 @@ func TestCliEnvDeny(t *testing.T) {
 		if !cliEnvDenied(strings.ToUpper(k)) {
 			t.Errorf("cliEnvDenied(%q) = false, want true (upper)", strings.ToUpper(k))
 		}
-		// docker_* prefix
-		if !cliEnvDenied("DOCKER_foo") {
-			t.Errorf("cliEnvDenied(DOCKER_foo) = false, want true")
+		if k != strings.ToUpper(k) {
+			if !cliEnvDenied(strings.ToLower(k)) {
+				t.Errorf("cliEnvDenied(%q) = false, want true (lower)", strings.ToLower(k))
+			}
 		}
+	}
+	// docker_* prefix still matches by prefix.
+	if !cliEnvDenied("DOCKER_foo") {
+		t.Errorf("cliEnvDenied(DOCKER_foo) = false, want true")
 	}
 }
 
-// TestCliEnvNotDenied verifies allowed keys are not denylisted.
+// TestCliEnvNotDenied verifies that ordinary user-named secret keys and
+// single-line env vars are NOT denylisted. A bare "GO" prefix is deliberately
+// NOT blocked (it would match unrelated user names like "GOGC"), only the
+// specific Go runtime knobs GODEBUG/GOFLAGS/GOEXPERIMENT/GOMODCACHE are.
 func TestCliEnvNotDenied(t *testing.T) {
 	allowed := []string{
 		"GITHUB_TOKEN",
@@ -755,11 +795,57 @@ func TestCliEnvNotDenied(t *testing.T) {
 		"MY_SECRET",
 		"FOO_BAR",
 		"HOME_PATH", // not HOME
+		"LD",        // bare LD is not a denylisted name or prefix
+		"GOX",       // not one of the specific Go knobs we denylist
+		"GONG",      // a random user var that happens to start with "GO"
 	}
 	for _, k := range allowed {
 		if cliEnvDenied(k) {
 			t.Errorf("cliEnvDenied(%q) = true, want false", k)
 		}
+	}
+}
+
+// TestWriteEnvFile_DenylistLoaderKeys verifies CIC-212: a multi-line value for
+// a glibc loader var (LD_PRELOAD), macOS linker var (DYLD_INSERT_LIBRARIES),
+// charset var (GCONV_PATH) or Go runtime var (GODEBUG) is rejected before it
+// can enter the host docker CLI's cmd.Env, while an ordinary user-named secret
+// still flows through as a multi-line value.
+func TestWriteEnvFile_DenylistLoaderKeys(t *testing.T) {
+	ws := filepath.Join(t.TempDir(), "ws")
+	if err := os.Mkdir(ws, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, loaderKey := range []string{"LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
+		"GCONV_PATH", "LOCPATH", "MALLOC_TRACE", "HOSTALIASES",
+		"DYLD_INSERT_LIBRARIES", "GODEBUG", "GOTRACEBACK", "GOGC"} {
+		_, _, cleanup, err := writeEnvFile(ws, map[string]string{loaderKey: "a\nb"})
+		if err == nil {
+			cleanup()
+			t.Errorf("writeEnvFile: multi-line loader key %q should be rejected, got nil", loaderKey)
+		} else {
+			// Assert the error text mentions the key name so a different
+			// error (e.g. a B1 runner-env hit) cannot pass silently.
+			if !strings.Contains(err.Error(), loaderKey) {
+				t.Errorf("writeEnvFile: key %q error text %q does not contain key name", loaderKey, err.Error())
+			}
+		}
+		if cleanup == nil {
+			t.Errorf("writeEnvFile: cleanup must be non-nil on error for key %q", loaderKey)
+		}
+	}
+	// An ordinary user-named multi-line secret is still accepted (not in
+	// the denylist, not set in the runner env). SERVICE_TOKEN is test-specific
+	// and not in the real environment, so no t.Setenv dance is needed.
+	envOK := map[string]string{"SERVICE_TOKEN": "tok\nline2", "API_KEY": "ok"}
+	os.Unsetenv("SERVICE_TOKEN")
+	_, multiline, cleanup, err := writeEnvFile(ws, envOK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if len(multiline) != 1 || multiline[0] != "SERVICE_TOKEN" {
+		t.Errorf("expected SERVICE_TOKEN in multiLineEnv, got %v", multiline)
 	}
 }
 
@@ -801,7 +887,9 @@ func TestWriteEnvFile_DenylistKeys(t *testing.T) {
 	}
 
 	// D1: multi-line denylisted keys are rejected with an error.
-	for _, k := range []string{"HTTP_PROXY", "DOCKER_HOST", "XDG_CONFIG_HOME", "PATH", "TMPDIR"} {
+	for _, k := range []string{"HTTP_PROXY", "DOCKER_HOST", "XDG_CONFIG_HOME", "PATH", "TMPDIR",
+		"LD_PRELOAD", "LD_LIBRARY_PATH", "GCONV_PATH", "LOCPATH", "HOSTALIASES",
+		"DYLD_INSERT_LIBRARIES", "GODEBUG", "GOTRACEBACK"} {
 		envMulti := map[string]string{k: "val1\nval2", "API_KEY": "ok"}
 		_, _, c2, err := writeEnvFile(ws, envMulti)
 		if err == nil {
@@ -835,4 +923,36 @@ func TestWriteEnvFile_DenylistKeys(t *testing.T) {
 	if len(multiLineEnv) != 1 || multiLineEnv[0] != "GITHUB_TOKEN" {
 		t.Errorf("expected GITHUB_TOKEN in multiLineEnv, got: %v", multiLineEnv)
 	}
+}
+
+// TestWriteEnvFile_RunnerEnvGuard is the B1 test for CIC-212: a multi-line key
+// that is already set in the runner's own environment (os.LookupEnv) is
+// rejected, so a step cannot override a runner-supplied secret via cmd.Env.
+func TestWriteEnvFile_RunnerEnvGuard(t *testing.T) {
+	ws := filepath.Join(t.TempDir(), "ws")
+	if err := os.Mkdir(ws, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const key = "CIC212_RUNNER_KEY"
+	t.Setenv(key, "secret-value")
+	defer os.Unsetenv(key)
+
+	_, _, cleanup, err := writeEnvFile(ws, map[string]string{key: "x\ny"})
+	if cleanup != nil {
+		cleanup()
+	}
+	if err == nil {
+		t.Fatal("writeEnvFile: multi-line key set in runner env should be rejected, got nil")
+	}
+	if !strings.Contains(err.Error(), "runner env") {
+		t.Errorf("error = %q, want to mention 'runner env'", err.Error())
+	}
+
+	// A key not in the runner env is accepted.
+	os.Unsetenv(key)
+	_, _, cleanup, err = writeEnvFile(ws, map[string]string{key: "x\ny"})
+	if err != nil {
+		t.Fatalf("writeEnvFile: key not in runner env should be accepted, got %v", err)
+	}
+	defer cleanup()
 }
