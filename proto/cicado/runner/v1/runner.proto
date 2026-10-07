@@ -169,6 +169,7 @@ message StepSpec {
   map<string,string> env  = 5;
   uint32 timeout_seconds  = 6;
   bool network_enabled    = 7;  // default-off posture is set by the server
+  string if_condition         = 8;    // CIC-118: "success" (default/empty), "failure", or "always"
 }
 
 message GitContext {

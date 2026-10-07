@@ -30,6 +30,13 @@ const (
 	// Schema: {"step_index": int, "step_name": string, "exit_code": int, "duration_ms": int, "ts": RFC3339}
 	StepFinished = "step_finished"
 
+	// StepSkipped is emitted when a job step's `if:` conditional is not met
+	// and the step does not run (CIC-118). It carries no exit code or
+	// duration — the step never executed.
+	//
+	// Schema: {"step_index": int, "step_name": string, "if": string, "ts": RFC3339}
+	StepSkipped = "step_skipped"
+
 	// ErrorClassified is emitted when a step failure is classified
 	// into a known failure mode. This is the substrate for
 	// classify_failure in the MCP tool surface.
@@ -54,6 +61,7 @@ const (
 var ValidKinds = map[string]bool{
 	StepStarted:      true,
 	StepFinished:     true,
+	StepSkipped:      true,
 	ErrorClassified:  true,
 	ArtifactUploaded: true,
 	LogGap:           true,
