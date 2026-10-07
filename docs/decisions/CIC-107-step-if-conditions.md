@@ -36,15 +36,18 @@ ticket and PR, not blocked by this one):
 3. The runner reports each step's exit code via the existing StepRun RPC;
     the executor decides which steps to skip.
 
-### DAG.PropagateFailure note
+### DAG.PropagateFailure note (resolved by CIC-118 item 4 — proxy removed)
 
-`DAG.PropagateFailure` (server/workflow/dag.go) uses `job.Steps[0].If == "always"`
-to bypass upstream-failure propagation.   This behaviour is a **design
-placeholder**, not a production caller: there are no production callers
-of `PropagateFailure` with jobs that have `if: always` on their first step.
-The validator rejection in this PR is not blocked by this usage.  Once
-CIC-118 is merged, `if: always` will be honoured by the runner and the
-validator can allow it.
+`DAG.PropagateFailure` (server/workflow/dag.go) used to use `job.Steps[0].If == "always"`
+to bypass upstream-failure propagation — a **cross-job proxy** dual-purposing the
+intra-job step `if:` field. It was a design placeholder with no production caller.
+
+That proxy is now **removed** (CIC-118 item 4, `server/workflow/dag.go`): a
+dependent job is skipped whenever a prerequisite failed, transitively, with no
+read of `Step.If`. The field therefore has a single, well-defined meaning
+(intra-job step sequencing). A dedicated job-level "run even if an upstream job
+failed" mechanism can be introduced when `PropagateFailure` is wired in (CIC-103)
+without reusing `Step.If`.
 
 ## Status
 
@@ -54,4 +57,7 @@ validator can allow it.
 ## Resolved
 
 CIC-118 (see `CIC-118-runner-if-condition-enforcement.md`) implemented the
-runner-side `if:` enforcement and removed this validator rejection.
+runner-side `if:` enforcement, removed this validator rejection, AND decoupled
+the job-level `PropagateFailure` proxy (item 4 — see the "Item 4" section there)
+so that lifting the rejection did not re-introduce the latent dual-meaning. The
+CIC-107 concern is now fully closed.

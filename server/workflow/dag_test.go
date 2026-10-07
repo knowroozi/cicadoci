@@ -285,11 +285,12 @@ func TestDAG_PropagateFailure(t *testing.T) {
 	}
 }
 
-func TestDAG_PropagateFailure_IgnoreAlways(t *testing.T) {
-	// b is skipped because it depends on a (which failed).
-	// c has if: always on its first step → c is NOT skipped.
-	// d depends on c, and c would have run, but c hasn't run yet in this call.
-	//  The caller should check again after c completes.
+// TestDAG_PropagateFailure_FirstStepIfAlwaysNoLongerBypasses documents the
+// CIC-118 item-4 decoupling: `if: always` on a job's first step is NO LONGER a
+// cross-job bypass. b (needs a) is skipped when a fails, and c (needs a, with
+// `if: always` on its first step) is ALSO skipped — the cross-job "run-anyway"
+// behaviour has been removed so Step.If means only intra-job step sequencing.
+func TestDAG_PropagateFailure_FirstStepIfAlwaysNoLongerBypasses(t *testing.T) {
 	w := &Workflow{
 		Name: "test",
 		Jobs: Jobs{
@@ -300,9 +301,11 @@ func TestDAG_PropagateFailure_IgnoreAlways(t *testing.T) {
 	}
 	dag, _ := BuildDAG(w)
 	skipped := dag.PropagateFailure(w, map[string]bool{"a": true})
-	// b is skipped (no if: always), c is NOT skipped (if: always on first step).
-	if len(skipped) != 1 || skipped[0] != "b" {
-		t.Errorf("skipped = %v, want [b]", skipped)
+	sort.Strings(skipped)
+	// Both dependents of the failed job a are now skipped; `if: always` on c's
+	// first step no longer exempts it from cross-job skipping.
+	if len(skipped) != 2 || skipped[0] != "b" || skipped[1] != "c" {
+		t.Errorf("skipped = %v, want [b c]", skipped)
 	}
 }
 

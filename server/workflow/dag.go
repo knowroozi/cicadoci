@@ -213,15 +213,22 @@ func (d *DAG) MaxLevel() int {
 // PropagateFailure computes the set of jobs that should be marked "skipped"
 // because one or more of their prerequisites failed or were cancelled.
 //
-// The `failedJobs` map lists all jobs that completed with a non-success
-// status (failed, cancelled, timed out, etc.).
+// `failedJobs` lists all jobs that completed with a non-success status (failed,
+// cancelled, timed out, etc.). A dependent job is skipped whenever any of its
+// prerequisites is in the skipped set, transitively.
 //
-// A dependent job is skipped UNLESS its first step has `if: always` —
-// in which case the job runs regardless of its prerequisites (the common
-// CI/CD "always run" convention for notification/cleanup steps).
+// CIC-118 (item 4, "decouple the job-level behaviour"): the earlier proxy that
+// read `if: always` on a job's FIRST step as a cross-job "run even if an upstream
+// job failed" bypass has been REMOVED. `Step.If` now governs only intra-job step
+// sequencing; it no longer leaks a meaning across job boundaries. The cross-job
+// "run-anyway" behaviour is deliberately not modelled here: PropagateFailure has
+// no production caller yet (see CIC-103), so a dedicated job-level field can be
+// introduced later without reusing Step.If and creating a dual-purpose footgun.
+// See docs/decisions/CIC-107-step-if-conditions.md.
 //
-// The returned slice does not include the failed jobs themselves; it is the
-// set of jobs that are transitively impacted by the failure.
+// The returned slice excludes the failed jobs themselves; it is the set of jobs
+// transitively impacted by the failure. It no longer reads `w.Jobs`, so `w` is
+// retained only for signature stability.
 func (d *DAG) PropagateFailure(w *Workflow, failedJobs map[string]bool) []string {
 	if len(failedJobs) == 0 {
 		return nil
@@ -240,21 +247,6 @@ func (d *DAG) PropagateFailure(w *Workflow, failedJobs map[string]bool) []string
 		failed := queue[i]
 		for _, dependent := range d.Dependents(failed) {
 			if skipped[dependent] {
-				continue
-			}
-			// Check: does this dependent have `if: always` on its first step?
-			// If so, it runs regardless of upstream status.
-			//
-			// NOTE (CIC-21 design): this reuses Step.If == "always" on a job's
-			// first step as a proxy for "run even if an upstream job failed",
-			// which is a cross-job dependency bypass. This is intentionally the
-			// same field that IfCondition (in trigger.go) uses for intra-job
-			// step sequencing — a job author setting if: always on the first
-			// step gets BOTH behaviors. CIC-28 (dispatcher) should document this
-			// coupling in the schema/architecture doc when wiring is ready, or
-			// introduce a distinct job-level `if:` field to decouple them.
-			job := w.Jobs[dependent]
-			if job != nil && len(job.Steps) > 0 && job.Steps[0].If == string(IfAlways) {
 				continue
 			}
 			skipped[dependent] = true
