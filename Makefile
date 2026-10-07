@@ -91,7 +91,7 @@ proto-breaking: ## Fail if the proto changed in a non-additive way vs. BASE_REF 
 	fi
 
 .PHONY: generate-check
-generate-check: check-proto-versions ## Fail if committed generated code is stale
+generate-check: check-proto-versions check-go-versions ## Fail if generated code is stale or build base < go.mod
 	@$(BUF) generate
 	@if ! git diff --quiet -- proto/ || [ -n "$$(git status --porcelain -- proto/)" ]; then \
 		echo "ERROR: generated proto code is out of date. Run 'make proto' and commit the result."; \
@@ -115,6 +115,10 @@ check-proto-versions: ## Fail if root and tools disagree on the protobuf runtime
 		exit 1; \
 	fi
 	@echo "root and tools agree on protobuf $$(grep -m1 '^\s*google.golang.org/protobuf ' go.mod | awk '{print $$2}')"
+
+.PHONY: check-go-versions
+check-go-versions: ## Fail if the Dockerfile build base is older than go.mod's `go` directive (CIC-149)
+	@go run ./scripts/go-versions/ go.mod Dockerfile
 
 ##@ Quality
 
