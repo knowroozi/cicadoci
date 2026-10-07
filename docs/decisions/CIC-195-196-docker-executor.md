@@ -21,9 +21,12 @@ problems:
    docker and registry auth.
 
 ### Fix (B1, B2)
-- `dockerRunEnv(step, envFile)` — the docker client's env is `os.Environ()`
-   only. No step env, no hardcoded overrides. B2 is fixed by using
-   `os.Environ()` directly.
+- The docker client's env is set inline in `RunStep` as `cmd.Env = os.Environ()`
+  and then appended with the multi-line `K=value` entries (CIC-210 B1) — no step
+  env, no hardcoded overrides. B2 is fixed by using `os.Environ()` directly. (An
+  earlier draft named a helper `dockerRunEnv(step, envFile)`; it was inlined into
+  `RunStep` and no longer exists. Multi-line env values, which a `--env-file` record
+  cannot hold, now flow as `--env K=value` — see CIC-210 below.)
 - `writeEnvFile(workspace, step.Env)` — writes `step.Env` as
    `KEY=VALUE` lines to a 0600 file in a 0700 temp dir under the
    workspace. Returns the file path and a cleanup function.

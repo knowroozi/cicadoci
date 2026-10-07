@@ -124,13 +124,117 @@ export CICADO_WEBHOOK_SECRET=cicado_whsec_$(openssl rand -hex 32)
 
 ## App config
 
-The GitHub App integration now reads its configuration from environment variables and flags defined in code:
+The GitHub App integration reads its configuration from flags and, for every
+secret/token value, from the environment *after* `flag.Parse()` (so a value
+never appears in the flag usage text or the process listing). Each secret has a
+`CICADO_*` env var and, where it is a development opt-out, an empty default.
 
-- `CICADO_GITHUB_APP_TOKEN` – the GitHub App installation token used for Checks reporting and clone credential minting. Provided via environment or `--github-app-token` flag; required for production reporting.
-- `CICADO_GITHUB_WORKFLOW_TOKEN` – token for the workflow producer (optional for dev). Supplied via `--github-workflow-token` flag or env var.
-- `CICADO_GITHUB_APP_ID` – the App ID (optional, used for token exchange).
+### GitHub App, clone, and workflow tokens (CIC-148 / CIC-151 / CIC-161 / CIC-146)
 
-These variables are parsed at startup; missing required variables cause the server to refuse to start (fail‑closed). Development mode can opt‑out with `--insecure-api` etc.
+- `--github-app-token` (env `CICADO_GITHUB_APP_TOKEN`) — used **only for
+  Checks-API reporting**. With it set, `newForge(...)` (in `cicado-server`'s
+  `main.go`) picks the GitHub Checks forge; empty reports nothing (`NoOpForge`
+  plus a warning). It is **not** used to mint clone credentials. A GitHub App
+  installation token expires after 1 hour, so a static one suits a short-lived
+  dev server only; per-call minting is CIC-146.
+- `--github-app-id` (env `CICADO_GITHUB_APP_ID`) + `--github-app-key-file` — to
+  enable **per-job clone tokens** the two must be set *together*. The App ID
+  (`0` disables minting) plus the PEM private key file (never logged or
+  persisted) drive an App-JWT + installation-token minter
+  (`runnersvc.NewCloneMinterFunc`, wired as `svcCfg.CloneMinter`); the minted
+  `github_clone_token` is delivered to a job over `GetJobSecrets` and consumed as
+  `git -c credential.helper`. **Without both**, `github_clone_token` is looked up
+  as a static secret instead. Fork PR runs get the same read-only clone token and
+  no other secrets.
+- `--github-workflow-token` (env `CICADO_GITHUB_WORKFLOW_TOKEN`) — a long-lived
+  fine-grained PAT (Contents: read) used to fetch the repo's workflow files on a
+  default-branch push. Optional for dev: empty keeps the producer off and the
+  server falls back to the store / `-dev-seed` path.
+
+None of the three GitHub App/workflow variables refuses startup when empty — an
+empty App token falls back to `NoOpForge` (with a warning), an empty workflow
+token keeps the producer off, and an App ID of `0` disables per-job minting.
+The variables that *do* refuse startup when unset, and their dev opt-outs, are
+documented just above under
+[Required server configuration (fail-closed)](#required-server-configuration-fail-closed):
+a missing `CICADO_API_TOKEN` (opt-out `--insecure-api`), an empty
+`CICADO_WEBHOOK_SECRET` (opt-out `--insecure-webhook`), and a missing
+`CICADO_SECRET_KEY` (opt-out `--allow-ephemeral-key`).
+
+### Approval gates (CIC-162 / CIC-182 / CIC-160, PRs #135 / #138 / #129)
+
+- `--approvalgates-enabled` (env `CICADO_APPROVALGATES_ENABLED`, default `false`)
+  — build the approval-gate manager and open a gate for every PR run
+  (CIC-162 part 1). Gates do not yet block dispatch through a *real* chat
+  provider, so it **requires** `--insecure-approvalgates-noop`.
+- `--approvalgates-allowed` (env `CICADO_APPROVALGATES_ALLOWED`, default empty)
+  — the allow-list of user IDs permitted to resolve a gate.
+- `--insecure-approvalgates-noop` (env `CICADO_INSECURE_APPROVALGATES_NOOP`,
+  default `false`) — permit `--approvalgates-enabled` with the no-op chat
+  provider: gates post nothing and can reach a terminal state only by auto-timeout
+  or run-cancel (CIC-208), not by a human. **Development only.**
+- `--approval-channel` (env `CICADO_APPROVAL_CHANNEL`, default empty) — the
+  channel for gate messages; empty means **no gate is opened** (fail-closed).
+- `--approval-timeout` (env `CICADO_APPROVAL_TIMEOUT`, default `0` = no
+  auto-timeout) — per-gate auto-timeout; `CICADO_APPROVAL_TIMEOUT` overrides the
+  flag value.
+
+## Operator API & CLI (CIC-194 / CIC-206, PRs #143 / #145)
+
+Before CIC-194 the platform could **deliver** secrets to a job but an operator
+could **not set** them, and a cancel request had **no trigger**. CIC-194
+(PR #143) added the operator write surface and CIC-206 (PR #145) added
+run-level cancel. An operator today can set/delete secrets and cancel a run or a
+single job.
+
+### HTTP routes
+
+Every route is mounted on the **same mux** as the rest of `/api/v1`, so it shares
+the same auth + per-request-timeout chain: each write requires the bearer token in
+**`CICADO_API_TOKEN`** (compared in constant time; an absent or wrong token is a
+`401`). The operator is audited as a single clearly-named principal, **`api-operator`** —
+never `system` or a zero UUID, because CIC-192 made the audit record
+principal-faithful (a write attributed to `system` would be indistinguishable from a
+background one). A real per-principal model is the CIC-44 / CIC-192 follow-up.
+
+| Route | Action | Notes |
+|---|---|---|
+| `POST /api/v1/secrets` | Set a secret | Body `{org_id, repo_id?, name, value}`. The **value is stored and never echoed or logged** — only org/repo/name are recorded. |
+| `DELETE /api/v1/secrets?org_id=&name=&repo_id=` | Delete a secret | Idempotent. |
+| `GET /api/v1/secrets?org_id=&repo_id=` | List secret **names** | Values are **never** returned. |
+| `POST /api/v1/jobs/{id}/cancel` | Cancel one job | Body `{reason?}`. |
+| `POST /api/v1/runs/{id}/cancel` | Cancel every active job of a run | Body `{reason?}` (CIC-206). |
+
+- **No-op cancel = 404, no audit row.** An unknown id, or a job/run that is already
+  terminal, returns `404` and writes **no** `ActionCancel` audit row — a false "cancelled"
+  record is never produced. Only a real in-flight state change is audited.
+- **Fail-closed by absence.** Each capability is registered **only when its dependency
+   is present**: a server built without a `CICADO_SECRET_KEY` exposes no secrets route,
+   and a server without a wired cancel path exposes no cancel route.
+
+### CLI counterpart
+
+`cmd/cicado/ops.go` ships thin HTTP clients (the exact inverse of the routes) under the
+`cicado` binary. Flag values default to env vars (`CICADO_SERVER`, `CICADO_API_TOKEN`);
+`--reason` defaults to *"cancelled by operator via CLI"*:
+
+- `cicado secrets set --org <org> [--repo <repo>] --name <n> (--value <v> | --value-stdin)` → `POST /api/v1/secrets`
+- `cicado secrets delete --org <org> [--repo <repo>] --name <n>` → `DELETE /api/v1/secrets`
+- `cicado run cancel --reason <r> <jobID>` → `POST /api/v1/jobs/{id}/cancel`
+- `cicado run cancel-run --reason <r> <runID>` → `POST /api/v1/runs/{id}/cancel`
+
+`--value-stdin` keeps the secret off the process listing (argv); `--reason` is also
+available on both cancel subcommands.
+
+### Security note (fail-closed default; see CIC-150)
+
+The write routes require the **same** `CICADO_API_TOKEN` as every other `/api/v1` route,
+so they are unreachable **when a token is set**. With *no* `CICADO_API_TOKEN`, the API
+falls back to `noOpAuthenticator`, which **admits every `/api/v1` request — including the
+write routes** — and that start-up path is **refused unless `--insecure-api` is also
+passed**. So: always run the server with a real `CICADO_API_TOKEN`; `--insecure-api` with an
+empty token is a **development-only** opt-out that exposes the write surface to anyone who
+can reach the port.
 
 ## Tests
 

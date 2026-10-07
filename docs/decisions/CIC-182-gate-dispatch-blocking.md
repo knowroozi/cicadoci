@@ -51,11 +51,13 @@ CIC-182 does not persist gate state to Postgres. If the server restarts
 while a gate is open and jobs are held in 'pending' status, the
 `awaitGateAndDispatch` goroutine terminates with the process. The held
 jobs remain in 'pending' state in the database. On a fresh server start,
-they will not be resumed automatically — a new PR push (or a re-request
-via `POST /api/runs`) would create a new run.
+they will not be resumed automatically — a new PR push (or a check-suite /
+check-run re-request, which the controller answers in `HandleCheckSuite` / `HandleCheckRun` → `rerun`) would create a new run. (There is **no** `POST /api/runs` endpoint to create a run; reruns come only from a GitHub check re-request or a new push.)
 
 This is a known limitation for part 1. Persistence of gate state across
-reboots is tracked in a future ticket.
+reboots is tracked by **CIC-207** (re-open held gates on startup) and
+**CIC-208** (close the still-pending gate record when its run is
+cancelled — merged in #148).
 
 ## Out of scope for this PR
 
@@ -66,4 +68,4 @@ reboots is tracked in a future ticket.
 ## References
 
 - Linear: CIC-182
-- Related: CIC-162 (approvalgates wiring — merged PR #135), CIC-108 (approvalgates subbugs)
+- Related: CIC-162 (approvalgates wiring — merged PR #135), CIC-108 (approvalgates sub-bugs), CIC-208 (gate close on run cancel — PR #148), CIC-207 (re-open held gates on startup)

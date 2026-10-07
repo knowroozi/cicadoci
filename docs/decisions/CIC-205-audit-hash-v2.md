@@ -88,3 +88,27 @@ Three defects in the original `PostgresLog.Append` were fixed:
 After these fixes, `PostgresLog.Append` stores hash_version as a real
 column and `hashEntryV2` is used for new rows. `VerifyChain`
 dispatches via `hashForRow`, so old v1 rows still verify correctly.
+
+## Status (2026-10-06, QC 12) — migration header is a stale historical artifact
+
+The `0006_audit_hash_v2.sql` header still reads:
+
+> Until a backfill decision is made, this column defaults to 1 for all existing
+> rows and for **new writes** *until the Go code is updated to write version 2*.
+> **DRAFT: the backfill question remains open with God.**
+
+Both clauses are now **out of date** and contradict this decision:
+
+1. **The Go code already writes v2** (`PostgresLog.Append` sets `HashVersion = 2` and
+   hashes with `hashForRow`, i.e. `hashEntryV2`; `MemoryLog.Append` likewise — see the
+   "PostgresLog.Append fix" and "UTC normalization" notes above and `server/audit` /
+   `server/store` on `master`). "New writes" are v2, not 1.
+2. **The backfill question is decided: no backfill**, as approved by God in this decision
+   (`"All existing rows default to 1 (legacy, no rehash). God approved: no backfill of
+   historical rows."`). It is closed, not open.
+
+**Action:** the `.sql` file is a historical migration artifact applied as-written, so it is
+not edited here (a docs-sync PR does not rewrite applied schema). The authoritative
+statement of v2 status is this decision record. Update the `0006` SQL header to retire
+the "DRAFT / backfill open" text when Jim next touches that file (out of scope for this
+pass).

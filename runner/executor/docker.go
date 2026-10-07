@@ -431,8 +431,11 @@ func dockerRunArgs(workspace string, step Step, containerName string, envFilePat
 		"-w", workspaceMountPoint,
 	)
 
-	// CIC-196 B1: env passes via --env-file — a 0600 host file the container
-	// owns — instead of -e flags, but only when there is env to inject.
+	// CIC-196 B1 / CIC-210 B1: single-line env passes via --env-file, a 0600 file
+	// the runner writes in an OS temp dir outside the job workspace, removed by
+	// writeEnvFile's cleanup after the step. Multi-line values cannot be an
+	// env-file record, so they pass as --env K (key only, nothing in argv) with
+	// K=value appended to cmd.Env. No value is ever passed with -e/--env K=V.
 	if envFilePath != "" {
 		args = append(args, "--env-file", envFilePath)
 	}
