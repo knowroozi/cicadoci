@@ -65,6 +65,30 @@ Estimates are engineer-weeks (ew) of focused FTE effort. As a solo/nights-weeken
 - Guardrail: no expressions/loops/conditionals beyond simple `if:` on step status + branch/tag filters. Logic lives in steps. (Jenkins Groovy lesson.)
 - **Exit:** workflows load from repo files; invalid YAML produces line/column errors a human and an agent can act on.
 
+#### Scheduled Pipelines (Cron Triggers) — CCD‑64…CCD‑70
+
+**Justification** –
+Recurring jobs are a core need for many CI pipelines (e.g., nightly builds, periodic security scans, data exports). Adding native schedule triggers reduces reliance on external cron systems, simplifies resource management, and enables consistent audit and permission handling within CICaDo.
+
+**High‑level design** –
+- **Scheduler service**: a background Go service that reads enabled schedule definitions from the database, parses cron expressions using `robfig/cron/v3`, computes next run times, and enqueues runs via the existing job queue. The service runs as part of the `cicado-server` process and shuts down gracefully, persisting next timestamps.
+- **DB schema**: new `scheduled_runs` table (`id`, `workflow_id`, `cron_expr`, `enabled`, `next_run_at`, `created_at`, `updated_at`). Migrations added in `server/store/migrations/000X_scheduled_runs.sql`.
+- **Workflow loader**: during workflow loading, any `on.schedule` trigger is persisted in `scheduled_runs`. Updates on push replace existing entries for the same workflow.
+- **CLI**: `cicado schedule list` prints a table of schedule name, cron expression, next run, and enabled status.
+- **API**: HTTP endpoints (`GET /api/v1/schedules`, `POST /api/v1/schedules`, `PATCH /api/v1/schedules/{id}`, `DELETE /api/v1/schedules/{id}`) for CRUD operations, with auth checks matching other API surfaces.
+- **UI (M6)**: a simple page will later display upcoming schedules and allow enable/disable toggles (ticket CCD‑70).
+
+**Ticket breakdown** –
+- CCD‑64 – DB schema for persisted schedules.
+- CCD‑65 – Scheduler background service implementation.
+- CCD‑66 – Extend workflow loader to persist `on.schedule` triggers.
+- CCD‑67 – CLI command `cicado schedule list`.
+- CCD‑68 – API endpoints for schedule management (list, create, update, delete).
+- CCD‑69 – Documentation updates (this file).
+- CCD‑70 – UI page for scheduled pipelines (M6 implementation).
+
+This addition aligns with the overall roadmap and fits within the existing M2‑M4 effort envelope.
+
 ### M3 — GitHub App integration (5 ew)
 - GitHub App: webhook receiver (`push`, `pull_request`, `check_suite`, `check_run` rerequests), signature verification, delivery replay tolerance (idempotency keys)
 - Checks API reporting: pending → in_progress → completed with summary + annotations; re-run from GitHub UI
