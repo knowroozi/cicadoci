@@ -130,17 +130,9 @@ func validateStep(jobName string, idx int, s *Step) []error {
 		errs = append(errs, fmt.Errorf("%s: invalid 'if' value %q; must be one of: success, failure, always", prefix, s.If))
 	}
 
-	// Step-level 'if: failure' and 'if: always' are not yet enforced by the
-	// runner: the cicanscript executor stops at the first failed step, so a
-	// cleanup step with 'if: always' or a follow-up step with 'if: failure'
-	// is silently never run.  Reject them so the limitation fails loudly.
-	// See docs/decisions/CIC-107-step-if-conditions.md.
-	if s.If == string(IfFailure) || s.If == string(IfAlways) {
-		errs = append(errs, fmt.Errorf(
-			"%s: step-level 'if: %s' is not yet supported by the runner (see CIC-118); "+
-				"remove it or change to 'if: success'",
-			prefix, s.If))
-	}
+	// CIC-118: step-level `if: failure`/`always` are now enforced by the runner's
+	// step loop, so they are accepted here (lifts the CIC-107 wall)
+	// - see docs/decisions/CIC-118-runner-if-condition-enforcement.md.
 
 	// Identity, when set, must be one of the known identity types.
 	if s.Identity != "" && !isValidIdentity(s.Identity) {

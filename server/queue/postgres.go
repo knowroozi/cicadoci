@@ -247,7 +247,7 @@ func (q *Postgres) Claim(ctx context.Context, req ClaimRequest) ([]ClaimedJob, e
 func (q *Postgres) loadSteps(ctx context.Context, jobID uuid.UUID) ([]Step, error) {
 	rows, err := q.pool.Query(ctx, `
 		SELECT step_index, name, coalesce(image, ''), command, env,
-		       timeout_seconds, network_enabled
+		       timeout_seconds, network_enabled, coalesce(if_condition, '')
 		  FROM steps
 		 WHERE job_id = $1
 		 ORDER BY step_index`, jobID)
@@ -261,7 +261,7 @@ func (q *Postgres) loadSteps(ctx context.Context, jobID uuid.UUID) ([]Step, erro
 		var s Step
 		var envJSON []byte
 		if err := rows.Scan(&s.Index, &s.Name, &s.Image, &s.Command, &envJSON,
-			&s.TimeoutSeconds, &s.NetworkEnabled); err != nil {
+			&s.TimeoutSeconds, &s.NetworkEnabled, &s.If); err != nil {
 			return nil, fmt.Errorf("queue: scan step: %w", err)
 		}
 		if err := json.Unmarshal(envJSON, &s.Env); err != nil {

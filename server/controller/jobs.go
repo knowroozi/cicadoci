@@ -428,6 +428,7 @@ func convertSteps(steps []*workflow.Step) []store.StepSpec {
 			Command:        cmd,
 			Env:            envJSON,
 			TimeoutSeconds: s.TimeoutSeconds,
+			If:             s.If,
 		}
 	}
 	return out
