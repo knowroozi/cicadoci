@@ -325,7 +325,7 @@ func TestReceiver_DuplicateDeliverySuppressed(t *testing.T) {
 	}
 }
 
-func TestReceiver_UknownEventType(t *testing.T) {
+func TestReceiver_UnknownEvent_ignored(t *testing.T) {
 	secret := "secret123"
 	// Empty JSON body so json.Unmarshal succeeds on an unknown type too.
 	body := []byte(`{}`)
@@ -345,8 +345,10 @@ func TestReceiver_UknownEventType(t *testing.T) {
 	rr := httptest.NewRecorder()
 	receiver.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400 for unknown event type", rr.Code)
+	// CICaDo doesn't handle workflow_dispatch; it is accepted and ignored with
+	// 200 so GitHub's delivery dashboard shows a success, not a failed delivery.
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 OK (ignored) for unhandled event type; body=%s", rr.Code, rr.Body.String())
 	}
 }
 

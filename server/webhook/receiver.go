@@ -26,6 +26,14 @@ const (
 	erCodeMessage = "message"
 )
 
+// okKey and statusKey are the JSON keys shared by the duplicate, ok,
+// and ignored success envelopes.  They are named constants so each literal
+// appears once (goconst otherwise flags a key that it sees used 3+ times).
+const (
+	okKey     = "ok"
+	statusKey = "status"
+)
+
 // ReceiverOptions configures a Receiver.
 type ReceiverOptions struct {
 	// Secret is the GitHub App webhook signing secret.
@@ -118,9 +126,10 @@ func (r *Receiver) Suppressed() uint64 { return atomic.LoadUint64(&r.suppressed)
 //
 // Response codes:
 //
-//	200 — event accepted and dispatched successfully, or a duplicate that
-//	  was already processed (idempotent success)
-//	400 — malformed JSON body or unknown event type
+//	200 — event accepted and dispatched successfully; a duplicate delivery
+//	  already processed (idempotent success); or an event type CICaDo does
+//	  not handle, accepted and ignored so GitHub's dashboard shows a success
+//	400 — oversized body or a missing X-GitHub-Event header
 //	401 — signature verification failed
 //	501 — event type is recognised but its Dispatcher method is unimplemented
 //	503 — concurrency cap reached (flood backpressure); GitHub will retry
@@ -210,8 +219,8 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 				"event_type", eventType)
 			// 200 so GitHub stops retrying — the first delivery was already processed.
 			writeJSON(w, http.StatusOK, map[string]any{
-				"ok":     true,
-				"status": "duplicate",
+				okKey:     true,
+				statusKey: "duplicate",
 			})
 			return
 		}
@@ -222,9 +231,17 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if dispatchErr != nil {
 		switch {
 		case errors.Is(dispatchErr, errUnknownEventType):
-			r.logError(http.StatusBadRequest, "unknown event type", dispatchErr)
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				erCodeErr: map[string]string{erKeyCode: "unknown_event", erCodeMessage: "unrecognised event type"},
+			// CICaDo doesn't handle this event type (e.g. watch, issues, members,
+			// workflow_dispatch). Accept and ignore it with 200 so GitHub marks the
+			// delivery successful instead of recording a spurious failure; nothing
+			// stateful happened, so there is nothing to record or retry.
+			r.logger.Info("ignoring unhandled event type",
+				"event_type", eventType,
+				"delivery_id", deliveryID)
+			writeJSON(w, http.StatusOK, map[string]any{
+				okKey:     true,
+				statusKey: "ignored",
+				"event":   eventType,
 			})
 		case errors.Is(dispatchErr, ErrUnimplemented):
 			// 501 signals "not implemented" so GitHub retries on a schedule
@@ -253,8 +270,8 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		"delivery_id", deliveryID,
 		"event_type", eventType)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":     true,
-		"status": "ok",
+		okKey:     true,
+		statusKey: "ok",
 	})
 }
 
