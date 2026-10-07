@@ -139,6 +139,15 @@ const ReasonShutdownDrain = "abandoned: server shutdown"
 // the cancel-side close must not read as a timeout.
 const ReasonRunCancelled = "cancelled: run cancelled"
 
+// ReasonNoJobs is the terminal reason recorded when a zero-job run's gate
+// is closed (CIC-209). It covers both the no-match case (no workflow in the
+// repo matched the event) and the load-failure case (a matching workflow
+// failed to build or create jobs) — in both cases the run ends up with
+// zero jobs, so the gate has no jobs to dispatch. The run's own terminal
+// status (failed on load error, succeeded otherwise) is set separately by
+// finishIfNoJobs; this constant names the gate close, not the run status.
+const ReasonNoJobs = "zero jobs: run had no matching workflow"
+
 // NewManager creates a gate manager.
 func NewManager(provider chat.ChatProvider, onResolved func(runID string, state GateState, reason string)) *Manager {
 	return &Manager{
@@ -544,4 +553,11 @@ func (s GateState) String() string {
 // must be closed, even if no one resolved it.
 func (m *Manager) CancelGate(runID string) {
 	m.closeOne(runID, ReasonRunCancelled)
+}
+
+// CloseNoJobs closes a gate that was opened for a zero-job run (CIC-209),
+// using the ReasonNoJobs terminal reason so audit and Slack messaging
+// are correct.
+func (m *Manager) CloseNoJobs(runID string) {
+	m.closeOne(runID, ReasonNoJobs)
 }

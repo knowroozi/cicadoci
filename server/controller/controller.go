@@ -279,7 +279,7 @@ func (c *Controller) HandlePush(payload webhook.PushPayload) error {
 				"run", runID, "err", ferr)
 		}
 	}
-	c.finishIfNoJobs(ctx, runID, loadErr)
+	c.finishIfNoJobs(ctx, runID, loadErr, false)
 
 	// Audit the run creation.  Non-fatal: audit failure shouldn't
 	// prevent the run from executing.
@@ -392,16 +392,19 @@ func (c *Controller) HandlePullRequest(payload webhook.PullRequestPayload) error
 		}
 
 		if gateOpened {
-			// CIC-182 N2: gate opened but load failed -- close it
-			// so the approvalgates Manager stops tracking it.
+			// CIC-182 N2 / CIC-209 r5 preferred: gate opened but load failed
+			// -- close it so the approvalgates Manager stops tracking it. Use
+			// CloseNoJobs (not CloseAll) so the terminal reason is
+			// "zero jobs" rather than "approval timed out", which would be a
+			// misleading audit record for the load-failure case.
 			c.log.Info("approvalgates: load failed; closing gated run", "run", runID)
-			c.cfg.ApprovalGates.CloseAll(runID.String())
+			c.cfg.ApprovalGates.CloseNoJobs(runID.String())
 		}
-		c.finishIfNoJobs(ctx, runID, loadErr)
+		c.finishIfNoJobs(ctx, runID, loadErr, false)
 		c.emitAudit(ctx, runID, orgID, pullRequestEvent, actor, owner, repoName, branch)
 		return nil
 	}
-	c.finishIfNoJobs(ctx, runID, loadErr)
+	c.finishIfNoJobs(ctx, runID, loadErr, gateOpened)
 
 	// Audit the run creation with the PR author login as the actor.
 	c.emitAudit(ctx, runID, orgID, pullRequestEvent, actor, owner, repoName, branch)
@@ -536,9 +539,11 @@ func (c *Controller) rerun(fullName, sha, source string) error {
 			c.log.Warn("controller: failed to finalise re-run after job creation error",
 				"run", runID, "err", ferr)
 		}
-		// R1: if a gate was opened, close it so it stops tracking this run.
+		// R1 / CIC-209 r5 preferred: close the gated run with the ZeroJobs
+		// reason instead of CloseAll (timeout) when the load failed.
 		if gateRerun && c.cfg.ApprovalGates != nil {
-			c.cfg.ApprovalGates.CloseAll(runID.String())
+			c.log.Info("approvalgates: re-run load failed; closing gated run", "run", runID)
+			c.cfg.ApprovalGates.CloseNoJobs(runID.String())
 		}
 	}
 	// R1: start the gate waiter after the jobs are loaded so an early
@@ -546,7 +551,7 @@ func (c *Controller) rerun(fullName, sha, source string) error {
 	if gateRerun && loadErr == nil {
 		c.spawnGateDispatch(runID)
 	}
-	c.finishIfNoJobs(ctx, runID, loadErr)
+	c.finishIfNoJobs(ctx, runID, loadErr, gateRerun)
 	c.emitAudit(ctx, runID, orgID, source, rerequestActor, owner, repoName, orig.Ref)
 	return nil
 }
@@ -633,16 +638,22 @@ func extractPRNumberFromRef(ref string) int {
 // forge check would stay in_progress. finishIfNoJobs releases the slot and
 // completes the check at once.
 //
-// The conclusion is the run's own terminal status when it has one (CIC-85
-// finalises zero-job runs). A run still pending is reported as failed when
-// loading failed and as succeeded otherwise, matching CIC-85's rule.
+// The run's terminal status is set explicitly before the gate is closed:
+// on load error, FinalizeRunToFailed; on zero-match, FinalizeRunToSucceeded
+// (matching CIC-85). This ordering means the async dispatchAfterGate (if it
+// fires via the waiter) sees the terminal state and does not overwrite it.
 //
 // A run with jobs is left alone: OnRunTerminal finishes it. If the job count
 // cannot be read the slot is released (briefly exceeding the cap is
 // recoverable, a leaked slot is not) but the check is left open, since
 // completing the check of a run whose jobs are still running would report a
 // result too early.
-func (c *Controller) finishIfNoJobs(ctx context.Context, runID uuid.UUID, loadErr error) {
+// When the run ends up with zero jobs and gateOpened, ApprovalGates.CloseNoJobs
+// is called so the terminal reason is ReasonNoJobs (not the generic
+// "approval timed out"). This prevents a dangling gate record and frees an
+// awaitGateAndDispatch goroutine that would otherwise block forever when
+// ApprovalTimeout=0.
+func (c *Controller) finishIfNoJobs(ctx context.Context, runID uuid.UUID, loadErr error, gateOpened bool) {
 	if c.store == nil {
 		return
 	}
@@ -655,6 +666,31 @@ func (c *Controller) finishIfNoJobs(ctx context.Context, runID uuid.UUID, loadEr
 	}
 	if n > 0 {
 		return
+	}
+	// CIC-209: finalise the run to its terminal state BEFORE closing
+	// the gate. When n==0 and gateOpened:
+	//  - dispatchAfterGate runs after CloseNoJobs, calling
+	//    FailAllJobs + FinalizeRunToFailed. With the F1 fix (bool
+	//    return), FinalizeRunToFailed returns (false, nil) when the
+	//    row is no longer 'pending', so ReportFailed is skipped.
+	//  - Without this finalise, the late ReportFailed in the waiter
+	//    would overwrite the correct terminal state.
+	if loadErr != nil {
+		if _, err := c.store.FinalizeRunToFailed(ctx, runID); err != nil {
+			c.log.Warn("approvalgates: zero-job finalise to failed",
+				"run", runID, "err", err)
+		}
+	} else {
+		if err := c.store.FinalizeRunToSucceeded(ctx, runID); err != nil {
+			c.log.Warn("approvalgates: zero-job finalise to succeeded",
+				"run", runID, "err", err)
+		}
+	}
+	// CIC-209: close the gate for a zero-job run so a pending gate
+	// does not leak when ApprovalTimeout=0.
+	if gateOpened && c.cfg.ApprovalGates != nil {
+		c.log.Info("approvalgates: zero jobs; closing gate run", "run", runID)
+		c.cfg.ApprovalGates.CloseNoJobs(runID.String())
 	}
 	c.ReleaseRun(runID)
 	if c.forge == nil {

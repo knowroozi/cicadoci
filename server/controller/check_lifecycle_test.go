@@ -169,7 +169,7 @@ func TestZeroJobRunUsesTerminalStatus(t *testing.T) {
 		`UPDATE runs SET status = 'failed', finished_at = now() WHERE id = $1`, run.id); err != nil {
 		t.Fatalf("set run failed: %v", err)
 	}
-	fx.c.finishIfNoJobs(context.Background(), run.id, nil)
+	fx.c.finishIfNoJobs(context.Background(), run.id, nil, false)
 
 	if n := len(fx.forge.completes); n != 2 {
 		t.Fatalf("forge.Complete calls = %d, want 2", n)
