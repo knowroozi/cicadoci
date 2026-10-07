@@ -8,8 +8,6 @@
 // dynamic evaluation. The `if:` enum is {success, failure, always}.
 package workflow
 
-import "cicadoci.com/cicado/internal/stepif"
-
 // Event describes a source event that can trigger a workflow.
 //
 // The event fields are populated by the forge adapter (CIC-28) or the
@@ -175,7 +173,17 @@ func pathsMatch(patterns, eventPaths []string) bool {
 //   - "failure": run if any prior step in this job failed or was skipped.
 //   - "always": run regardless of prior step status.
 func IfCondition(ifVal string, priorSucceeded, priorFailed bool) bool {
-	return stepif.Evaluate(ifVal, priorSucceeded, priorFailed)
+	switch ifVal {
+	case "", "success":
+		return priorSucceeded
+	case "failure":
+		return priorFailed
+	case "always":
+		return true
+	default:
+		// Invalid value: conservative default (do not run).
+		return false
+	}
 }
 
 // matchGlob implements minimal glob matching for CI-style patterns.

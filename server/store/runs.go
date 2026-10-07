@@ -193,7 +193,6 @@ type StepSpec struct {
 	Image          string
 	Command        []string
 	Env            []byte // JSON object, nil or empty → {}
-	If             string // CIC-118: per-step if: conditional; empty = "success"
 	TimeoutSeconds int    // 0 means no timeout
 }
 
@@ -287,11 +286,11 @@ func (s *Store) CreateJobSpecs(
 			sql := `
 			INSERT INTO steps
 				(id, job_id, step_index, name, image, command, env,
-				 timeout_seconds, network_enabled, status, if_condition)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10)`
+				 timeout_seconds, network_enabled, status)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')`
 			_, err := tx.Exec(ctx, sql,
 				uuid.New(), ids[i], int32(si), st.Name, st.Image,
-				cmd, envBytes, int32(st.TimeoutSeconds), false, st.If)
+				cmd, envBytes, int32(st.TimeoutSeconds), false)
 			if err != nil {
 				_ = tx.Rollback(ctx)
 				return nil, fmt.Errorf("create step %d of job %q: %w", si, sp.Name, err)

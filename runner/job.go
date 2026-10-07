@@ -12,7 +12,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"cicadoci.com/cicado/internal/secretexpr"
-	"cicadoci.com/cicado/internal/stepif"
 	runnerv1 "cicadoci.com/cicado/proto/runner/v1"
 	"cicadoci.com/cicado/runner/executor"
 	"cicadoci.com/cicado/runner/journal"
@@ -189,27 +188,8 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 			a.log.Warn("cleanup workspace", "job_id", jobID, "error", err)
 		}
 	}()
-	priorSucceeded := true // vacuously true for a job whose first step runs
-	priorFailed := false
-	jobFailed := false
-	lastFailExit := int32(0)
-	lastFailClass := ""
 	for _, step := range spec.GetSteps() {
 		stepIndex := step.GetIndex()
-		// CIC-118: enforce the step's `if:` conditional against the outcomes of the
-		// steps that ran before it in this job. A step whose condition is not met is
-		// skipped: it neither runs nor blocks the job, and records in the downstream
-		// state like a failure does, matching the documented `if` semantics ("failure"
-		// runs when a prior step failed OR was skipped). No RUNNING_STEP or step_started
-		// update is emitted for a skipped step.
-		if !stepif.Evaluate(step.GetIfCondition(), priorSucceeded, priorFailed) {
-			a.sendEvent(jobID, leaseID, stepIndex, "step_skipped",
-				fmt.Sprintf(`{"name":%q,"if":%q}`,
-					step.GetName(), step.GetIfCondition()))
-			priorSucceeded = false
-			priorFailed = true
-			continue
-		}
 		a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{
 			State:     runnerv1.StatusUpdate_RUNNING_STEP,
 			StepIndex: stepIndex,
@@ -289,29 +269,17 @@ func (a *Agent) executeJob(ctx context.Context, assignment *runnerv1.JobAssignme
 			a.sendEvent(jobID, leaseID, stepIndex, "step_finished",
 				fmt.Sprintf(`{"exit_code":%d,"duration_ms":%d,"timed_out":%t}`,
 					result.ExitCode, result.Duration.Milliseconds(), result.TimedOut))
-			// CIC-118: a user-script or timeout failure marks the job failed but does not
-			// stop the loop, so later steps gated "if: failure" or "if: always" still run.
-			// No terminal StatusUpdate is sent here: the server treats a FAILED update as the
-			// job's final state, so exactly one terminal is emitted after the loop, carrying
-			// the last failing step's exit code and error class.
-			jobFailed = true
-			priorSucceeded = false
-			priorFailed = true
-			lastFailExit = result.ExitCode
-			lastFailClass = errorClass
-			continue
+			a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{
+				State:      runnerv1.StatusUpdate_FAILED,
+				StepIndex:  stepIndex,
+				ExitCode:   result.ExitCode,
+				ErrorClass: errorClass,
+			})
+			return
 		default:
 			a.sendEvent(jobID, leaseID, stepIndex, "step_finished",
 				fmt.Sprintf(`{"exit_code":0,"duration_ms":%d}`, result.Duration.Milliseconds()))
 		}
-	}
-	if jobFailed {
-		a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{
-			State:      runnerv1.StatusUpdate_FAILED,
-			ExitCode:   lastFailExit,
-			ErrorClass: lastFailClass,
-		})
-		return
 	}
 	a.sendStatus(send, jobID, leaseID, &runnerv1.StatusUpdate{
 		State:    runnerv1.StatusUpdate_SUCCEEDED,

@@ -135,17 +135,18 @@ func TestValidate_ValidIfValues(t *testing.T) {
 	}
 }
 
-// TestValidate_StepIfConditionsAccepted verifies that 'if: failure' and
-// 'if: always' are now ACCEPTED by the validator: the runner enforces step-level
-// if: conditions (CIC-118), so the former CIC-107 rejection is lifted. Only
-// genuinely invalid values (e.g. 'always!') remain rejected above.
-func TestValidate_StepIfConditionsAccepted(t *testing.T) {
-	for _, v := range []string{"", "success", "failure", "always"} {
+// TestValidate_StepIfFailureNotSupported verifies that 'if: failure' and
+// 'if: always' are rejected on EVERY step (including step 0).
+// The runner is not yet wired to honour step-level if: conditions
+// (CIC-118); the validator fails loudly until then.
+func TestValidate_StepIfFailureNotSupported(t *testing.T) {
+	for _, v := range []string{"failure", "always"} {
 		w := validWorkflow()
-		// A single step at index 0 carrying the condition.
+		// Single step at index 0 with the unsupported condition.
 		w.Jobs["build"].Steps = []*Step{{Name: "only", Run: "echo hi", If: v}}
-		if err := Validate(w); err != nil {
-			t.Errorf("if=%q on step 0: unexpected error after CIC-118: %v", v, err)
+		err := Validate(w)
+		if err == nil {
+			t.Errorf("if=%q on step 0: expected error (not yet supported), got nil", v)
 		}
 	}
 }

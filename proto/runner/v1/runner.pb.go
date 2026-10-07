@@ -1229,7 +1229,6 @@ type StepSpec struct {
 	Env            map[string]string      `protobuf:"bytes,5,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	TimeoutSeconds uint32                 `protobuf:"varint,6,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	NetworkEnabled bool                   `protobuf:"varint,7,opt,name=network_enabled,json=networkEnabled,proto3" json:"network_enabled,omitempty"` // default-off posture is set by the server
-	IfCondition    string                 `protobuf:"bytes,8,opt,name=if_condition,json=ifCondition,proto3" json:"if_condition,omitempty"`           // CIC-118: "success" (default/empty), "failure", or "always"
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -1311,13 +1310,6 @@ func (x *StepSpec) GetNetworkEnabled() bool {
 		return x.NetworkEnabled
 	}
 	return false
-}
-
-func (x *StepSpec) GetIfCondition() string {
-	if x != nil {
-		return x.IfCondition
-	}
-	return ""
 }
 
 type GitContext struct {
@@ -2559,7 +2551,7 @@ const file_cicado_runner_v1_runner_proto_rawDesc = "" +
 	"\x03git\x18\b \x01(\v2\x1c.cicado.runner.v1.GitContextR\x03git\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc8\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa5\x02\n" +
 	"\bStepSpec\x12\x14\n" +
 	"\x05index\x18\x01 \x01(\rR\x05index\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -2567,8 +2559,7 @@ const file_cicado_runner_v1_runner_proto_rawDesc = "" +
 	"\acommand\x18\x04 \x03(\tR\acommand\x125\n" +
 	"\x03env\x18\x05 \x03(\v2#.cicado.runner.v1.StepSpec.EnvEntryR\x03env\x12'\n" +
 	"\x0ftimeout_seconds\x18\x06 \x01(\rR\x0etimeoutSeconds\x12'\n" +
-	"\x0fnetwork_enabled\x18\a \x01(\bR\x0enetworkEnabled\x12!\n" +
-	"\fif_condition\x18\b \x01(\tR\vifCondition\x1a6\n" +
+	"\x0fnetwork_enabled\x18\a \x01(\bR\x0enetworkEnabled\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"M\n" +
