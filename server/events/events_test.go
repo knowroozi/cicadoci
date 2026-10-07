@@ -109,7 +109,7 @@ func TestLogGapEventJSON(t *testing.T) {
 }
 
 func TestAllKindsCovered(t *testing.T) {
-	kinds := []string{StepStarted, StepFinished, ErrorClassified, ArtifactUploaded, LogGap}
+	kinds := []string{StepStarted, StepFinished, StepSkipped, ErrorClassified, ArtifactUploaded, LogGap}
 	if len(kinds) != len(ValidKinds) {
 		t.Fatalf("ValidKinds has %d entries, expected %d", len(ValidKinds), len(kinds))
 	}

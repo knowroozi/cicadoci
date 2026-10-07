@@ -50,3 +50,8 @@ validator can allow it.
 
 - Validator rejection: **done in this PR (#103)**
 - Runner-side implementation: **CIC-118, separate PR**
+
+## Resolved
+
+CIC-118 (see `CIC-118-runner-if-condition-enforcement.md`) implemented the
+runner-side `if:` enforcement and removed this validator rejection.
