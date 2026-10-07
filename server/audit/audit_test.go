@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -310,6 +311,12 @@ func TestVerifyChainDetectsV2Tamper(t *testing.T) {
 // The v2 hash normalises the timestamp to UTC via .UTC() before json.Marshal,
 // so an Entry stored in a local-TZ column and recovered in a different TZ must
 // produce the same v2 hash as the same timestamp stored in UTC.
+// TestHashEntryV2UTCInvariance verifies that hashEntryV2 produces the same
+// digest regardless of the local timezone of e.Timestamp.
+//
+// The v2 hash normalises the timestamp to UTC via .UTC() before json.Marshal,
+// so an Entry stored in a local-TZ column and recovered in a different TZ must
+// produce the same v2 hash as the same timestamp stored in UTC.
 func TestHashEntryV2UTCInvariance(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	// A UTC entry.
@@ -325,18 +332,49 @@ func TestHashEntryV2UTCInvariance(t *testing.T) {
 		OrgID:         "org-42",
 		HashVersion:   2,
 	}
-	// Same timestamp but in a non-UTC local zone (e.g. America/Los_Angeles).
-	loc, _ := time.LoadLocation("America/Los_Angeles")
+	// Same instant in a non-UTC local zone via FixedZone (deterministic, no
+	// IANA load and no ignored error, per N1/T1).
+	la := time.FixedZone("PST", -8*3600)
 	local := utc
-	local.Timestamp = now.In(loc)
+	local.Timestamp = now.In(la)
 	// hashEntryV2 must be identical for both.
 	if hashEntryV2(utc) != hashEntryV2(local) {
-		t.Fatalf("v2 hash depends on local timezone: utc=%s, la=%s; expected equal",
+		t.Fatalf("v2 hash depends on local timezone: utc=%s la=%s; want equal",
 			hashEntryV2(utc), hashEntryV2(local))
 	}
-	// And hashEntry (v1) must also differ (v1 does NOT normalize), proving the
-	// fix is v2-only and scoped.
+	// v1 (hashEntry) does NOT normalise, so it must differ, proving the fix is
+	// v2-only and scoped.
 	if hashEntry(utc) == hashEntry(local) {
-		t.Log("NOTE: v1 hash coincidentally matches in this timezone — acceptable; the fix is v2-only")
+		t.Fatal("v1 hash coincidentally matched across timezones; expected a difference")
+	}
+}
+
+// TestVerifyChainDetectsDowngrade verifies (CIC-211) that once a chain has cut
+// over to v2, downgrading a later row back to v1 fails verification. The three
+// v2-only fields (principal_type, surface, org_id) are un-hashed by the v1
+// formula, so a downgrade that re-hashes the suffix as v1 would otherwise pass;
+// the monotonic version guard catches it.
+func TestVerifyChainDetectsDowngrade(t *testing.T) {
+	ml := NewMemoryLog()
+	ctx := context.Background()
+	// Two legitimate v2 rows (what Append writes)...
+	ml.Append(ctx, Entry{Action: ActionApprove, Actor: "u",
+		PrincipalType: PrincipalUser, Surface: SurfaceWeb, OrgID: "org-1"})
+	ml.Append(ctx, Entry{Action: ActionCancel, Actor: "u",
+		PrincipalType: PrincipalUser, Surface: SurfaceWeb, OrgID: "org-1"})
+
+	// ...then downgrade the second row to v1, re-hashing it as v1 so the only
+	// anomaly left is the version drop (the hash still verifies).
+	ml.mu.Lock()
+	ml.entries[2].HashVersion = 1
+	ml.entries[2].Hash = hashEntry(ml.entries[2])
+	ml.mu.Unlock()
+
+	err := ml.VerifyChain(ctx)
+	if err == nil {
+		t.Fatal("expected VerifyChain to reject a v2-to-v1 downgrade")
+	}
+	if !strings.Contains(err.Error(), "hash version downgrade") {
+		t.Fatalf("expected the monotonic guard to reject the downgrade, got a different error: %v", err)
 	}
 }

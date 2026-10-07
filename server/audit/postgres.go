@@ -64,9 +64,10 @@ func (p *PostgresLog) Append(ctx context.Context, e Entry) (int64, error) {
 	// gets hashed matches the value stored and later read back.
 	e.Timestamp = e.Timestamp.Truncate(time.Microsecond)
 
-	if e.HashVersion == 0 {
-		e.HashVersion = 2
-	}
+	// CIC-211: new rows are always written as v2, unconditionally (as
+	// MemoryLog.Append does). A caller-supplied hash_version is ignored so a
+	// fresh append can never reintroduce a downgraded (v1) row.
+	e.HashVersion = 2
 
 	// CIC-192: normalize unset principal metadata to the historical
 	// INSERT literal so callers that predate this PR keep their
@@ -250,6 +251,9 @@ func (p *PostgresLog) VerifyChain(ctx context.Context) error {
 
 	prevHash := genesisHash
 	i := 0
+	// CIC-211: enforce a monotonic (cutover) version sequence. A v1 seen
+	// after a higher version is a downgrade attempt; reject it.
+	maxVer := 0
 	for rows.Next() {
 		var (
 			id         int64
@@ -290,6 +294,13 @@ func (p *PostgresLog) VerifyChain(ctx context.Context) error {
 		if storedPrev != prevHash {
 			return fmt.Errorf("audit: chain broken at entry %d (id=%d): stored_prev=%s expected=%s",
 				i, id, storedPrev, prevHash)
+		}
+		if int(hashVer) < maxVer {
+			return fmt.Errorf("audit: hash version downgrade at entry %d (id=%d): saw v%d before v%d",
+				i, id, maxVer, int(hashVer))
+		}
+		if int(hashVer) > maxVer {
+			maxVer = int(hashVer)
 		}
 		prevHash = computed
 		i++

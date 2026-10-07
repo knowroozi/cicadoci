@@ -282,6 +282,14 @@ func (m *MemoryLog) VerifyChain(_ context.Context) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	// CIC-211: enforce a monotonic (cutover) version sequence so a v2 chain
+	// cannot be downgraded. hash_version is attacker-writable and selects
+	// which hash covers principal_type/surface/org_id, so the only defence
+	// against rewriting an older row back to v1 (un-hashing those three
+	// fields) is to forbid the version ever decreasing. A legitimate cutover
+	// runs v1...v1 then v2...v2; a lower version seen after a higher one is a
+	// downgrade and fails verification.
+	maxVer := 0
 	for i, e := range m.entries {
 		if i == 0 {
 			continue // genesis entry
@@ -293,6 +301,13 @@ func (m *MemoryLog) VerifyChain(_ context.Context) error {
 		if hashForRow(e) != e.Hash {
 			return fmt.Errorf("audit: hash mismatch at entry %d: computed=%s stored=%s",
 				i, hashForRow(e), e.Hash)
+		}
+		if e.HashVersion < maxVer {
+			return fmt.Errorf("audit: hash version downgrade at entry %d: saw v%d before v%d",
+				i, maxVer, e.HashVersion)
+		}
+		if e.HashVersion > maxVer {
+			maxVer = e.HashVersion
 		}
 	}
 	return nil

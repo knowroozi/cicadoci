@@ -14,6 +14,8 @@ package audit_test
 
 import (
 	"context"
+	"encoding/hex"
+	"strings"
 	"testing"
 
 	"cicadoci.com/cicado/internal/testdb"
@@ -319,5 +321,102 @@ func TestPostgresPrincipalViaList(t *testing.T) {
 	}
 	if found.Actor != "gate-controller" {
 		t.Errorf("List principal_id = %q; want gate-controller", found.Actor)
+	}
+}
+
+// TestPostgresAppendForcesV2 pins the CIC-211 / S1 fix: PostgresLog.Append
+// always writes hash_version=2, unconditionally. A caller-supplied
+// HashVersion (here 1) must be ignored, so a fresh append can never
+// reinstate a downgraded v1 row.
+func TestPostgresAppendForcesV2(t *testing.T) {
+	ctx := context.Background()
+	db := testdb.New(t)
+	log := audit.NewPostgresLog(db.Pool())
+
+	// A caller tries to force a legacy v1 row.
+	id, err := log.Append(ctx, audit.Entry{
+		Action:      audit.ActionApprove,
+		Actor:       "alice",
+		Target:      "run-1",
+		Reason:      "forced legacy",
+		HashVersion: 1,
+	})
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	got, err := log.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.HashVersion != 2 {
+		t.Fatalf("Append forced HashVersion: got %d, want 2", got.HashVersion)
+	}
+}
+
+// TestPostgresVerifyChainRejectsDowngrade pins the CIC-211 monotonic guard
+// end-to-end on real storage, guard-only. It downgrades the LATEST v2 row to
+// v1 AND recomputes the row's payload_hash with the legacy v1 formula, so the
+// plain hash-mismatch check and the prev_hash-chaining check BOTH pass; the
+// only anomaly left is the version drop. That means the monotonic guard -- not
+// the hash check -- is the sole thing that rejects the downgrade (proven by
+// locally disabling the guard and watching this test fail, see CI comment on
+// #155). This is the property the vacuous r1 version did NOT test: merely
+// flipping hash_version to 1 left a v2 payload_hash in place, so the hash
+// mismatch -- not the guard -- produced the error.
+func TestPostgresVerifyChainRejectsDowngrade(t *testing.T) {
+	ctx := context.Background()
+	db := testdb.New(t)
+	log := audit.NewPostgresLog(db.Pool())
+
+	// Two clean v2 rows: a verifiable chain.
+	_, err := log.Append(ctx, audit.Entry{
+		Action: audit.ActionApprove, Actor: "alice", Target: "run-1",
+		Reason: "ok", PrincipalType: audit.PrincipalUser,
+		Surface: audit.SurfaceWeb,
+	})
+	if err != nil {
+		t.Fatalf("append 1: %v", err)
+	}
+	lastID, err := log.Append(ctx, audit.Entry{
+		Action: audit.ActionApprove, Actor: "bob", Target: "run-2",
+		Reason: "ok", PrincipalType: audit.PrincipalUser,
+		Surface: audit.SurfaceWeb,
+	})
+	if err != nil {
+		t.Fatalf("append 2: %v", err)
+	}
+	if err := log.VerifyChain(ctx); err != nil {
+		t.Fatalf("clean chain: %v", err)
+	}
+
+	// Downgrade the latest row to v1 AND re-hash its payload with the legacy v1
+	// formula, so the stored payload_hash matches hashForRow(row, v1). This
+	// neutralises both the hash-mismatch and prev_hash-chaining checks, leaving
+	// the version drop as the sole detectable anomaly.
+	last, err := log.Get(ctx, lastID)
+	if err != nil {
+		t.Fatalf("get last: %v", err)
+	}
+	last.HashVersion = 1
+	v1Bytes, err := hex.DecodeString(audit.HashEntry(last)) // legacy v1 hash
+	if err != nil {
+		t.Fatalf("decode v1 hash: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx,
+		"UPDATE audit_events SET hash_version = 1, payload_hash = $1 WHERE id = $2",
+		v1Bytes, lastID); err != nil {
+		t.Fatalf("downgrade update: %v", err)
+	}
+
+	// VerifyChain must reject the downgraded row, and specifically via the
+	// monotonic version guard (not the hash/prev-hash checks, which now pass).
+	err = log.VerifyChain(ctx)
+	if err == nil {
+		t.Fatal("VerifyChain did not reject a v2->v1 downgrade")
+	}
+	if !strings.Contains(err.Error(), "hash version downgrade") {
+		t.Fatalf("expected the monotonic guard to reject the downgrade, "+
+			"got a different error (i.e. the test is not guard-only): %v", err)
 	}
 }
